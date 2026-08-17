@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:background="@color/af_bg" android:padding="12dp">
+    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="AirFerry Lite" android:textColor="@color/af_text" android:textSize="22sp" android:textStyle="bold" />
+    <TextView android:id="@+id/statusText" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="请对准电脑二维码" android:textColor="@color/af_text" android:paddingTop="4dp" android:paddingBottom="10dp" />
+    <com.journeyapps.barcodescanner.DecoratedBarcodeView android:id="@+id/barcodeView" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" />
+    <TextView android:id="@+id/fileText" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="未识别文件" android:textColor="@color/af_text" android:paddingTop="10dp" />
+    <ProgressBar android:id="@+id/progress" style="?android:attr/progressBarStyleHorizontal" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="100" android:progress="0" android:progressTint="@color/af_accent" />
+    <TextView android:id="@+id/missingText" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="缺失片段：—" android:textColor="@color/af_text" android:maxLines="2" android:paddingTop="6dp" />
+    <Button android:id="@+id/resetButton" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="清空并重新接收" android:layout_marginTop="8dp" />
+</LinearLayout>
