@@ -17,11 +17,10 @@
   const frameText = el("frameText");
   const progressBar = el("progressBar");
   const PROFILES = {
-    stable: { chunk: 400, fps: 6 },
-    balanced: { chunk: 700, fps: 8 },
-    fast: { chunk: 700, fps: 12 }
+    stable: { chunk: 400, fps: 6, headerEvery: 8 },
+    balanced: { chunk: 700, fps: 8, headerEvery: 10 },
+    fast: { chunk: 900, fps: 12, headerEvery: 16 }
   };
-  const HEADER_EVERY = 10;
   const QR_CACHE_LIMIT = 64;
   let file = null;
   let transfer = null;
@@ -141,7 +140,8 @@
   }
 
   function tick() {
-    const showHeader = emitted % HEADER_EVERY === 0;
+    const profile = PROFILES[mode.value] || PROFILES.balanced;
+    const showHeader = emitted % profile.headerEvery === 0;
     if (showHeader) {
       drawFrame(transfer.frames[0]);
       frameText.textContent = "元数据 / 第 " + (round + 1) + " 轮";
