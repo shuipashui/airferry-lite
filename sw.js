@@ -1,4 +1,4 @@
-const CACHE_NAME = "airferry-lite-v4";
+const CACHE_NAME = "airferry-lite-v5";
 const ASSETS = ["./","./index.html","./styles.css","./app.js","./manifest.webmanifest","./vendor/jsQR.js","./protocol.js"];
 
 self.addEventListener("install", (event) => {
