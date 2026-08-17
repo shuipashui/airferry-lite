@@ -1,0 +1,47 @@
+name: Web receiver and sender CI
+
+on:
+  push:
+    paths:
+      - "app.js"
+      - "web-receiver/**"
+      - "shared/**"
+      - "sender/**"
+      - "tests/**"
+      - "package.json"
+      - ".github/workflows/web-ci.yml"
+  pull_request:
+    paths:
+      - "app.js"
+      - "web-receiver/**"
+      - "shared/**"
+      - "sender/**"
+      - "tests/**"
+      - "package.json"
+      - ".github/workflows/web-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run protocol, receiver, FEC, and QR density tests
+        run: npm test
+      - name: Rebuild single-file sender
+        run: npm run build:sender
+      - name: Verify committed sender artifact is reproducible
+        run: git diff --exit-code -- sender/dist/airferry-lite-sender.html
