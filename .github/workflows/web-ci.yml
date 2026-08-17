@@ -41,6 +41,8 @@ jobs:
           node-version: 22
       - name: Run protocol, receiver, FEC, and QR density tests
         run: npm test
+      - name: Verify receiver entrypoints stay identical
+        run: cmp --silent app.js web-receiver/app.js
       - name: Rebuild single-file sender
         run: npm run build:sender
       - name: Verify committed sender artifact is reproducible
