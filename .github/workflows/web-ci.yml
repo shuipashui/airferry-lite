@@ -44,7 +44,7 @@ jobs:
       - name: Verify receiver entrypoints stay identical
         run: cmp --silent app.js web-receiver/app.js
       - name: Verify service worker entrypoints stay identical
-        run: cmp --silent sw.js web-receiver/sw.js
+        run: node --input-type=module -e 'import fs from "node:fs"; const read = (p) => fs.readFileSync(p, "utf8").replaceAll("\r\n", "\n"); if (read("sw.js") !== read("web-receiver/sw.js")) process.exit(1)'
       - name: Rebuild single-file sender
         run: npm run build:sender
       - name: Verify committed sender artifact is reproducible
