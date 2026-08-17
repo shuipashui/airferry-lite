@@ -43,6 +43,8 @@ jobs:
         run: npm test
       - name: Verify receiver entrypoints stay identical
         run: cmp --silent app.js web-receiver/app.js
+      - name: Verify service worker entrypoints stay identical
+        run: cmp --silent sw.js web-receiver/sw.js
       - name: Rebuild single-file sender
         run: npm run build:sender
       - name: Verify committed sender artifact is reproducible
