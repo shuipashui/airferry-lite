@@ -32,6 +32,7 @@
 
   let stream = null;
   let scanTimer = 0;
+  let scanFrameCallback = 0;
   let meta = null;
   let chunks = new Map();
   let parityFrames = new Map();
@@ -47,6 +48,8 @@
   let scanRegion = null;
   let scanSequence = 0;
   let roiMisses = 0;
+  let sessionHeaderText = "";
+  let scanErrors = 0;
 
   startBtn.onclick = start;
   stopBtn.onclick = stop;
@@ -76,22 +79,45 @@
         video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false
       });
+      if (!barcodeDetector && typeof window.jsQR !== "function") throw new Error("DecoderUnavailable");
+      configureCameraTrack(stream);
       video.srcObject = stream;
       await video.play();
       hint.classList.add("hidden");
       startBtn.disabled = true;
       stopBtn.disabled = false;
       status.textContent = barcodeDetector ? "正在快速扫描" : "正在扫描";
-      scan();
+      scheduleScan();
     } catch (err) {
       closeCamera();
-      status.textContent = err.name === "NotAllowedError" ? "摄像头权限被拒绝" : "摄像头不可用";
-      hint.textContent = "请在 HTTPS 页面中允许摄像头权限";
+      status.textContent = err.message === "DecoderUnavailable" ? "二维码解码器加载失败" : err.name === "NotAllowedError" ? "摄像头权限被拒绝" : "摄像头不可用";
+      hint.textContent = err.message === "DecoderUnavailable" ? "请检查网络后刷新页面" : "请在 HTTPS 页面中允许摄像头权限";
     }
+  }
+
+  function configureCameraTrack(activeStream) {
+    const track = activeStream.getVideoTracks()[0];
+    if (!track) return;
+    track.addEventListener("ended", () => {
+      if (stream !== activeStream) return;
+      closeCamera();
+      status.textContent = "摄像头连接已中断，请重新开始";
+    }, { once: true });
+    try {
+      const capabilities = track.getCapabilities?.();
+      if (capabilities?.focusMode?.includes("continuous")) {
+        track.applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(() => {});
+      }
+    } catch (_) {}
   }
 
   function closeCamera() {
     clearTimeout(scanTimer);
+    scanTimer = 0;
+    if (scanFrameCallback && typeof video.cancelVideoFrameCallback === "function") {
+      video.cancelVideoFrameCallback(scanFrameCallback);
+    }
+    scanFrameCallback = 0;
     if (stream) stream.getTracks().forEach((track) => track.stop());
     stream = null;
     video.srcObject = null;
@@ -120,6 +146,8 @@
     scanRegion = null;
     scanSequence = 0;
     roiMisses = 0;
+    sessionHeaderText = "";
+    scanErrors = 0;
     fileName.textContent = "-";
     progressText.textContent = "0%";
     progressBar.style.width = "0%";
@@ -131,14 +159,36 @@
     status.textContent = "等待开始";
   }
 
+  function scheduleScan() {
+    if (!stream || scanTimer || scanFrameCallback) return;
+    if (typeof video.requestVideoFrameCallback === "function") {
+      scanFrameCallback = video.requestVideoFrameCallback(() => {
+        scanFrameCallback = 0;
+        scan();
+      });
+      return;
+    }
+    scanTimer = setTimeout(() => {
+      scanTimer = 0;
+      scan();
+    }, barcodeDetector ? DETECTOR_INTERVAL : SCAN_INTERVAL);
+  }
+
   async function scan() {
     if (!stream) return;
     try {
       if (barcodeDetector) await scanWithBarcodeDetector();
       else scanWithJsQR();
+      scanErrors = 0;
       if (meta && performance.now() - lastFrameAt > SESSION_TIMEOUT) status.textContent = "长时间未收到二维码，请重新对准屏幕";
+    } catch (_) {
+      scanErrors += 1;
+      scanRegion = null;
+      roiMisses = 0;
+      if (scanErrors >= 10) stop("扫描连续失败，请重新开始");
+      else if (scanErrors >= 3) status.textContent = "扫描暂时失败，正在重试";
     } finally {
-      if (stream) scanTimer = setTimeout(scan, barcodeDetector ? DETECTOR_INTERVAL : SCAN_INTERVAL);
+      scheduleScan();
     }
   }
 
@@ -164,8 +214,12 @@
     const source = getSourceRegion(forceFull);
     const targetWidth = source.full ? FULL_SCAN_WIDTH : ROI_SCAN_WIDTH;
     const scale = Math.min(1, targetWidth / source.width);
-    canvas.width = Math.max(1, Math.round(source.width * scale));
-    canvas.height = Math.max(1, Math.round(source.height * scale));
+    const nextWidth = Math.max(1, Math.round(source.width * scale));
+    const nextHeight = Math.max(1, Math.round(source.height * scale));
+    if (canvas.width !== nextWidth || canvas.height !== nextHeight) {
+      canvas.width = nextWidth;
+      canvas.height = nextHeight;
+    }
     ctx.drawImage(video, source.x, source.y, source.width, source.height, 0, 0, canvas.width, canvas.height);
     const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const code = jsQR(image.data, canvas.width, canvas.height, { inversionAttempts: "dontInvert" });
@@ -225,7 +279,25 @@
     if (text === lastDecodedText && now - lastDecodedAt < 250) return;
     lastDecodedText = text;
     lastDecodedAt = now;
+    if (isRedundantDecoded(text)) {
+      lastFrameAt = now;
+      return;
+    }
     accept(text);
+  }
+
+  function isRedundantDecoded(text) {
+    if (!meta || typeof text !== "string" || !text.startsWith("AFL1|")) return false;
+    if (text === sessionHeaderText) return true;
+    const kind = text.charAt(5);
+    if ((kind !== "D" && kind !== "P") || text.charAt(6) !== "|") return false;
+    const sessionEnd = text.indexOf("|", 7);
+    if (sessionEnd < 0 || text.slice(7, sessionEnd) !== meta.session) return false;
+    const keyEnd = text.indexOf("|", sessionEnd + 1);
+    if (keyEnd < 0) return false;
+    const key = Number(text.slice(sessionEnd + 1, keyEnd));
+    if (!Number.isSafeInteger(key)) return false;
+    return kind === "D" ? chunks.has(key) : parityFrames.has(key);
   }
 
   function accept(text) {
@@ -237,7 +309,7 @@
         status.textContent = "文件描述无效或超出网页接收上限";
         return;
       }
-      if (!meta || meta.session !== frame.session) beginSession(frame);
+      if (!meta || meta.session !== frame.session) beginSession(frame, text);
       update();
       return;
     }
@@ -266,8 +338,9 @@
     return Number.isInteger(frame.fileCrc);
   }
 
-  function beginSession(frame) {
+  function beginSession(frame, headerText) {
     meta = frame;
+    sessionHeaderText = headerText;
     chunks = new Map();
     parityFrames = new Map();
     parityLookup = new Map();
