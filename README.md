@@ -24,7 +24,7 @@ AirFerry Lite 是一个无需服务器的离线光学文件传输项目：电脑
 
 - 稳定：400 B / 6 FPS
 - 均衡：700 B / 8 FPS
-- 快速：700 B / 12 FPS
+- 快速：900 B / 12 FPS（二维码密度基准通过，适合光线和对焦稳定的设备）
 
 网页接收端会优先使用浏览器原生二维码识别；不支持时自动切换到 `jsQR`，并在锁定二维码后缩小扫描区域以降低解码开销。
 
@@ -42,7 +42,7 @@ protocol.js                                 # 网页接收端协议实现
 sender/dist/airferry-lite-sender.html       # 可直接使用的单文件发送端
 sender/                                     # 发送端源码和构建脚本
 shared/protocol.js                          # 构建发送端使用的共享协议
-tests/                                      # 协议、边界、恢复和接收端安全测试
+tests/                                      # 协议、边界、二维码密度、恢复和接收端安全测试
 protocol/SPEC.md                            # 线协议说明
 `
 
