@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#07110f">
+  <link rel="manifest" href="manifest.webmanifest">
+  <title>AirFerry Lite - 手机接收端</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="app">
+    <header><div class="mark">AF</div><div><h1>AirFerry Lite</h1><p>手机网页接收端</p></div></header>
+    <section class="camera-card">
+      <video id="video" playsinline muted></video>
+      <canvas id="scanCanvas" hidden></canvas>
+      <div id="cameraHint" class="camera-hint">点击“开始扫描”，然后对准电脑二维码</div>
+    </section>
+    <div class="actions">
+      <button id="startBtn" class="primary">开始扫描</button>
+      <button id="stopBtn" disabled>停止</button>
+      <button id="resetBtn">清空进度</button>
+    </div>
+    <section class="card stats">
+      <div><span>状态</span><strong id="status">等待开始</strong></div>
+      <div><span>文件</span><strong id="fileName">-</strong></div>
+      <div><span>进度</span><strong id="progressText">0%</strong></div>
+    </section>
+    <div class="progress"><i id="progressBar"></i></div>
+    <section class="card"><div class="row"><strong>缺失片段</strong><button id="copyMissing" class="small" disabled>复制编号</button></div><code id="missing">-</code></section>
+    <section id="result" class="card result" hidden><strong>文件已恢复</strong><span id="resultInfo"></span><a id="download" class="download" download>下载文件</a></section>
+    <p class="note">网页接收端需要 HTTPS 才能访问摄像头。请保持电脑端二维码循环播放到接收完成。</p>
+  </main>
+  <script src="vendor/jsQR.js"></script>
+  <script src="protocol.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
