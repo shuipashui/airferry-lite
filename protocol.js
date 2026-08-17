@@ -3,17 +3,16 @@
   const api = factory();
   if (typeof module === "object" && module.exports) module.exports = api;
   root.AirFerryLiteProtocol = api;
-})(typeof self !== "undefined" ? self : this, function () {
+})(typeof globalThis !== "undefined" ? globalThis : (typeof self !== "undefined" ? self : this), function () {
   const MAGIC = "AFL1";
+  const DEFAULT_PARITY_GROUP_SIZE = 8;
 
   function crc32(input) {
     const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
     let crc = 0xffffffff;
     for (let i = 0; i < bytes.length; i += 1) {
       crc ^= bytes[i];
-      for (let bit = 0; bit < 8; bit += 1) {
-        crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
-      }
+      for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
     }
     return (crc ^ 0xffffffff) >>> 0;
   }
@@ -68,6 +67,13 @@
     return [MAGIC, "D", session, String(index), String(total), hex32(crc32(bytes)), base64UrlEncode(bytes)].join("|");
   }
 
+  function makeParity(session, groupStart, count, total, bytes) {
+    return [
+      MAGIC, "P", session, String(groupStart), String(count), String(total),
+      hex32(crc32(bytes)), base64UrlEncode(bytes)
+    ].join("|");
+  }
+
   function parseFrame(text) {
     if (typeof text !== "string") return null;
     const fields = text.split("|");
@@ -91,12 +97,22 @@
         };
       } catch (_) { return null; }
     }
+    if (fields[1] === "P" && fields.length === 8) {
+      try {
+        const bytes = base64UrlDecode(fields[7]);
+        return {
+          kind: "parity", session: fields[2], groupStart: Number(fields[3]), count: Number(fields[4]),
+          total: Number(fields[5]), parityCrc: Number.parseInt(fields[6], 16) >>> 0, bytes
+        };
+      } catch (_) { return null; }
+    }
     return null;
   }
 
   function makeTransfer(fileBytes, meta) {
     const bytes = fileBytes instanceof Uint8Array ? fileBytes : new Uint8Array(fileBytes);
     const chunkSize = meta.chunkSize || 700;
+    const parityGroupSize = Math.max(2, Math.min(32, meta.parityGroupSize || DEFAULT_PARITY_GROUP_SIZE));
     const total = Math.max(1, Math.ceil(bytes.length / chunkSize));
     const session = meta.session || makeSessionId();
     const descriptor = makeHeader({
@@ -104,13 +120,42 @@
       chunkSize, total, fileCrc: crc32(bytes)
     });
     const frames = [descriptor];
+    const dataFrames = [];
+    const chunks = [];
     for (let index = 0; index < total; index += 1) {
       const start = index * chunkSize;
-      frames.push(makeData(session, index, total, bytes.subarray(start, Math.min(start + chunkSize, bytes.length))));
+      const chunk = bytes.slice(start, Math.min(start + chunkSize, bytes.length));
+      chunks.push(chunk);
+      const frame = makeData(session, index, total, chunk);
+      frames.push(frame);
+      dataFrames.push(frame);
     }
-    return { session, frames, total, chunkSize, fileCrc: crc32(bytes) };
+
+    const repairFrames = [];
+    const playbackFrames = [];
+    for (let groupStart = 0; groupStart < total; groupStart += parityGroupSize) {
+      const count = Math.min(parityGroupSize, total - groupStart);
+      for (let offset = 0; offset < count; offset += 1) playbackFrames.push(dataFrames[groupStart + offset]);
+      if (total >= 4 && count >= 2) {
+        const parity = new Uint8Array(chunkSize);
+        for (let offset = 0; offset < count; offset += 1) {
+          const chunk = chunks[groupStart + offset];
+          for (let index = 0; index < chunk.length; index += 1) parity[index] ^= chunk[index];
+        }
+        const repair = makeParity(session, groupStart, count, total, parity);
+        repairFrames.push(repair);
+        playbackFrames.push(repair);
+      }
+    }
+
+    return {
+      session, frames, dataFrames, repairFrames, playbackFrames, total, chunkSize,
+      parityGroupSize, fileCrc: crc32(bytes)
+    };
   }
 
-  return { MAGIC, crc32, hex32, base64UrlEncode, base64UrlDecode, utf8Encode, utf8Decode,
-    makeSessionId, makeHeader, makeData, parseFrame, makeTransfer };
+  return {
+    MAGIC, DEFAULT_PARITY_GROUP_SIZE, crc32, hex32, base64UrlEncode, base64UrlDecode,
+    utf8Encode, utf8Decode, makeSessionId, makeHeader, makeData, makeParity, parseFrame, makeTransfer
+  };
 });
