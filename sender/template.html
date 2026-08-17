@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AirFerry Lite - 离线二维码发送端</title>
+  <style>/*__STYLES__*/</style>
+</head>
+<body>
+  <main class="shell">
+    <section class="panel controls">
+      <div class="brand"><span class="mark">AF</span><div><h1>AirFerry Lite</h1><p>单文件离线二维码发送端</p></div></div>
+      <label class="drop" id="dropZone">
+        <input id="fileInput" type="file">
+        <strong id="fileLabel">选择或拖入一个文件</strong>
+        <span>文件只在本机浏览器内处理，不会上传</span>
+      </label>
+      <div class="grid">
+        <label>传输模式
+          <select id="mode"><option value="stable">稳定</option><option value="balanced" selected>均衡（推荐）</option><option value="fast">快速</option></select>
+        </label>
+        <label>每帧数据
+          <select id="chunkSize"><option value="400">400 B（稳定）</option><option value="700" selected>700 B（推荐）</option><option value="900">900 B（高速）</option></select>
+        </label>
+        <label>播放帧率
+          <select id="fps"><option value="6">6 FPS</option><option value="8" selected>8 FPS</option><option value="10">10 FPS</option><option value="15">15 FPS</option><option value="20">20 FPS</option></select>
+        </label>
+      </div>
+      <div class="actions"><button id="prepareBtn" class="primary" disabled>生成二维码流</button><button id="playBtn" disabled>开始播放</button><button id="resetBtn" disabled>重置</button></div>
+      <div class="status"><div><span>状态</span><strong id="statusText">等待文件</strong></div><div><span>会话</span><strong id="sessionText">—</strong></div><div><span>片段</span><strong id="frameText">—</strong></div></div>
+      <div class="progress"><i id="progressBar"></i></div>
+      <p class="tip">手机请打开 AirFerry Lite 网页接收端或 Android 接收端，对准右侧二维码。接收完成前保持循环播放。</p>
+    </section>
+    <section class="panel viewer"><canvas id="qrCanvas" width="900" height="900"></canvas><div class="overlay" id="overlay"><strong>等待生成</strong><span>选择文件后点击“生成二维码流”</span></div></section>
+  </main>
+  <script>/*__QRCODE__*/</script>
+  <script>/*__PROTOCOL__*/</script>
+  <script>/*__APP__*/</script>
+</body>
+</html>
