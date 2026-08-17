@@ -136,10 +136,10 @@ function decode() {
   return data ? { data } : null;
 }
 
-function runFrame() {
+function runFrame(delta = 300) {
   const callback = frameCallbacks.shift();
   assert.equal(typeof callback, "function", "receiver did not request the next camera frame");
-  now += 300;
+  now += delta;
   callback(now, {});
 }
 
@@ -149,7 +149,8 @@ assert.equal(focusApplied, true, "continuous focus was not requested when suppor
 assert.equal(frameCallbacks.length, 1, "scan was not scheduled from a video frame callback");
 
 runFrame();
-runFrame();
+runFrame(1);
+runFrame(299);
 const writesAfterData = widthWrites + heightWrites;
 runFrame();
 
