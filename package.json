@@ -4,6 +4,6 @@
   "type": "module",
   "scripts": {
     "build:sender": "node sender/build.mjs",
-    "test": "node tests/protocol.test.mjs && node tests/transfer-boundaries.test.mjs && node tests/receiver-safety.test.mjs && node tests/fec-recovery.test.mjs"
+    "test": "node tests/protocol.test.mjs && node tests/transfer-boundaries.test.mjs && node tests/receiver-safety.test.mjs && node tests/receiver-runtime.test.mjs && node tests/fec-recovery.test.mjs"
   }
 }
