@@ -50,6 +50,7 @@
   let roiMisses = 0;
   let sessionHeaderText = "";
   let scanErrors = 0;
+  let lastScanStartedAt = -Infinity;
 
   startBtn.onclick = start;
   stopBtn.onclick = stop;
@@ -121,6 +122,10 @@
     if (stream) stream.getTracks().forEach((track) => track.stop());
     stream = null;
     video.srcObject = null;
+    scanRegion = null;
+    scanSequence = 0;
+    roiMisses = 0;
+    lastScanStartedAt = -Infinity;
     startBtn.disabled = false;
     stopBtn.disabled = true;
   }
@@ -148,6 +153,7 @@
     roiMisses = 0;
     sessionHeaderText = "";
     scanErrors = 0;
+    lastScanStartedAt = -Infinity;
     fileName.textContent = "-";
     progressText.textContent = "0%";
     progressBar.style.width = "0%";
@@ -161,17 +167,25 @@
 
   function scheduleScan() {
     if (!stream || scanTimer || scanFrameCallback) return;
+    const interval = barcodeDetector ? DETECTOR_INTERVAL : SCAN_INTERVAL;
     if (typeof video.requestVideoFrameCallback === "function") {
       scanFrameCallback = video.requestVideoFrameCallback(() => {
         scanFrameCallback = 0;
+        const now = performance.now();
+        if (now - lastScanStartedAt < interval) {
+          scheduleScan();
+          return;
+        }
+        lastScanStartedAt = now;
         scan();
       });
       return;
     }
     scanTimer = setTimeout(() => {
       scanTimer = 0;
+      lastScanStartedAt = performance.now();
       scan();
-    }, barcodeDetector ? DETECTOR_INTERVAL : SCAN_INTERVAL);
+    }, interval);
   }
 
   async function scan() {
