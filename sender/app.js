@@ -26,7 +26,7 @@
   let file = null;
   let transfer = null;
   let timer = null;
-  let dataIndex = 0;
+  let playbackIndex = 0;
   let emitted = 0;
   let round = 0;
   let nextTickAt = 0;
@@ -73,7 +73,7 @@
         mime: file.type || "application/octet-stream",
         chunkSize: Number(chunkSize.value)
       });
-      dataIndex = 0;
+      playbackIndex = 0;
       emitted = 0;
       round = 0;
       qrCache.clear();
@@ -146,12 +146,18 @@
       drawFrame(transfer.frames[0]);
       frameText.textContent = "元数据 / 第 " + (round + 1) + " 轮";
     } else {
-      const current = dataIndex;
-      drawFrame(transfer.frames[current + 1]);
-      dataIndex = (dataIndex + 1) % transfer.total;
-      if (dataIndex === 0) round += 1;
-      frameText.textContent = (current + 1) + " / " + transfer.total + " · 第 " + (round + 1) + " 轮";
-      progressBar.style.width = ((current + 1) / transfer.total) * 100 + "%";
+      const sequence = transfer.playbackFrames || transfer.frames.slice(1);
+      const frame = sequence[playbackIndex];
+      const parsed = P.parseFrame(frame);
+      drawFrame(frame);
+      playbackIndex = (playbackIndex + 1) % sequence.length;
+      if (playbackIndex === 0) round += 1;
+      if (parsed?.kind === "parity") {
+        frameText.textContent = "修复帧 / 第 " + (round + 1) + " 轮";
+      } else {
+        frameText.textContent = (parsed.index + 1) + " / " + transfer.total + " · 第 " + (round + 1) + " 轮";
+        progressBar.style.width = ((parsed.index + 1) / transfer.total) * 100 + "%";
+      }
     }
     emitted += 1;
   }
