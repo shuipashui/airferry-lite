@@ -1,0 +1,9 @@
+{
+  "name": "airferry-lite",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:sender": "node sender/build.mjs",
+    "test": "node tests/protocol.test.mjs"
+  }
+}
