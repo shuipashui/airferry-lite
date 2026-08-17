@@ -1,64 +1,74 @@
 # AirFerry Lite
 
-一个受 AirFerry 启发的精简离线光学传输项目：
+AirFerry Lite 是一个无需服务器的离线光学文件传输项目：电脑浏览器将文件编码为连续二维码，手机网页或 Android 接收端通过摄像头恢复文件。
 
-- 发送端：单文件 HTML，无服务器、无运行时 CDN 依赖
-- 接收端：手机网页接收端
-- 接收端：Android 原生 APK 源码（Android 10+、ARM64）
-- 传输：屏幕连续二维码视频流，文件分片、循环播放、片段 CRC-32、文件 CRC-32
-- 协议：`AFL1`，见 [`protocol/SPEC.md`](protocol/SPEC.md)
+- 发送端：单文件 HTML，可直接双击打开，无运行时 CDN 依赖
+- 网页接收端：GitHub Pages HTTPS 页面，支持 Android Chrome 等现代移动浏览器
+- Android 接收端：原生 APK 源码（Android 10+）
+- 传输协议：`AFL1` 描述帧、数据帧、XOR 修复帧、分片 CRC-32 和整文件 CRC-32
+- 隐私：文件只在发送电脑和接收手机本地处理，不经过服务器
+
+## 在线使用
+
+- 手机网页接收端：https://shuipashui.github.io/airferry-lite/
+- 单文件发送端：https://shuipashui.github.io/airferry-lite/sender/dist/airferry-lite-sender.html
+
+使用步骤：
+
+1. 在电脑打开单文件发送端，选择文件。
+2. 推荐先使用“均衡”模式，点击“生成二维码流”和“开始播放”。
+3. 手机打开网页接收端，允许摄像头权限并点击“开始扫描”。
+4. 保持手机稳定对准二维码，接收完成后下载文件。
+
+推荐参数：
+
+- 稳定：400 B / 6 FPS
+- 均衡：700 B / 8 FPS
+- 快速：700 B / 12 FPS
+
+网页接收端会优先使用浏览器原生二维码识别；不支持时自动切换到 `jsQR`，并在锁定二维码后缩小扫描区域以降低解码开销。
+
+## 抗丢帧
+
+发送端每组数据后插入一个 XOR 修复帧。网页接收端在一组中仅缺失一个数据片段时，可以立即恢复该片段，减少等待下一轮循环的次数。旧版接收端会忽略未知的修复帧，仍可依靠循环数据帧完成接收。
+
+XOR 修复不是喷泉码：同一组同时缺失两个以上数据片段时仍需等待后续循环。协议细节见 [protocol/SPEC.md](protocol/SPEC.md)。
 
 ## 目录
 
-```text
-sender/dist/airferry-lite-sender.html  # 可直接双击打开的单文件发送端
-web-receiver/                          # 手机 HTTPS 网页接收端
-android-receiver/                      # Android 原生接收端工程
-shared/protocol.js                     # Web 端共享协议实现
-protocol/SPEC.md                       # 帧格式
-```
+`text
+app.js                                      # GitHub Pages 网页接收端
+protocol.js                                 # 网页接收端协议实现
+sender/dist/airferry-lite-sender.html       # 可直接使用的单文件发送端
+sender/                                     # 发送端源码和构建脚本
+shared/protocol.js                          # 构建发送端使用的共享协议
+tests/                                      # 协议、边界、恢复和接收端安全测试
+protocol/SPEC.md                            # 线协议说明
+`
 
-## 快速使用
-
-1. 用浏览器打开 [`sender/dist/airferry-lite-sender.html`](sender/dist/airferry-lite-sender.html)。
-2. 选择文件，点击“生成二维码流”，再点击“开始播放”。
-3. 手机打开 `web-receiver/` 部署后的 HTTPS 地址，或安装 Android APK。
-4. 让手机摄像头稳定对准电脑二维码，保持发送端循环播放到接收完成。
-
-网页接收端必须在 HTTPS 或 localhost 下访问摄像头。Android 接收端使用 ZXing 连续扫码，并将文件保存到 `Download/AirFerry Lite`。
-
-## 构建单文件发送端
+## 本地构建与测试
 
 需要 Node.js 18+：
 
-```powershell
-cd sender
-node build.mjs
-```
+`powershell
+npm test
+npm run build:sender
+`
 
-输出仍然是一个独立的 `sender/dist/airferry-lite-sender.html`，不需要本地 HTTP 服务器。
+构建输出为 `sender/dist/airferry-lite-sender.html`。
 
-## 构建 Android APK
+## 网页接收限制
 
-本机需要 JDK 17、Android SDK 35 和 Gradle 8.9。也可以直接使用仓库内的 GitHub Actions 工作流：
-
-```text
-.github/workflows/android-apk.yml
-```
-
-它会产出 `app-debug.apk` 构建产物。Android 接收端使用 `com.journeyapps:zxing-android-embedded` 做连续二维码识别，最低 Android 10。
+- 必须通过 HTTPS 或 localhost 才能访问摄像头。
+- 单次文件上限目前为 64 MiB，接收状态保存在内存中。
+- 刷新页面或清空进度后需要重新扫描。
+- 光学速度受屏幕亮度、摩尔纹、摄像头对焦、手机性能和环境反光影响。
+- 大文件或低性能设备建议使用稳定模式；Android 原生接收端更适合后续扩展大文件落盘。
 
 ## 和 AirFerry 的关系
 
-本项目参考了 AirFerry 的总体思路：描述帧、数据分片、连续 QR 视频流、接收端容错和原生 Android 接收端。为了让项目保持易读、可独立构建，本版本没有复制 AirFerry 的 Rust/RaptorQ 实现，而是使用一个更小的循环帧协议。后续可以在不改变 `AFL1` 外层帧格式的情况下替换为喷泉码。
-
-## 限制
-
-- 这是一个可运行的精简基线，不是 AirFerry 的同等吞吐量实现。
-- 默认每片 700 字节，适合普通手机摄像头；可在发送端选择更小或更大的片段。
-- 网页端解码速度受浏览器限制，Android 原生端更适合较大文件。
-- 当前接收进度主要保存在内存中，刷新页面后需要重新扫描。
+本项目参考 AirFerry 的描述帧、连续 QR 视频流、接收端容错和 Android 接收思路，但没有复制其 Rust/RaptorQ 实现。当前采用更小、便于浏览器独立运行的循环分片与 XOR 修复方案。
 
 ## 许可证
 
-本项目使用 MIT License。第三方依赖说明见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+项目使用 MIT License。第三方依赖说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
