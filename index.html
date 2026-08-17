@@ -1,0 +1,21 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#07110f"><link rel="manifest" href="manifest.webmanifest">
+  <title>AirFerry Lite 路 鎵嬫満鎺ユ敹绔?/title><link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="app">
+    <header><div class="mark">AF</div><div><h1>AirFerry Lite</h1><p>鎵嬫満缃戦〉鎺ユ敹绔?/p></div></header>
+    <section class="camera-card"><video id="video" playsinline muted></video><canvas id="scanCanvas" hidden></canvas><div id="cameraHint" class="camera-hint">鐐瑰嚮鈥滃紑濮嬫壂鎻忊€濓紝鐒跺悗瀵瑰噯鐢佃剳浜岀淮鐮?/div></section>
+    <div class="actions"><button id="startBtn" class="primary">寮€濮嬫壂鎻?/button><button id="stopBtn" disabled>鍋滄</button><button id="resetBtn">娓呯┖杩涘害</button></div>
+    <section class="card stats"><div><span>鐘舵€?/span><strong id="status">绛夊緟寮€濮?/strong></div><div><span>鏂囦欢</span><strong id="fileName">鈥?/strong></div><div><span>杩涘害</span><strong id="progressText">0%</strong></div></section>
+    <div class="progress"><i id="progressBar"></i></div>
+    <section class="card"><div class="row"><strong>缂哄け鐗囨</strong><button id="copyMissing" class="small" disabled>澶嶅埗缂栧彿</button></div><code id="missing">鈥?/code></section>
+    <section id="result" class="card result" hidden><strong>鏂囦欢宸叉仮澶?/strong><span id="resultInfo"></span><a id="download" class="download" download>涓嬭浇鏂囦欢</a></section>
+    <p class="note">缃戦〉鎺ユ敹绔渶瑕?HTTPS 鎴?localhost 鎵嶈兘璁块棶鎽勫儚澶淬€傚缓璁紭鍏堜娇鐢?Android 鍘熺敓鎺ユ敹绔幏寰楁洿楂橀€熷害銆?/p>
+  </main>
+  <script src="vendor/jsQR.js"></script><script src="protocol.js"></script><script src="app.js"></script>
+</body>
+</html>
