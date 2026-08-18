@@ -69,11 +69,15 @@
     statusText.textContent = "正在读取文件";
     prepareBtn.disabled = true;
     try {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      transfer = P.makeTransfer(bytes, {
+      const sourceBytes = new Uint8Array(await file.arrayBuffer());
+      const prepared = await P.preparePayload(sourceBytes);
+      transfer = P.makeTransfer(prepared.bytes, {
         name: file.name,
         mime: file.type || "application/octet-stream",
-        chunkSize: Number(chunkSize.value)
+        chunkSize: Number(chunkSize.value),
+        encoding: prepared.encoding,
+        originalSize: prepared.originalSize,
+        originalFileCrc: prepared.originalFileCrc
       });
       playbackIndex = 0;
       emitted = 0;
@@ -84,7 +88,7 @@
       progressBar.style.width = "0%";
       drawFrame(transfer.frames[0]);
       overlay.classList.add("hidden");
-      statusText.textContent = "二维码流已生成";
+      statusText.textContent = prepared.encoding === "gzip" ? "已压缩 " + Math.round(prepared.savedBytes / prepared.originalSize * 100) + "% · 二维码流已生成" : "二维码流已生成";
       playBtn.disabled = false;
       playBtn.textContent = "开始播放";
       resetBtn.disabled = false;
