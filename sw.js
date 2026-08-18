@@ -1,5 +1,5 @@
-const CACHE_NAME = "airferry-lite-v7";
-const ASSETS = ["./","./index.html","./styles.css","./app.js","./manifest.webmanifest","./vendor/jsQR.js","./protocol.js"];
+const CACHE_NAME = "airferry-lite-v8";
+const ASSETS = ["./","./index.html","./styles.css","./app.js","./manifest.webmanifest","./vendor/jsQR.js","./receiver-storage.js","./decoder-worker.js","./protocol.js"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS)).then(() => self.skipWaiting()));

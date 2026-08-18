@@ -2,6 +2,7 @@
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 
   const P = window.AirFerryLiteProtocol;
+  const Storage = window.AirFerryLiteStorage;
   const video = document.getElementById("video");
   const canvas = document.getElementById("scanCanvas");
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
@@ -55,6 +56,15 @@
   let speedWindowStartedAt = 0;
   let speedWindowBytes = 0;
   let speedBps = 0;
+  let decodeWorker = null;
+  let decodeRequestId = 0;
+  let workerDisabled = typeof Worker !== "function";
+  const decodeRequests = new Map();
+  let storageQueue = Promise.resolve();
+  let pendingChunkWrites = [];
+  let chunkFlushTimer = 0;
+  let restoring = false;
+  let finishing = false;
 
   startBtn.onclick = start;
   stopBtn.onclick = stop;
@@ -63,6 +73,34 @@
   document.addEventListener("visibilitychange", () => {
     if (document.hidden && stream) stop("页面已切到后台");
   });
+  restoreSavedSession();
+
+  function queueStorage(operation) {
+    if (!Storage) return Promise.resolve();
+    storageQueue = storageQueue.then(operation, operation).catch(() => {});
+    return storageQueue;
+  }
+
+  function scheduleChunkPersist(session, index, bytes, recovered) {
+    if (!Storage) return;
+    pendingChunkWrites.push({ session, index, bytes: bytes.slice(), recovered });
+    if (pendingChunkWrites.length >= 16) {
+      flushPendingChunks();
+      return;
+    }
+    if (!chunkFlushTimer) chunkFlushTimer = setTimeout(flushPendingChunks, 250);
+  }
+
+  function flushPendingChunks() {
+    if (chunkFlushTimer) clearTimeout(chunkFlushTimer);
+    chunkFlushTimer = 0;
+    if (!pendingChunkWrites.length || !Storage) return storageQueue;
+    const records = pendingChunkWrites;
+    pendingChunkWrites = [];
+    return queueStorage(() => typeof Storage.putChunks === "function"
+      ? Storage.putChunks(records)
+      : Promise.all(records.map(record => Storage.putChunk(record.session, record.index, record.bytes, record.recovered))));
+  }
 
   async function setupDetector() {
     barcodeDetector = null;
@@ -78,6 +116,10 @@
 
   async function start() {
     if (stream) return;
+    if (restoring) {
+      status.textContent = "正在恢复断点，请稍候";
+      return;
+    }
     try {
       await setupDetector();
       stream = await navigator.mediaDevices.getUserMedia({
@@ -141,6 +183,7 @@
   }
 
   function reset() {
+    const previousSession = meta?.session;
     closeCamera();
     meta = null;
     chunks = new Map();
@@ -161,6 +204,7 @@
     speedWindowStartedAt = 0;
     speedWindowBytes = 0;
     speedBps = 0;
+    finishing = false;
     speedText.textContent = "—";
     fileName.textContent = "-";
     progressText.textContent = "0%";
@@ -171,6 +215,8 @@
     if (download.href) URL.revokeObjectURL(download.href);
     download.removeAttribute("href");
     status.textContent = "等待开始";
+    flushPendingChunks();
+    if (previousSession) queueStorage(() => Storage.remove(previousSession));
   }
 
   function scheduleScan() {
@@ -200,7 +246,7 @@
     if (!stream) return;
     try {
       if (barcodeDetector) await scanWithBarcodeDetector();
-      else scanWithJsQR();
+      else await scanWithJsQR();
       scanErrors = 0;
       if (meta && performance.now() - lastFrameAt > SESSION_TIMEOUT) status.textContent = "长时间未收到二维码，请重新对准屏幕";
     } catch (_) {
@@ -229,7 +275,7 @@
     }
   }
 
-  function scanWithJsQR() {
+  async function scanWithJsQR() {
     if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
     scanSequence += 1;
     const forceFull = !scanRegion || scanSequence % FULL_SCAN_EVERY === 0;
@@ -244,7 +290,15 @@
     }
     ctx.drawImage(video, source.x, source.y, source.width, source.height, 0, 0, canvas.width, canvas.height);
     const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const code = jsQR(image.data, canvas.width, canvas.height, { inversionAttempts: "dontInvert" });
+    let code = null;
+    if (!workerDisabled) {
+      try {
+        code = await decodeWithWorker(image, canvas.width, canvas.height);
+      } catch (_) {
+        disableDecodeWorker();
+      }
+    }
+    if (workerDisabled && image.data.byteLength) code = jsQR(image.data, canvas.width, canvas.height, { inversionAttempts: "dontInvert" });
     if (code?.data) {
       roiMisses = 0;
       updateScanRegion(code.location, source);
@@ -256,6 +310,33 @@
         roiMisses = 0;
       }
     }
+  }
+
+  function decodeWithWorker(image, width, height) {
+    if (!decodeWorker) {
+      decodeWorker = new Worker("decoder-worker.js");
+      decodeWorker.onmessage = (event) => {
+        const pending = decodeRequests.get(event.data?.id);
+        if (!pending) return;
+        decodeRequests.delete(event.data.id);
+        if (event.data.error) pending.reject(new Error(event.data.error));
+        else pending.resolve(event.data.code || null);
+      };
+      decodeWorker.onerror = () => disableDecodeWorker();
+    }
+    const id = ++decodeRequestId;
+    return new Promise((resolve, reject) => {
+      decodeRequests.set(id, { resolve, reject });
+      decodeWorker.postMessage({ id, buffer: image.data.buffer, width, height }, [image.data.buffer]);
+    });
+  }
+
+  function disableDecodeWorker() {
+    workerDisabled = true;
+    if (decodeWorker) decodeWorker.terminate();
+    decodeWorker = null;
+    for (const pending of decodeRequests.values()) pending.reject(new Error("Worker unavailable"));
+    decodeRequests.clear();
   }
 
   function getSourceRegion(forceFull) {
@@ -361,10 +442,13 @@
     if (frame.total !== Math.max(1, Math.ceil(frame.size / frame.chunkSize))) return false;
     if (typeof frame.session !== "string" || frame.session.length < 4 || frame.session.length > 64) return false;
     if (typeof frame.name !== "string" || frame.name.length < 1 || frame.name.length > 255) return false;
-    return Number.isInteger(frame.fileCrc);
+    if (!Number.isInteger(frame.fileCrc) || !Number.isInteger(frame.originalFileCrc)) return false;
+    if (!Number.isSafeInteger(frame.originalSize) || frame.originalSize < 0 || frame.originalSize > MAX_FILE_SIZE) return false;
+    return frame.encoding === "raw" || frame.encoding === "gzip";
   }
 
   function beginSession(frame, headerText) {
+    const previousSession = meta?.session;
     meta = frame;
     sessionHeaderText = headerText;
     chunks = new Map();
@@ -381,6 +465,13 @@
     result.hidden = true;
     fileName.textContent = frame.name;
     status.textContent = barcodeDetector ? "已识别文件（快速模式）" : "已识别文件";
+    if (!restoring && Storage) {
+      if (previousSession && previousSession !== frame.session) {
+        flushPendingChunks();
+        queueStorage(() => Storage.remove(previousSession));
+      }
+      queueStorage(() => Storage.putSession(frame, headerText));
+    }
   }
 
   function acceptParityFrame(frame) {
@@ -390,11 +481,14 @@
     if (frame.groupStart + frame.count > meta.total || frame.bytes.length !== meta.chunkSize) return;
     if (P.crc32(frame.bytes) !== frame.parityCrc) return;
     const repairs = parityFrames.get(frame.groupStart) || new Map();
-    repairs.set(String(frame.seed || "legacy"), frame);
+    const repairKey = String(frame.seed || "legacy");
+    const isNewRepair = !repairs.has(repairKey);
+    repairs.set(repairKey, frame);
     parityFrames.set(frame.groupStart, repairs);
     for (let index = frame.groupStart; index < frame.groupStart + frame.count; index += 1) {
       parityLookup.set(index, frame.groupStart);
     }
+    if (isNewRepair && !restoring && Storage) queueStorage(() => Storage.putRepair(meta.session, frame));
     if (tryRecoverGroup(frame.groupStart)) {
       update();
       if (receivedCount === meta.total) finish();
@@ -453,6 +547,7 @@
     missing.delete(index);
     receivedCount += 1;
     if (recovered) recoveredCount += 1;
+    if (!restoring && Storage) scheduleChunkPersist(meta.session, index, bytes, recovered);
   }
 
   function updateSpeed(byteCount) {
@@ -504,28 +599,87 @@
     }
   }
 
-  function finish() {
-    if (!result.hidden) return;
+  async function finish() {
+    if (!result.hidden || finishing) return;
+    finishing = true;
     const bytes = new Uint8Array(meta.size);
     let offset = 0;
     for (let index = 0; index < meta.total; index += 1) {
       const chunk = chunks.get(index);
-      if (!chunk) return;
+      if (!chunk) { finishing = false; return; }
       bytes.set(chunk, offset);
       offset += chunk.length;
     }
     if (offset !== meta.size || P.crc32(bytes) !== meta.fileCrc) {
       status.textContent = "校验失败，请清空后重新扫描";
+      finishing = false;
       return;
     }
-    const blob = new Blob([bytes], { type: meta.mime });
+    let output;
+    try {
+      output = await P.restorePayload(bytes, meta);
+    } catch (_) {
+      status.textContent = meta.encoding === "gzip" ? "解压失败，请清空后重新扫描" : "文件恢复失败";
+      finishing = false;
+      return;
+    }
+    if (output.length !== meta.originalSize || P.crc32(output) !== meta.originalFileCrc) {
+      status.textContent = "原文件校验失败，请清空后重新扫描";
+      finishing = false;
+      return;
+    }
+    const completedSession = meta.session;
+    const blob = new Blob([output], { type: meta.mime });
     if (download.href) URL.revokeObjectURL(download.href);
     download.href = URL.createObjectURL(blob);
     download.download = meta.name;
-    resultInfo.textContent = formatBytes(bytes.length) + " · CRC-32 校验通过";
+    resultInfo.textContent = formatBytes(output.length) + " · CRC-32 校验通过";
     result.hidden = false;
     closeCamera();
     status.textContent = "接收完成";
+    if (Storage) {
+      await flushPendingChunks();
+      await storageQueue;
+      await queueStorage(() => Storage.remove(completedSession));
+    }
+  }
+
+  async function restoreSavedSession() {
+    if (!Storage) return;
+    restoring = true;
+    try {
+      const latest = await Storage.latest();
+      if (!latest) return;
+      const frame = P.parseFrame(latest.headerText);
+      if (!frame || frame.kind !== "header" || !isValidHeader(frame)) {
+        await Storage.remove(latest.session);
+        return;
+      }
+      const saved = await Storage.load(frame.session);
+      beginSession(frame, latest.headerText);
+      for (const record of saved.chunks || []) {
+        const bytes = new Uint8Array(record.bytes);
+        if (!Number.isSafeInteger(record.index) || record.index < 0 || record.index >= meta.total) continue;
+        if (bytes.length !== expectedChunkLength(record.index) || chunks.has(record.index)) continue;
+        storeChunk(record.index, bytes, !!record.recovered);
+      }
+      for (const record of saved.repairs || []) {
+        const bytes = new Uint8Array(record.bytes);
+        const coefficients = record.coefficients ? new Uint8Array(record.coefficients) : new Uint8Array(record.count).fill(1);
+        const repair = {
+          kind: "parity", session: frame.session, groupStart: record.groupStart, count: record.count,
+          total: record.total, seed: record.seed, parityCrc: record.parityCrc, bytes, coefficients
+        };
+        acceptParityFrame(repair);
+      }
+      update();
+      status.textContent = receivedCount === meta.total ? "已恢复断点，正在校验" : "已恢复断点（" + receivedCount + "/" + meta.total + "）";
+    } catch (_) {
+      // IndexedDB is an optional optimization; scanning remains available.
+    } finally {
+      restoring = false;
+      if (meta && receivedCount === meta.total) finish();
+    }
   }
 
   function formatRate(n) {

@@ -82,12 +82,16 @@
   }
 
   function makeHeader(meta) {
-    return [
+    const fields = [
       MAGIC, "H", meta.session,
       base64UrlEncode(utf8Encode(meta.name || "download.bin")),
       base64UrlEncode(utf8Encode(meta.mime || "application/octet-stream")),
       String(meta.size), String(meta.chunkSize), String(meta.total), hex32(meta.fileCrc)
-    ].join("|");
+    ];
+    if (meta.encoding && meta.encoding !== "raw") {
+      fields.push(String(meta.originalSize), hex32(meta.originalFileCrc), meta.encoding);
+    }
+    return fields.join("|");
   }
 
   function makeData(session, index, total, bytes) {
@@ -117,13 +121,17 @@
     if (typeof text !== "string") return null;
     const fields = text.split("|");
     if (fields[0] !== MAGIC) return null;
-    if (fields[1] === "H" && fields.length === 9) {
+    if (fields[1] === "H" && (fields.length === 9 || fields.length === 12)) {
       try {
+        const compressed = fields.length === 12;
         return {
           kind: "header", session: fields[2], name: utf8Decode(base64UrlDecode(fields[3])),
           mime: utf8Decode(base64UrlDecode(fields[4])) || "application/octet-stream",
           size: Number(fields[5]), chunkSize: Number(fields[6]), total: Number(fields[7]),
-          fileCrc: Number.parseInt(fields[8], 16) >>> 0
+          fileCrc: Number.parseInt(fields[8], 16) >>> 0,
+          originalSize: compressed ? Number(fields[9]) : Number(fields[5]),
+          originalFileCrc: compressed ? Number.parseInt(fields[10], 16) >>> 0 : Number.parseInt(fields[8], 16) >>> 0,
+          encoding: compressed ? fields[11] : "raw"
         };
       } catch (_) { return null; }
     }
@@ -157,7 +165,9 @@
     const session = meta.session || makeSessionId();
     const descriptor = makeHeader({
       session, name: meta.name, mime: meta.mime, size: bytes.length,
-      chunkSize, total, fileCrc: crc32(bytes)
+      chunkSize, total, fileCrc: crc32(bytes), encoding: meta.encoding || "raw",
+      originalSize: meta.originalSize ?? bytes.length,
+      originalFileCrc: meta.originalFileCrc ?? crc32(bytes)
     });
     const frames = [descriptor];
     const dataFrames = [];
@@ -185,12 +195,34 @@
 
     return {
       session, frames, dataFrames, repairFrames, playbackFrames, chunks, total, chunkSize,
-      parityGroupSize, fileCrc: crc32(bytes)
+      parityGroupSize, fileCrc: crc32(bytes), encoding: meta.encoding || "raw",
+      originalSize: meta.originalSize ?? bytes.length,
+      originalFileCrc: meta.originalFileCrc ?? crc32(bytes)
     };
+  }
+
+  async function preparePayload(input, minSavings = 0.05) {
+    const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
+    const raw = { bytes, encoding: "raw", originalSize: bytes.length, originalFileCrc: crc32(bytes), savedBytes: 0 };
+    if (bytes.length < 1024 || typeof CompressionStream === "undefined") return raw;
+    try {
+      const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("gzip"));
+      const compressed = new Uint8Array(await new Response(stream).arrayBuffer());
+      if (compressed.length + 32 >= bytes.length * (1 - minSavings)) return raw;
+      return { bytes: compressed, encoding: "gzip", originalSize: bytes.length, originalFileCrc: raw.originalFileCrc, savedBytes: bytes.length - compressed.length };
+    } catch (_) { return raw; }
+  }
+
+  async function restorePayload(input, meta) {
+    const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
+    if (!meta?.encoding || meta.encoding === "raw") return bytes;
+    if (meta.encoding !== "gzip" || typeof DecompressionStream === "undefined") throw new Error("Unsupported compression: " + meta.encoding);
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
   }
 
   return {
     MAGIC, DEFAULT_PARITY_GROUP_SIZE, crc32, hex32, base64UrlEncode, base64UrlDecode,
-    utf8Encode, utf8Decode, makeSessionId, makeHeader, makeData, makeParity, makeRepairFrame, repairSeedFor, repairCoefficients, gfMul: (a, b) => GF_MUL[(a << 8) | b], gfInv: value => GF_INV[value], parseFrame, makeTransfer
+    utf8Encode, utf8Decode, makeSessionId, makeHeader, makeData, makeParity, makeRepairFrame, repairSeedFor, repairCoefficients, gfMul: (a, b) => GF_MUL[(a << 8) | b], gfInv: value => GF_INV[value], parseFrame, makeTransfer, preparePayload, restorePayload
   };
 });
