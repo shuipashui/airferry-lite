@@ -22,9 +22,11 @@ for (const needle of [
   "missing = new Set",
   "frame.bytes.length === expectedLength",
   "function acceptParityFrame",
-  "function tryRecoverGroup"
+  "function tryRecoverGroup",
+  "function updateSpeed",
+  "function formatRate"
 ]) assert.ok(source.includes(needle), "missing receiver guard: " + needle);
-assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v5";'), "service worker cache version was not bumped");
+assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v7";'), "service worker cache version was not bumped");
 assert.equal(mirrorSource, source, "web-receiver app.js drifted from the published root receiver");
 assert.equal(mirrorServiceWorker, serviceWorker, "web-receiver sw.js drifted from the published root receiver");
 console.log("receiver safety checks ok");
