@@ -13,6 +13,7 @@
   const fileName = document.getElementById("fileName");
   const progressText = document.getElementById("progressText");
   const progressBar = document.getElementById("progressBar");
+  const speedText = document.getElementById("speedText");
   const missingEl = document.getElementById("missing");
   const hint = document.getElementById("cameraHint");
   const result = document.getElementById("result");
@@ -51,6 +52,9 @@
   let sessionHeaderText = "";
   let scanErrors = 0;
   let lastScanStartedAt = -Infinity;
+  let speedWindowStartedAt = 0;
+  let speedWindowBytes = 0;
+  let speedBps = 0;
 
   startBtn.onclick = start;
   stopBtn.onclick = stop;
@@ -154,6 +158,10 @@
     sessionHeaderText = "";
     scanErrors = 0;
     lastScanStartedAt = -Infinity;
+    speedWindowStartedAt = 0;
+    speedWindowBytes = 0;
+    speedBps = 0;
+    speedText.textContent = "—";
     fileName.textContent = "-";
     progressText.textContent = "0%";
     progressBar.style.width = "0%";
@@ -309,9 +317,13 @@
     if (sessionEnd < 0 || text.slice(7, sessionEnd) !== meta.session) return false;
     const keyEnd = text.indexOf("|", sessionEnd + 1);
     if (keyEnd < 0) return false;
-    const key = Number(text.slice(sessionEnd + 1, keyEnd));
+    const keyText = text.slice(sessionEnd + 1, keyEnd);
+    const key = Number(keyText);
     if (!Number.isSafeInteger(key)) return false;
-    return kind === "D" ? chunks.has(key) : parityFrames.has(key);
+    if (kind === "D") return chunks.has(key);
+    const fields = text.split("|");
+    const repairs = parityFrames.get(key);
+    return !!repairs && repairs.has(fields.length === 9 ? fields[6] : "legacy");
   }
 
   function accept(text) {
@@ -362,6 +374,10 @@
     for (let index = 0; index < frame.total; index += 1) missing.add(index);
     receivedCount = 0;
     recoveredCount = 0;
+    speedWindowStartedAt = performance.now();
+    speedWindowBytes = 0;
+    speedBps = 0;
+    speedText.textContent = "—";
     result.hidden = true;
     fileName.textContent = frame.name;
     status.textContent = barcodeDetector ? "已识别文件（快速模式）" : "已识别文件";
@@ -373,7 +389,9 @@
     if (!Number.isSafeInteger(frame.count) || frame.count < 2 || frame.count > 32) return;
     if (frame.groupStart + frame.count > meta.total || frame.bytes.length !== meta.chunkSize) return;
     if (P.crc32(frame.bytes) !== frame.parityCrc) return;
-    parityFrames.set(frame.groupStart, frame);
+    const repairs = parityFrames.get(frame.groupStart) || new Map();
+    repairs.set(String(frame.seed || "legacy"), frame);
+    parityFrames.set(frame.groupStart, repairs);
     for (let index = frame.groupStart; index < frame.groupStart + frame.count; index += 1) {
       parityLookup.set(index, frame.groupStart);
     }
@@ -384,32 +402,70 @@
   }
 
   function tryRecoverGroup(groupStart) {
-    const repair = parityFrames.get(groupStart);
-    if (!repair) return false;
-    let missingIndex = -1;
-    for (let index = groupStart; index < groupStart + repair.count; index += 1) {
-      if (!chunks.has(index)) {
-        if (missingIndex !== -1) return false;
-        missingIndex = index;
+    const repairs = parityFrames.get(groupStart);
+    if (!repairs?.size) return false;
+    const first = repairs.values().next().value;
+    const missingIndexes = [];
+    for (let index = groupStart; index < groupStart + first.count; index += 1) if (!chunks.has(index)) missingIndexes.push(index);
+    if (!missingIndexes.length || repairs.size < missingIndexes.length) return false;
+    const rows = [];
+    for (const repair of repairs.values()) {
+      const coefficients = repair.coefficients || new Uint8Array(repair.count).fill(1);
+      const coeff = new Uint8Array(missingIndexes.length);
+      const rhs = repair.bytes.slice();
+      for (let offset = 0; offset < repair.count; offset += 1) {
+        const index = groupStart + offset;
+        const factor = coefficients[offset] || 1;
+        const chunk = chunks.get(index);
+        const missing = missingIndexes.indexOf(index);
+        if (missing >= 0) coeff[missing] = factor;
+        else if (chunk) for (let byte = 0; byte < chunk.length; byte += 1) rhs[byte] ^= P.gfMul(factor, chunk[byte]);
       }
+      rows.push({ coeff, rhs });
     }
-    if (missingIndex === -1) return false;
-    const recovered = repair.bytes.slice();
-    for (let index = groupStart; index < groupStart + repair.count; index += 1) {
-      if (index === missingIndex) continue;
-      const chunk = chunks.get(index);
-      if (!chunk) return false;
-      for (let offset = 0; offset < chunk.length; offset += 1) recovered[offset] ^= chunk[offset];
+    let rank = 0;
+    for (let column = 0; column < missingIndexes.length && rank < rows.length; column += 1) {
+      let pivot = rank; while (pivot < rows.length && !rows[pivot].coeff[column]) pivot += 1;
+      if (pivot === rows.length) continue;
+      [rows[rank], rows[pivot]] = [rows[pivot], rows[rank]];
+      const row = rows[rank]; const inverse = P.gfInv(row.coeff[column]);
+      for (let c = column; c < row.coeff.length; c += 1) row.coeff[c] = P.gfMul(inverse, row.coeff[c]);
+      for (let byte = 0; byte < row.rhs.length; byte += 1) row.rhs[byte] = P.gfMul(inverse, row.rhs[byte]);
+      for (let other = 0; other < rows.length; other += 1) {
+        if (other === rank) continue;
+        const factor = rows[other].coeff[column]; if (!factor) continue;
+        for (let c = column; c < row.coeff.length; c += 1) rows[other].coeff[c] ^= P.gfMul(factor, row.coeff[c]);
+        for (let byte = 0; byte < row.rhs.length; byte += 1) rows[other].rhs[byte] ^= P.gfMul(factor, row.rhs[byte]);
+      }
+      row.pivot = column; rank += 1;
     }
-    storeChunk(missingIndex, recovered.slice(0, expectedChunkLength(missingIndex)), true);
+    if (rank < missingIndexes.length) return false;
+    for (let index = 0; index < missingIndexes.length; index += 1) {
+      const row = rows.find(item => item.pivot === index);
+      if (row) storeChunk(missingIndexes[index], row.rhs.slice(0, expectedChunkLength(missingIndexes[index])), true);
+    }
     return true;
   }
 
   function storeChunk(index, bytes, recovered) {
     chunks.set(index, bytes);
+    updateSpeed(bytes.length);
     missing.delete(index);
     receivedCount += 1;
     if (recovered) recoveredCount += 1;
+  }
+
+  function updateSpeed(byteCount) {
+    const now = performance.now();
+    if (!speedWindowStartedAt) speedWindowStartedAt = now;
+    speedWindowBytes += byteCount;
+    const elapsed = now - speedWindowStartedAt;
+    if (elapsed < 350) return;
+    const sample = speedWindowBytes / (elapsed / 1000);
+    speedBps = speedBps ? speedBps * 0.65 + sample * 0.35 : sample;
+    speedWindowStartedAt = now;
+    speedWindowBytes = 0;
+    speedText.textContent = formatRate(speedBps);
   }
 
   function expectedChunkLength(index) {
@@ -470,6 +526,11 @@
     result.hidden = false;
     closeCamera();
     status.textContent = "接收完成";
+  }
+
+  function formatRate(n) {
+    if (!n || n < 1) return "—";
+    return n < 1024 ? n.toFixed(0) + " B/s" : n < 1048576 ? (n / 1024).toFixed(1) + " KB/s" : (n / 1048576).toFixed(2) + " MB/s";
   }
 
   function formatBytes(n) {
