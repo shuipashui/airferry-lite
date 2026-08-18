@@ -11,7 +11,7 @@ Fields are UTF-8 text separated by `|`. Binary fields use URL-safe Base64 withou
 `text
 AFL1|H|session|nameBase64|mimeBase64|size|chunkSize|total|fileCrc32
 AFL1|D|session|index|total|chunkCrc32|payloadBase64
-AFL1|P|session|groupStart|count|total|parityCrc32|payloadBase64
+AFL1|P|session|groupStart|count|total|seed32|repairCrc32|payloadBase64
 `
 
 ### Header ( `H` )
@@ -31,19 +31,19 @@ The header describes one transfer session. It is repeated throughout playback so
 - Every non-final fragment must contain exactly `chunkSize` bytes.
 - The final fragment contains the remaining bytes and may be empty for a zero-byte file.
 
-### XOR repair ( `P` )
+### Linear repair ( `P` )
 
-A repair frame covers `count` consecutive data fragments beginning at `groupStart`. Its payload is `chunkSize` bytes. Each byte is the XOR of the corresponding byte in all covered fragments; shorter final fragments are treated as zero-padded.
+A repair frame covers `count` consecutive data fragments beginning at `groupStart`. Its payload is `chunkSize` bytes. The sender derives one non-zero GF(256) coefficient per covered fragment from the 32-bit `seed32`, then stores the coefficient-weighted sum of all fragments. Shorter final fragments are zero-padded.
 
-If exactly one covered data fragment is missing, the receiver reconstructs it by XORing the repair payload with all other fragments in that group, then truncates the result to the expected fragment length.
+Receivers keep distinct repair frames by seed. With one missing fragment, any valid repair frame can recover it. With multiple losses in one group, independent repair frames from later playback rounds are combined as a small GF(256) linear system. The sender emits a fresh seed for the same group on every playback round, so repair information is not repeated while the QR stream loops.
 
 Current sender defaults:
 
 - group size: 8 data fragments
+- one repair frame per eligible group per playback round
 - repair frame omitted for transfers smaller than four fragments
-- one repair frame per eligible group
 
-A repair frame cannot recover two or more simultaneous losses in the same group. Receivers therefore continue accepting repeated data and repair frames across playback rounds.
+The outer frame remains text/Base64 for compatibility; old 8-field XOR `P` frames are still accepted as legacy repairs.
 
 ## Validation
 
