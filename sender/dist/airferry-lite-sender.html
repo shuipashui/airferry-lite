@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>AirFerry Lite - 离线二维码发送端</title>
   <style>:root{color-scheme:dark;--bg:#07110f;--panel:#0d1b17;--line:#244137;--text:#edf9f4;--muted:#93b4a8;--accent:#5ef0ad;--accent2:#22b979}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 15% 10%,#12352a 0,transparent 38%),var(--bg);font-family:Inter,ui-sans-serif,system-ui,"Microsoft YaHei",sans-serif;color:var(--text)}.shell{min-height:100vh;display:grid;grid-template-columns:minmax(320px,450px) minmax(420px,1fr);gap:20px;padding:20px}.panel{background:rgba(13,27,23,.92);border:1px solid var(--line);border-radius:22px;box-shadow:0 24px 60px rgba(0,0,0,.35)}.controls{padding:26px;display:flex;flex-direction:column;gap:20px}.brand{display:flex;gap:14px;align-items:center}.mark{display:grid;place-items:center;width:52px;height:52px;border-radius:16px;background:var(--accent);color:#062218;font-weight:900}.brand h1{margin:0;font-size:25px}.brand p{margin:4px 0 0;color:var(--muted)}.drop{min-height:150px;border:1px dashed #497365;border-radius:18px;display:grid;place-content:center;text-align:center;gap:8px;cursor:pointer;background:#0a1714}.drop.drag{border-color:var(--accent);background:#10271f}.drop input{display:none}.drop strong{font-size:17px}.drop span,.tip{color:var(--muted);font-size:13px;line-height:1.65}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.grid label{font-size:13px;color:var(--muted)}select{width:100%;margin-top:7px;padding:11px 12px;border-radius:12px;border:1px solid var(--line);background:#071410;color:var(--text)}.actions{display:flex;gap:10px;flex-wrap:wrap}button{border:1px solid var(--line);background:#132b23;color:var(--text);border-radius:12px;padding:12px 16px;font-weight:750;cursor:pointer}button.primary{background:var(--accent);color:#062218;border-color:transparent}button:disabled{opacity:.42;cursor:not-allowed}.status{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}.status div{padding:11px;background:#091612;border-radius:12px;min-width:0}.status span{display:block;color:var(--muted);font-size:11px}.status strong{display:block;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.progress{height:8px;background:#07110f;border-radius:99px;overflow:hidden}.progress i{display:block;width:0;height:100%;background:linear-gradient(90deg,var(--accent2),var(--accent));transition:width .12s}.viewer{display:grid;place-items:center;padding:28px;position:relative;overflow:hidden}#qrCanvas{display:block;width:min(78vh,100%);height:auto;aspect-ratio:1;background:#fff;border-radius:12px;image-rendering:pixelated}.overlay{position:absolute;inset:0;display:grid;place-content:center;text-align:center;gap:8px;background:rgba(7,17,15,.88)}.overlay span{color:var(--muted)}.overlay.hidden{display:none}@media(max-width:900px){.shell{grid-template-columns:1fr}.viewer{min-height:60vh}.status{grid-template-columns:1fr}.grid{grid-template-columns:1fr}}
-</style>
+.receiver-link{display:grid;grid-template-columns:minmax(0,1fr) 116px;gap:14px;align-items:center;padding:14px;border:1px solid var(--line);border-radius:16px;background:#091612}.receiver-link-copy{display:flex;flex-direction:column;gap:6px;min-width:0}.receiver-link-copy strong{font-size:14px}.receiver-link-copy span{color:var(--muted);font-size:12px}.receiver-link-copy a{color:var(--accent);font-size:12px;line-height:1.45;overflow-wrap:anywhere}.receiver-link canvas{display:block;width:116px;height:116px;background:#fff;border-radius:8px;image-rendering:pixelated}@media(max-width:520px){.receiver-link{grid-template-columns:1fr}.receiver-link canvas{width:150px;height:150px;justify-self:center}}</style>
 </head>
 <body>
   <main class="shell">
@@ -30,7 +30,11 @@
       <div class="actions"><button id="prepareBtn" class="primary" disabled>生成二维码流</button><button id="playBtn" disabled>开始播放</button><button id="resetBtn" disabled>重置</button></div>
       <div class="status"><div><span>状态</span><strong id="statusText">等待文件</strong></div><div><span>会话</span><strong id="sessionText">—</strong></div><div><span>片段</span><strong id="frameText">—</strong></div></div>
       <div class="progress"><i id="progressBar"></i></div>
-      <p class="tip">手机请打开 AirFerry Lite 网页接收端或 Android 接收端，对准右侧二维码。接收完成前保持循环播放。</p>
+      <section class="receiver-link" aria-label="手机网页接收端">
+        <div class="receiver-link-copy"><strong>手机网页接收端</strong><span>扫码后直接打开接收页面</span><a id="receiverUrl" target="_blank" rel="noopener"></a></div>
+        <canvas id="receiverQrCanvas" width="300" height="300" aria-label="手机接收端网址二维码"></canvas>
+      </section>
+      <p class="tip">手机扫码进入接收端后，允许摄像头权限并点击“开始扫描”，电脑端保持二维码循环播放。</p>
     </section>
     <section class="panel viewer"><canvas id="qrCanvas" width="900" height="900"></canvas><div class="overlay" id="overlay"><strong>等待生成</strong><span>选择文件后点击“生成二维码流”</span></div></section>
   </main>
@@ -2340,6 +2344,16 @@ var qrcode = function() {
 })(typeof globalThis !== "undefined" ? globalThis : (typeof self !== "undefined" ? self : this), function () {
   const MAGIC = "AFL1";
   const DEFAULT_PARITY_GROUP_SIZE = 8;
+  const GF_MUL = new Uint8Array(256 * 256);
+  const GF_INV = new Uint8Array(256);
+  for (let a = 0; a < 256; a += 1) for (let b = 0; b < 256; b += 1) {
+    let aa = a, bb = b, value = 0;
+    while (bb) { if (bb & 1) value ^= aa; aa <<= 1; if (aa & 0x100) aa ^= 0x11d; bb >>>= 1; }
+    GF_MUL[(a << 8) | b] = value;
+  }
+  for (let value = 1; value < 256; value += 1) for (let candidate = 1; candidate < 256; candidate += 1) {
+    if (GF_MUL[(value << 8) | candidate] === 1) { GF_INV[value] = candidate; break; }
+  }
 
   function crc32(input) {
     const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
@@ -2353,6 +2367,23 @@ var qrcode = function() {
 
   function hex32(value) {
     return (value >>> 0).toString(16).padStart(8, "0");
+  }
+
+  function repairSeedFor(session, groupStart, round = 0) {
+    let hash = 2166136261 >>> 0;
+    const text = session + "|" + groupStart + "|" + round;
+    for (let i = 0; i < text.length; i += 1) { hash ^= text.charCodeAt(i); hash = Math.imul(hash, 16777619) >>> 0; }
+    return (hash || 1) >>> 0;
+  }
+
+  function repairCoefficients(seed, count) {
+    let state = (seed >>> 0) || 1;
+    const coefficients = new Uint8Array(count);
+    for (let i = 0; i < count; i += 1) {
+      state ^= state << 13; state >>>= 0; state ^= state >>> 17; state >>>= 0; state ^= state << 5; state >>>= 0;
+      coefficients[i] = (state & 255) || 1;
+    }
+    return coefficients;
   }
 
   function base64UrlEncode(bytes) {
@@ -2401,11 +2432,23 @@ var qrcode = function() {
     return [MAGIC, "D", session, String(index), String(total), hex32(crc32(bytes)), base64UrlEncode(bytes)].join("|");
   }
 
-  function makeParity(session, groupStart, count, total, bytes) {
-    return [
-      MAGIC, "P", session, String(groupStart), String(count), String(total),
-      hex32(crc32(bytes)), base64UrlEncode(bytes)
-    ].join("|");
+  function makeParity(session, groupStart, count, total, seed, bytes) {
+    if (bytes === undefined) { bytes = seed; seed = 0; }
+    if (!(bytes instanceof Uint8Array)) bytes = new Uint8Array(bytes);
+    return seed ? [MAGIC, "P", session, String(groupStart), String(count), String(total), hex32(seed), hex32(crc32(bytes)), base64UrlEncode(bytes)].join("|") : [MAGIC, "P", session, String(groupStart), String(count), String(total), hex32(crc32(bytes)), base64UrlEncode(bytes)].join("|");
+  }
+
+  function makeRepairFrame(transfer, groupStart, round = 0) {
+    const count = Math.min(transfer.parityGroupSize, transfer.total - groupStart);
+    const seed = repairSeedFor(transfer.session, groupStart, round);
+    const coefficients = repairCoefficients(seed, count);
+    const repair = new Uint8Array(transfer.chunkSize);
+    for (let offset = 0; offset < count; offset += 1) {
+      const chunk = transfer.chunks[groupStart + offset];
+      const coefficient = coefficients[offset];
+      for (let index = 0; index < chunk.length; index += 1) repair[index] ^= GF_MUL[(coefficient << 8) | chunk[index]];
+    }
+    return makeParity(transfer.session, groupStart, count, transfer.total, seed, repair);
   }
 
   function parseFrame(text) {
@@ -2431,13 +2474,14 @@ var qrcode = function() {
         };
       } catch (_) { return null; }
     }
-    if (fields[1] === "P" && fields.length === 8) {
+    if (fields[1] === "P" && (fields.length === 8 || fields.length === 9)) {
       try {
-        const bytes = base64UrlDecode(fields[7]);
-        return {
-          kind: "parity", session: fields[2], groupStart: Number(fields[3]), count: Number(fields[4]),
-          total: Number(fields[5]), parityCrc: Number.parseInt(fields[6], 16) >>> 0, bytes
-        };
+        const legacy = fields.length === 8;
+        const seed = legacy ? 0 : Number.parseInt(fields[6], 16) >>> 0;
+        const crcField = legacy ? fields[6] : fields[7];
+        const payloadField = legacy ? fields[7] : fields[8];
+        const bytes = base64UrlDecode(payloadField);
+        return { kind: "parity", session: fields[2], groupStart: Number(fields[3]), count: Number(fields[4]), total: Number(fields[5]), seed, coefficients: legacy ? null : repairCoefficients(seed, Number(fields[4])), parityCrc: Number.parseInt(crcField, 16) >>> 0, bytes };
       } catch (_) { return null; }
     }
     return null;
@@ -2471,26 +2515,21 @@ var qrcode = function() {
       const count = Math.min(parityGroupSize, total - groupStart);
       for (let offset = 0; offset < count; offset += 1) playbackFrames.push(dataFrames[groupStart + offset]);
       if (total >= 4 && count >= 2) {
-        const parity = new Uint8Array(chunkSize);
-        for (let offset = 0; offset < count; offset += 1) {
-          const chunk = chunks[groupStart + offset];
-          for (let index = 0; index < chunk.length; index += 1) parity[index] ^= chunk[index];
-        }
-        const repair = makeParity(session, groupStart, count, total, parity);
+        const repair = makeRepairFrame({ session, total, chunkSize, parityGroupSize, chunks }, groupStart, 0);
         repairFrames.push(repair);
         playbackFrames.push(repair);
       }
     }
 
     return {
-      session, frames, dataFrames, repairFrames, playbackFrames, total, chunkSize,
+      session, frames, dataFrames, repairFrames, playbackFrames, chunks, total, chunkSize,
       parityGroupSize, fileCrc: crc32(bytes)
     };
   }
 
   return {
     MAGIC, DEFAULT_PARITY_GROUP_SIZE, crc32, hex32, base64UrlEncode, base64UrlDecode,
-    utf8Encode, utf8Decode, makeSessionId, makeHeader, makeData, makeParity, parseFrame, makeTransfer
+    utf8Encode, utf8Decode, makeSessionId, makeHeader, makeData, makeParity, makeRepairFrame, repairSeedFor, repairCoefficients, gfMul: (a, b) => GF_MUL[(a << 8) | b], gfInv: value => GF_INV[value], parseFrame, makeTransfer
   };
 });
 </script>
@@ -2512,6 +2551,9 @@ var qrcode = function() {
   const sessionText = el("sessionText");
   const frameText = el("frameText");
   const progressBar = el("progressBar");
+  const receiverUrl = el("receiverUrl");
+  const receiverQrCanvas = el("receiverQrCanvas");
+  const RECEIVER_URL = "https://shuipashui.github.io/airferry-lite/";
   const PROFILES = {
     stable: { chunk: 400, fps: 6, headerEvery: 8 },
     balanced: { chunk: 700, fps: 8, headerEvery: 10 },
@@ -2643,8 +2685,9 @@ var qrcode = function() {
       frameText.textContent = "元数据 / 第 " + (round + 1) + " 轮";
     } else {
       const sequence = transfer.playbackFrames || transfer.frames.slice(1);
-      const frame = sequence[playbackIndex];
+      let frame = sequence[playbackIndex];
       const parsed = P.parseFrame(frame);
+      if (parsed?.kind === "parity" && typeof P.makeRepairFrame === "function") frame = P.makeRepairFrame(transfer, parsed.groupStart, round + 1);
       drawFrame(frame);
       playbackIndex = (playbackIndex + 1) % sequence.length;
       if (playbackIndex === 0) round += 1;
@@ -2703,6 +2746,25 @@ var qrcode = function() {
     }
   }
 
+  function drawLinkQr(text) {
+    try {
+      const pattern = getQrPattern(text);
+      const context = receiverQrCanvas.getContext("2d", { alpha: false });
+      const quiet = 4;
+      const cell = Math.floor(receiverQrCanvas.width / (pattern.count + quiet * 2));
+      const used = cell * (pattern.count + quiet * 2);
+      const offset = Math.floor((receiverQrCanvas.width - used) / 2);
+      context.fillStyle = "#fff";
+      context.fillRect(0, 0, receiverQrCanvas.width, receiverQrCanvas.height);
+      context.fillStyle = "#000";
+      for (let row = 0; row < pattern.count; row += 1) for (let col = 0; col < pattern.count; col += 1) {
+        if (pattern.dark[row * pattern.count + col]) context.fillRect(offset + (col + quiet) * cell, offset + (row + quiet) * cell, cell, cell);
+      }
+    } catch (_) {
+      receiverQrCanvas.hidden = true;
+    }
+  }
+
   function clearCanvas() {
     const context = canvas.getContext("2d");
     context.fillStyle = "#fff";
@@ -2716,6 +2778,9 @@ var qrcode = function() {
   }
 
   applyProfile();
+  receiverUrl.href = RECEIVER_URL;
+  receiverUrl.textContent = RECEIVER_URL;
+  drawLinkQr(RECEIVER_URL);
   clearCanvas();
 })();
 </script>
