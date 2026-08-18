@@ -8,21 +8,23 @@ Fields are UTF-8 text separated by `|`. Binary fields use URL-safe Base64 withou
 
 ## Frames
 
-`text
+```text
 AFL1|H|session|nameBase64|mimeBase64|size|chunkSize|total|fileCrc32
+AFL1|H|session|nameBase64|mimeBase64|transferSize|chunkSize|total|transferCrc32|originalSize|originalCrc32|gzip
 AFL1|D|session|index|total|chunkCrc32|payloadBase64
 AFL1|P|session|groupStart|count|total|seed32|repairCrc32|payloadBase64
-`
+```
 
 ### Header ( `H` )
 
 The header describes one transfer session. It is repeated throughout playback so a receiver can join mid-stream.
 
 - `session`: random transfer identifier
-- `size`: original file size in bytes
+- `size` / `transferSize`: transmitted payload size in bytes
 - `chunkSize`: full data-fragment size
 - `total`: `max(1, ceil(size / chunkSize))`
-- `fileCrc32`: CRC-32 of the complete original file
+- `fileCrc32` / `transferCrc32`: CRC-32 of the complete transmitted payload
+- The optional 12-field header is emitted only when gzip was selected. It records the original size and CRC so receivers verify both the compressed transport and the restored file. The 9-field header remains the raw-data compatibility format.
 
 ### Data ( `D` )
 
@@ -55,6 +57,7 @@ The web receiver currently enforces:
 - exact fragment length checks
 - CRC-32 for every received data or repair frame
 - final size and file CRC-32 verification
+- original size and CRC-32 verification after gzip decompression
 
 Frames from another session, malformed numeric fields, invalid group ranges and duplicate fragments are ignored.
 
