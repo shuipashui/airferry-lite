@@ -11,7 +11,7 @@ AirFerry Lite 是一个无需服务器的离线光学文件传输项目：电脑
 ## 在线使用
 
 - 手机网页接收端：https://shuipashui.github.io/airferry-lite/
-- 发送端页面会显示上述地址和二维码，手机扫码即可进入接收端
+- 发送端页面右侧会显示上述地址和二维码，手机扫码即可进入接收端；生成文件二维码流后该入口自动隐藏
 - 单文件发送端：https://shuipashui.github.io/airferry-lite/sender/dist/airferry-lite-sender.html
 
 使用步骤：
