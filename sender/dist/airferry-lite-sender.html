@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>AirFerry Lite - 离线二维码发送端</title>
   <style>:root{color-scheme:dark;--bg:#07110f;--panel:#0d1b17;--line:#244137;--text:#edf9f4;--muted:#93b4a8;--accent:#5ef0ad;--accent2:#22b979}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 15% 10%,#12352a 0,transparent 38%),var(--bg);font-family:Inter,ui-sans-serif,system-ui,"Microsoft YaHei",sans-serif;color:var(--text)}.shell{min-height:100vh;display:grid;grid-template-columns:minmax(320px,450px) minmax(420px,1fr);gap:20px;padding:20px}.panel{background:rgba(13,27,23,.92);border:1px solid var(--line);border-radius:22px;box-shadow:0 24px 60px rgba(0,0,0,.35)}.controls{padding:26px;display:flex;flex-direction:column;gap:20px}.brand{display:flex;gap:14px;align-items:center}.mark{display:grid;place-items:center;width:52px;height:52px;border-radius:16px;background:var(--accent);color:#062218;font-weight:900}.brand h1{margin:0;font-size:25px}.brand p{margin:4px 0 0;color:var(--muted)}.drop{min-height:150px;border:1px dashed #497365;border-radius:18px;display:grid;place-content:center;text-align:center;gap:8px;cursor:pointer;background:#0a1714}.drop.drag{border-color:var(--accent);background:#10271f}.drop input{display:none}.drop strong{font-size:17px}.drop span,.tip{color:var(--muted);font-size:13px;line-height:1.65}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.grid label{font-size:13px;color:var(--muted)}select{width:100%;margin-top:7px;padding:11px 12px;border-radius:12px;border:1px solid var(--line);background:#071410;color:var(--text)}.actions{display:flex;gap:10px;flex-wrap:wrap}button{border:1px solid var(--line);background:#132b23;color:var(--text);border-radius:12px;padding:12px 16px;font-weight:750;cursor:pointer}button.primary{background:var(--accent);color:#062218;border-color:transparent}button:disabled{opacity:.42;cursor:not-allowed}.status{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}.status div{padding:11px;background:#091612;border-radius:12px;min-width:0}.status span{display:block;color:var(--muted);font-size:11px}.status strong{display:block;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.progress{height:8px;background:#07110f;border-radius:99px;overflow:hidden}.progress i{display:block;width:0;height:100%;background:linear-gradient(90deg,var(--accent2),var(--accent));transition:width .12s}.viewer{display:grid;place-items:center;padding:28px;position:relative;overflow:hidden}#qrCanvas{display:block;width:min(78vh,100%);height:auto;aspect-ratio:1;background:#fff;border-radius:12px;image-rendering:pixelated}.overlay{position:absolute;inset:0;display:grid;place-content:center;text-align:center;gap:8px;background:rgba(7,17,15,.88)}.overlay span{color:var(--muted)}.overlay.hidden{display:none}@media(max-width:900px){.shell{grid-template-columns:1fr}.viewer{min-height:60vh}.status{grid-template-columns:1fr}.grid{grid-template-columns:1fr}}
-.receiver-link{display:grid;grid-template-columns:minmax(0,1fr) 116px;gap:14px;align-items:center;padding:14px;border:1px solid var(--line);border-radius:16px;background:#091612}.receiver-link-copy{display:flex;flex-direction:column;gap:6px;min-width:0}.receiver-link-copy strong{font-size:14px}.receiver-link-copy span{color:var(--muted);font-size:12px}.receiver-link-copy a{color:var(--accent);font-size:12px;line-height:1.45;overflow-wrap:anywhere}.receiver-link canvas{display:block;width:116px;height:116px;background:#fff;border-radius:8px;image-rendering:pixelated}@media(max-width:520px){.receiver-link{grid-template-columns:1fr}.receiver-link canvas{width:150px;height:150px;justify-self:center}}</style>
+.receiver-link{display:grid;grid-template-columns:minmax(0,1fr) 136px;gap:14px;align-items:center;padding:14px;border:1px solid var(--line);border-radius:16px;background:#091612}.receiver-link-copy{display:flex;flex-direction:column;gap:6px;min-width:0}.receiver-link-copy strong{font-size:14px}.receiver-link-copy span{color:var(--muted);font-size:12px}.receiver-link-copy a{color:var(--accent);font-size:12px;line-height:1.45;overflow-wrap:anywhere}.receiver-qr-wrap{display:grid;place-items:center;padding:10px;background:#fff;border-radius:6px}.receiver-link canvas{display:block;width:116px;height:116px;background:#fff;border-radius:0;image-rendering:pixelated}@media(max-width:520px){.receiver-link{grid-template-columns:1fr}.receiver-qr-wrap{justify-self:center}.receiver-link canvas{width:150px;height:150px}}</style>
 </head>
 <body>
   <main class="shell">
@@ -32,7 +32,7 @@
       <div class="progress"><i id="progressBar"></i></div>
       <section class="receiver-link" aria-label="手机网页接收端">
         <div class="receiver-link-copy"><strong>手机网页接收端</strong><span>扫码后直接打开接收页面</span><a id="receiverUrl" target="_blank" rel="noopener"></a></div>
-        <canvas id="receiverQrCanvas" width="300" height="300" aria-label="手机接收端网址二维码"></canvas>
+        <div class="receiver-qr-wrap"><canvas id="receiverQrCanvas" width="300" height="300" aria-label="手机接收端网址二维码"></canvas></div>
       </section>
       <p class="tip">手机扫码进入接收端后，允许摄像头权限并点击“开始扫描”，电脑端保持二维码循环播放。</p>
     </section>
@@ -2420,12 +2420,16 @@ var qrcode = function() {
   }
 
   function makeHeader(meta) {
-    return [
+    const fields = [
       MAGIC, "H", meta.session,
       base64UrlEncode(utf8Encode(meta.name || "download.bin")),
       base64UrlEncode(utf8Encode(meta.mime || "application/octet-stream")),
       String(meta.size), String(meta.chunkSize), String(meta.total), hex32(meta.fileCrc)
-    ].join("|");
+    ];
+    if (meta.encoding && meta.encoding !== "raw") {
+      fields.push(String(meta.originalSize), hex32(meta.originalFileCrc), meta.encoding);
+    }
+    return fields.join("|");
   }
 
   function makeData(session, index, total, bytes) {
@@ -2455,13 +2459,17 @@ var qrcode = function() {
     if (typeof text !== "string") return null;
     const fields = text.split("|");
     if (fields[0] !== MAGIC) return null;
-    if (fields[1] === "H" && fields.length === 9) {
+    if (fields[1] === "H" && (fields.length === 9 || fields.length === 12)) {
       try {
+        const compressed = fields.length === 12;
         return {
           kind: "header", session: fields[2], name: utf8Decode(base64UrlDecode(fields[3])),
           mime: utf8Decode(base64UrlDecode(fields[4])) || "application/octet-stream",
           size: Number(fields[5]), chunkSize: Number(fields[6]), total: Number(fields[7]),
-          fileCrc: Number.parseInt(fields[8], 16) >>> 0
+          fileCrc: Number.parseInt(fields[8], 16) >>> 0,
+          originalSize: compressed ? Number(fields[9]) : Number(fields[5]),
+          originalFileCrc: compressed ? Number.parseInt(fields[10], 16) >>> 0 : Number.parseInt(fields[8], 16) >>> 0,
+          encoding: compressed ? fields[11] : "raw"
         };
       } catch (_) { return null; }
     }
@@ -2495,7 +2503,9 @@ var qrcode = function() {
     const session = meta.session || makeSessionId();
     const descriptor = makeHeader({
       session, name: meta.name, mime: meta.mime, size: bytes.length,
-      chunkSize, total, fileCrc: crc32(bytes)
+      chunkSize, total, fileCrc: crc32(bytes), encoding: meta.encoding || "raw",
+      originalSize: meta.originalSize ?? bytes.length,
+      originalFileCrc: meta.originalFileCrc ?? crc32(bytes)
     });
     const frames = [descriptor];
     const dataFrames = [];
@@ -2523,13 +2533,35 @@ var qrcode = function() {
 
     return {
       session, frames, dataFrames, repairFrames, playbackFrames, chunks, total, chunkSize,
-      parityGroupSize, fileCrc: crc32(bytes)
+      parityGroupSize, fileCrc: crc32(bytes), encoding: meta.encoding || "raw",
+      originalSize: meta.originalSize ?? bytes.length,
+      originalFileCrc: meta.originalFileCrc ?? crc32(bytes)
     };
+  }
+
+  async function preparePayload(input, minSavings = 0.05) {
+    const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
+    const raw = { bytes, encoding: "raw", originalSize: bytes.length, originalFileCrc: crc32(bytes), savedBytes: 0 };
+    if (bytes.length < 1024 || typeof CompressionStream === "undefined") return raw;
+    try {
+      const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("gzip"));
+      const compressed = new Uint8Array(await new Response(stream).arrayBuffer());
+      if (compressed.length + 32 >= bytes.length * (1 - minSavings)) return raw;
+      return { bytes: compressed, encoding: "gzip", originalSize: bytes.length, originalFileCrc: raw.originalFileCrc, savedBytes: bytes.length - compressed.length };
+    } catch (_) { return raw; }
+  }
+
+  async function restorePayload(input, meta) {
+    const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
+    if (!meta?.encoding || meta.encoding === "raw") return bytes;
+    if (meta.encoding !== "gzip" || typeof DecompressionStream === "undefined") throw new Error("Unsupported compression: " + meta.encoding);
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
   }
 
   return {
     MAGIC, DEFAULT_PARITY_GROUP_SIZE, crc32, hex32, base64UrlEncode, base64UrlDecode,
-    utf8Encode, utf8Decode, makeSessionId, makeHeader, makeData, makeParity, makeRepairFrame, repairSeedFor, repairCoefficients, gfMul: (a, b) => GF_MUL[(a << 8) | b], gfInv: value => GF_INV[value], parseFrame, makeTransfer
+    utf8Encode, utf8Decode, makeSessionId, makeHeader, makeData, makeParity, makeRepairFrame, repairSeedFor, repairCoefficients, gfMul: (a, b) => GF_MUL[(a << 8) | b], gfInv: value => GF_INV[value], parseFrame, makeTransfer, preparePayload, restorePayload
   };
 });
 </script>
@@ -2604,11 +2636,15 @@ var qrcode = function() {
     statusText.textContent = "正在读取文件";
     prepareBtn.disabled = true;
     try {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      transfer = P.makeTransfer(bytes, {
+      const sourceBytes = new Uint8Array(await file.arrayBuffer());
+      const prepared = await P.preparePayload(sourceBytes);
+      transfer = P.makeTransfer(prepared.bytes, {
         name: file.name,
         mime: file.type || "application/octet-stream",
-        chunkSize: Number(chunkSize.value)
+        chunkSize: Number(chunkSize.value),
+        encoding: prepared.encoding,
+        originalSize: prepared.originalSize,
+        originalFileCrc: prepared.originalFileCrc
       });
       playbackIndex = 0;
       emitted = 0;
@@ -2619,7 +2655,7 @@ var qrcode = function() {
       progressBar.style.width = "0%";
       drawFrame(transfer.frames[0]);
       overlay.classList.add("hidden");
-      statusText.textContent = "二维码流已生成";
+      statusText.textContent = prepared.encoding === "gzip" ? "已压缩 " + Math.round(prepared.savedBytes / prepared.originalSize * 100) + "% · 二维码流已生成" : "二维码流已生成";
       playBtn.disabled = false;
       playBtn.textContent = "开始播放";
       resetBtn.disabled = false;
