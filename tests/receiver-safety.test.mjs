@@ -34,7 +34,10 @@ for (const needle of [
   ,"P.restorePayload(bytes, meta)"
   ,"function acceptHighSpeedFrame"
   ,"function scanWithHighSpeedWorkers"
-  ,"highWorkerBusy.indexOf(false)"
+  ,"const HIGH_WORKER_TIMEOUT = 2500;"
+  ,"function restartHighSpeedWorker"
+  ,"highWorkerReady[index]"
+  ,"highWorkerBusy.findIndex"
 ]) assert.ok(source.includes(needle), "missing receiver guard: " + needle);
 assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v9";'), "service worker cache version was not bumped");
 assert.ok(serviceWorker.includes('"./highspeed-protocol.js"') && serviceWorker.includes('"./vendor/decimen/zxing_reader-EOacYbLr.wasm"'), "high-speed receiver assets are not cached");

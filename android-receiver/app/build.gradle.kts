@@ -12,4 +12,5 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    testImplementation("junit:junit:4.13.2")
 }

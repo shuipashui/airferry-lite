@@ -33,7 +33,8 @@
   const MAX_FILE_SIZE = 64 * 1024 * 1024;
   const MAX_CHUNKS = 200000;
   const MAX_CHUNK_SIZE = 4096;
-  const HIGH_SPEED_WORKERS = Math.max(2, Math.min(3, navigator.hardwareConcurrency || 2));
+  const HIGH_SPEED_WORKERS = (navigator.hardwareConcurrency || 0) >= 8 ? 3 : 2;
+  const HIGH_WORKER_TIMEOUT = 2500;
 
   let stream = null;
   let scanTimer = 0;
@@ -75,6 +76,8 @@
   let highFrameId = 0;
   let highWorkers = [];
   let highWorkerBusy = [];
+  let highWorkerReady = [];
+  let highWorkerStartedAt = [];
   let highWorkersDisabled = typeof Worker !== "function" || !H;
 
   startBtn.onclick = start;
@@ -280,27 +283,56 @@
   function startHighSpeedWorkers() {
     if (highWorkersDisabled || highWorkers.length) return;
     try {
+      highWorkers = new Array(HIGH_SPEED_WORKERS);
+      highWorkerBusy = new Array(HIGH_SPEED_WORKERS).fill(false);
+      highWorkerReady = new Array(HIGH_SPEED_WORKERS).fill(false);
+      highWorkerStartedAt = new Array(HIGH_SPEED_WORKERS).fill(0);
       for (let index = 0; index < HIGH_SPEED_WORKERS; index += 1) {
-        const worker = new Worker("vendor/decimen/decoder-worker.js");
-        worker.onmessage = event => {
-          if (event.data?.id === -1) return;
-          highWorkerBusy[index] = false;
-          const bytes = event.data?.bytes;
-          if (bytes?.length) acceptDecodedBytes(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
-        };
-        worker.onerror = () => disableHighSpeedWorkers();
-        highWorkers.push(worker);
-        highWorkerBusy.push(false);
+        startHighSpeedWorker(index);
       }
     } catch (_) {
       disableHighSpeedWorkers();
     }
   }
 
+  function startHighSpeedWorker(index) {
+    const worker = new Worker("vendor/decimen/decoder-worker.js");
+    highWorkers[index] = worker;
+    highWorkerBusy[index] = false;
+    highWorkerReady[index] = false;
+    highWorkerStartedAt[index] = 0;
+    worker.onmessage = event => {
+      if (highWorkers[index] !== worker) return;
+      if (event.data?.id === -1) {
+        highWorkerReady[index] = true;
+        return;
+      }
+      highWorkerBusy[index] = false;
+      highWorkerStartedAt[index] = 0;
+      const bytes = event.data?.bytes;
+      if (bytes?.length) acceptDecodedBytes(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+    };
+    worker.onerror = () => {
+      if (highWorkers[index] === worker) restartHighSpeedWorker(index);
+    };
+  }
+
+  function restartHighSpeedWorker(index) {
+    if (!stream || !highWorkers.length) return;
+    highWorkers[index]?.terminate();
+    try {
+      startHighSpeedWorker(index);
+    } catch (_) {
+      disableHighSpeedWorkers();
+    }
+  }
+
   function stopHighSpeedWorkers() {
-    for (const worker of highWorkers) worker.terminate();
+    for (const worker of highWorkers) worker?.terminate();
     highWorkers = [];
     highWorkerBusy = [];
+    highWorkerReady = [];
+    highWorkerStartedAt = [];
   }
 
   function disableHighSpeedWorkers() {
@@ -311,7 +343,11 @@
 
   function scanWithHighSpeedWorkers() {
     if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
-    const slot = highWorkerBusy.indexOf(false);
+    const now = performance.now();
+    for (let index = 0; index < highWorkers.length; index += 1) {
+      if (highWorkerBusy[index] && now - highWorkerStartedAt[index] > HIGH_WORKER_TIMEOUT) restartHighSpeedWorker(index);
+    }
+    const slot = highWorkerBusy.findIndex((busy, index) => !busy && highWorkerReady[index]);
     if (slot < 0) return;
     const width = video.videoWidth;
     const height = video.videoHeight;
@@ -322,7 +358,12 @@
     ctx.drawImage(video, 0, 0, width, height);
     const image = ctx.getImageData(0, 0, width, height);
     highWorkerBusy[slot] = true;
-    highWorkers[slot].postMessage({ id: ++highFrameId, buf: image.data.buffer, w: width, h: height }, [image.data.buffer]);
+    highWorkerStartedAt[slot] = now;
+    try {
+      highWorkers[slot].postMessage({ id: ++highFrameId, buf: image.data.buffer, w: width, h: height }, [image.data.buffer]);
+    } catch (_) {
+      restartHighSpeedWorker(slot);
+    }
   }
 
   function acceptDecodedBytes(bytes) {
