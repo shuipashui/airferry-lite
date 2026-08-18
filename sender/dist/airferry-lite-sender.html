@@ -18,20 +18,17 @@
         <span>文件只在本机浏览器内处理，不会上传</span>
       </label>
       <div class="grid">
-        <label>传输模式
-          <select id="mode"><option value="highspeed" selected>网页高速（推荐）</option><option value="stable">兼容稳定</option><option value="balanced">兼容均衡</option><option value="fast">兼容快速</option></select>
-        </label>
         <label>每帧数据
-          <select id="chunkSize"><option value="400">400 B</option><option value="700">700 B</option><option value="900">900 B</option><option value="1465">1465 B（高速兼容）</option><option value="2331" selected>2331 B（高速推荐）</option><option value="2953">2953 B（最高吞吐）</option></select>
+          <select id="chunkSize"><option value="1465">1465 B（低密度）</option><option value="2331" selected>2331 B（推荐）</option><option value="2953">2953 B（高吞吐）</option></select>
         </label>
         <label>播放帧率
-          <select id="fps"><option value="6">6 FPS</option><option value="8">8 FPS</option><option value="10">10 FPS</option><option value="15">15 FPS</option><option value="20">20 FPS</option><option value="24">24 FPS</option><option value="30" selected>30 FPS（推荐）</option><option value="60">60 FPS（实验）</option></select>
+          <select id="fps"><option value="24">24 FPS（稳定）</option><option value="30" selected>30 FPS（推荐）</option><option value="60">60 FPS（实验）</option></select>
         </label>
       </div>
       <div class="actions"><button id="prepareBtn" class="primary" disabled>生成二维码流</button><button id="playBtn" disabled>开始播放</button><button id="resetBtn" disabled>重置</button></div>
       <div class="status"><div><span>状态</span><strong id="statusText">等待文件</strong></div><div><span>会话</span><strong id="sessionText">—</strong></div><div><span>片段</span><strong id="frameText">—</strong></div></div>
       <div class="progress"><i id="progressBar"></i></div>
-      <p class="tip">“网页高速”默认使用 2331 B / 30 FPS，适合 60 Hz 屏幕和手机摄像头；60 FPS 仍可手动选择，适合高刷新率设备。</p>
+      <p class="tip">网页和 APK 统一使用 AFL2 高速协议。默认 2331 B / 30 FPS 适合 60 Hz 屏幕；60 FPS 保留给高刷新率屏幕和可稳定采集 60 FPS 的设备。</p>
     </section>
     <section class="panel viewer">
       <canvas id="qrCanvas" width="900" height="900"></canvas>
@@ -2372,246 +2369,15 @@ var qrcode = function() {
     return qrcode;
 }));
 </script>
-  <script>/* AirFerry Lite transfer protocol. MIT licensed project code. */
-(function (root, factory) {
-  const api = factory();
-  if (typeof module === "object" && module.exports) module.exports = api;
-  root.AirFerryLiteProtocol = api;
-})(typeof globalThis !== "undefined" ? globalThis : (typeof self !== "undefined" ? self : this), function () {
-  const MAGIC = "AFL1";
-  const DEFAULT_PARITY_GROUP_SIZE = 8;
-  const GF_MUL = new Uint8Array(256 * 256);
-  const GF_INV = new Uint8Array(256);
-  for (let a = 0; a < 256; a += 1) for (let b = 0; b < 256; b += 1) {
-    let aa = a, bb = b, value = 0;
-    while (bb) { if (bb & 1) value ^= aa; aa <<= 1; if (aa & 0x100) aa ^= 0x11d; bb >>>= 1; }
-    GF_MUL[(a << 8) | b] = value;
-  }
-  for (let value = 1; value < 256; value += 1) for (let candidate = 1; candidate < 256; candidate += 1) {
-    if (GF_MUL[(value << 8) | candidate] === 1) { GF_INV[value] = candidate; break; }
-  }
-
-  function crc32(input) {
-    const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
-    let crc = 0xffffffff;
-    for (let i = 0; i < bytes.length; i += 1) {
-      crc ^= bytes[i];
-      for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
-    }
-    return (crc ^ 0xffffffff) >>> 0;
-  }
-
-  function hex32(value) {
-    return (value >>> 0).toString(16).padStart(8, "0");
-  }
-
-  function repairSeedFor(session, groupStart, round = 0) {
-    let hash = 2166136261 >>> 0;
-    const text = session + "|" + groupStart + "|" + round;
-    for (let i = 0; i < text.length; i += 1) { hash ^= text.charCodeAt(i); hash = Math.imul(hash, 16777619) >>> 0; }
-    return (hash || 1) >>> 0;
-  }
-
-  function repairCoefficients(seed, count) {
-    let state = (seed >>> 0) || 1;
-    const coefficients = new Uint8Array(count);
-    for (let i = 0; i < count; i += 1) {
-      state ^= state << 13; state >>>= 0; state ^= state >>> 17; state >>>= 0; state ^= state << 5; state >>>= 0;
-      coefficients[i] = (state & 255) || 1;
-    }
-    return coefficients;
-  }
-
-  function base64UrlEncode(bytes) {
-    let binary = "";
-    const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-    const step = 0x8000;
-    for (let offset = 0; offset < data.length; offset += step) {
-      binary += String.fromCharCode(...data.subarray(offset, offset + step));
-    }
-    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-  }
-
-  function base64UrlDecode(value) {
-    const padded = value.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((value.length + 3) % 4);
-    const binary = atob(padded);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-    return bytes;
-  }
-
-  function utf8Encode(value) {
-    return new TextEncoder().encode(value || "");
-  }
-
-  function utf8Decode(bytes) {
-    return new TextDecoder().decode(bytes);
-  }
-
-  function makeSessionId() {
-    const bytes = new Uint8Array(8);
-    if (typeof crypto !== "undefined" && crypto.getRandomValues) crypto.getRandomValues(bytes);
-    else for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256);
-    return base64UrlEncode(bytes).slice(0, 11);
-  }
-
-  function makeHeader(meta) {
-    const fields = [
-      MAGIC, "H", meta.session,
-      base64UrlEncode(utf8Encode(meta.name || "download.bin")),
-      base64UrlEncode(utf8Encode(meta.mime || "application/octet-stream")),
-      String(meta.size), String(meta.chunkSize), String(meta.total), hex32(meta.fileCrc)
-    ];
-    if (meta.encoding && meta.encoding !== "raw") {
-      fields.push(String(meta.originalSize), hex32(meta.originalFileCrc), meta.encoding);
-    }
-    return fields.join("|");
-  }
-
-  function makeData(session, index, total, bytes) {
-    return [MAGIC, "D", session, String(index), String(total), hex32(crc32(bytes)), base64UrlEncode(bytes)].join("|");
-  }
-
-  function makeParity(session, groupStart, count, total, seed, bytes) {
-    if (bytes === undefined) { bytes = seed; seed = 0; }
-    if (!(bytes instanceof Uint8Array)) bytes = new Uint8Array(bytes);
-    return seed ? [MAGIC, "P", session, String(groupStart), String(count), String(total), hex32(seed), hex32(crc32(bytes)), base64UrlEncode(bytes)].join("|") : [MAGIC, "P", session, String(groupStart), String(count), String(total), hex32(crc32(bytes)), base64UrlEncode(bytes)].join("|");
-  }
-
-  function makeRepairFrame(transfer, groupStart, round = 0) {
-    const count = Math.min(transfer.parityGroupSize, transfer.total - groupStart);
-    const seed = repairSeedFor(transfer.session, groupStart, round);
-    const coefficients = repairCoefficients(seed, count);
-    const repair = new Uint8Array(transfer.chunkSize);
-    for (let offset = 0; offset < count; offset += 1) {
-      const chunk = transfer.chunks[groupStart + offset];
-      const coefficient = coefficients[offset];
-      for (let index = 0; index < chunk.length; index += 1) repair[index] ^= GF_MUL[(coefficient << 8) | chunk[index]];
-    }
-    return makeParity(transfer.session, groupStart, count, transfer.total, seed, repair);
-  }
-
-  function parseFrame(text) {
-    if (typeof text !== "string") return null;
-    const fields = text.split("|");
-    if (fields[0] !== MAGIC) return null;
-    if (fields[1] === "H" && (fields.length === 9 || fields.length === 12)) {
-      try {
-        const compressed = fields.length === 12;
-        return {
-          kind: "header", session: fields[2], name: utf8Decode(base64UrlDecode(fields[3])),
-          mime: utf8Decode(base64UrlDecode(fields[4])) || "application/octet-stream",
-          size: Number(fields[5]), chunkSize: Number(fields[6]), total: Number(fields[7]),
-          fileCrc: Number.parseInt(fields[8], 16) >>> 0,
-          originalSize: compressed ? Number(fields[9]) : Number(fields[5]),
-          originalFileCrc: compressed ? Number.parseInt(fields[10], 16) >>> 0 : Number.parseInt(fields[8], 16) >>> 0,
-          encoding: compressed ? fields[11] : "raw"
-        };
-      } catch (_) { return null; }
-    }
-    if (fields[1] === "D" && fields.length === 7) {
-      try {
-        const bytes = base64UrlDecode(fields[6]);
-        return {
-          kind: "data", session: fields[2], index: Number(fields[3]), total: Number(fields[4]),
-          chunkCrc: Number.parseInt(fields[5], 16) >>> 0, bytes
-        };
-      } catch (_) { return null; }
-    }
-    if (fields[1] === "P" && (fields.length === 8 || fields.length === 9)) {
-      try {
-        const legacy = fields.length === 8;
-        const seed = legacy ? 0 : Number.parseInt(fields[6], 16) >>> 0;
-        const crcField = legacy ? fields[6] : fields[7];
-        const payloadField = legacy ? fields[7] : fields[8];
-        const bytes = base64UrlDecode(payloadField);
-        return { kind: "parity", session: fields[2], groupStart: Number(fields[3]), count: Number(fields[4]), total: Number(fields[5]), seed, coefficients: legacy ? null : repairCoefficients(seed, Number(fields[4])), parityCrc: Number.parseInt(crcField, 16) >>> 0, bytes };
-      } catch (_) { return null; }
-    }
-    return null;
-  }
-
-  function makeTransfer(fileBytes, meta) {
-    const bytes = fileBytes instanceof Uint8Array ? fileBytes : new Uint8Array(fileBytes);
-    const chunkSize = meta.chunkSize || 700;
-    const parityGroupSize = Math.max(2, Math.min(32, meta.parityGroupSize || DEFAULT_PARITY_GROUP_SIZE));
-    const total = Math.max(1, Math.ceil(bytes.length / chunkSize));
-    const session = meta.session || makeSessionId();
-    const descriptor = makeHeader({
-      session, name: meta.name, mime: meta.mime, size: bytes.length,
-      chunkSize, total, fileCrc: crc32(bytes), encoding: meta.encoding || "raw",
-      originalSize: meta.originalSize ?? bytes.length,
-      originalFileCrc: meta.originalFileCrc ?? crc32(bytes)
-    });
-    const frames = [descriptor];
-    const dataFrames = [];
-    const chunks = [];
-    for (let index = 0; index < total; index += 1) {
-      const start = index * chunkSize;
-      const chunk = bytes.slice(start, Math.min(start + chunkSize, bytes.length));
-      chunks.push(chunk);
-      const frame = makeData(session, index, total, chunk);
-      frames.push(frame);
-      dataFrames.push(frame);
-    }
-
-    const repairFrames = [];
-    const playbackFrames = [];
-    for (let groupStart = 0; groupStart < total; groupStart += parityGroupSize) {
-      const count = Math.min(parityGroupSize, total - groupStart);
-      for (let offset = 0; offset < count; offset += 1) playbackFrames.push(dataFrames[groupStart + offset]);
-      if (total >= 4 && count >= 2) {
-        const repair = makeRepairFrame({ session, total, chunkSize, parityGroupSize, chunks }, groupStart, 0);
-        repairFrames.push(repair);
-        playbackFrames.push(repair);
-      }
-    }
-
-    return {
-      session, frames, dataFrames, repairFrames, playbackFrames, chunks, total, chunkSize,
-      parityGroupSize, fileCrc: crc32(bytes), encoding: meta.encoding || "raw",
-      originalSize: meta.originalSize ?? bytes.length,
-      originalFileCrc: meta.originalFileCrc ?? crc32(bytes)
-    };
-  }
-
-  async function preparePayload(input, minSavings = 0.05) {
-    const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
-    const raw = { bytes, encoding: "raw", originalSize: bytes.length, originalFileCrc: crc32(bytes), savedBytes: 0 };
-    if (bytes.length < 1024 || typeof CompressionStream === "undefined") return raw;
-    try {
-      const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("gzip"));
-      const compressed = new Uint8Array(await new Response(stream).arrayBuffer());
-      if (compressed.length + 32 >= bytes.length * (1 - minSavings)) return raw;
-      return { bytes: compressed, encoding: "gzip", originalSize: bytes.length, originalFileCrc: raw.originalFileCrc, savedBytes: bytes.length - compressed.length };
-    } catch (_) { return raw; }
-  }
-
-  async function restorePayload(input, meta) {
-    const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
-    if (!meta?.encoding || meta.encoding === "raw") return bytes;
-    if (meta.encoding !== "gzip" || typeof DecompressionStream === "undefined") throw new Error("Unsupported compression: " + meta.encoding);
-    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
-    return new Uint8Array(await new Response(stream).arrayBuffer());
-  }
-
-  return {
-    MAGIC, DEFAULT_PARITY_GROUP_SIZE, crc32, hex32, base64UrlEncode, base64UrlDecode,
-    utf8Encode, utf8Decode, makeSessionId, makeHeader, makeData, makeParity, makeRepairFrame, repairSeedFor, repairCoefficients, gfMul: (a, b) => GF_MUL[(a << 8) | b], gfInv: value => GF_INV[value], parseFrame, makeTransfer, preparePayload, restorePayload
-  };
-});
-</script>
   <script>/*! Derived from Decimen Optical Transfer v0.3.0, Copyright (c) 2026 Evan Crawley (Bash Alarmist), MIT License */
 (()=>{var F=Object.defineProperty;var _=(n,t,e)=>t in n?F(n,t,{enumerable:!0,configurable:!0,writable:!0,value:e}):n[t]=e;var h=(n,t,e)=>_(n,typeof t!="symbol"?t+"":t,e);const I="64 MB";const m=new Uint8Array([68,67,70,50]),y=new TextEncoder,g=new TextDecoder;async function L(n){const t=Uint8Array.from(n);return new Uint8Array(await crypto.subtle.digest("SHA-256",t))}async function M(n){const t=new Blob([n]).stream().pipeThrough(new CompressionStream("gzip"));return new Uint8Array(await new Response(t).arrayBuffer())}async function z(n,t){const r=new Blob([n]).stream().pipeThrough(new DecompressionStream("gzip")).getReader(),i=[];let s=0;for(;;){const{done:l,value:u}=await r.read();if(l)break;if(s+=u.length,s>t)throw await r.cancel(),new Error("The recovered file expands past its declared length.");i.push(u)}const a=new Uint8Array(s);let o=0;for(const l of i)a.set(l,o),o+=l.length;return a}function v(n){const e=(n.split(/[\\/]/).pop()??"").replace(/[\u0000-\u001f\u007f]/g,"").trim();return e===""||e==="."||e===".."?"transfer.bin":e}const S=new Set(["application/gzip","application/java-archive","application/vnd.rar","application/x-7z-compressed","application/x-brotli","application/x-bzip","application/x-bzip2","application/x-gzip","application/x-lzma","application/x-rar-compressed","application/x-xz","application/x-zip-compressed","application/zip","application/zstd"]),D=/^image\/(bmp|x-ms-bmp|svg\+xml|tiff|x-icon|vnd\.microsoft\.icon)$/,T=/^audio\/(wav|x-wav|wave|vnd\.wave|aiff|x-aiff|basic|l16)$/;function C(n){const t=n.split(";")[0].trim().toLowerCase();return t.startsWith("video/")?!0:t.startsWith("image/")?!D.test(t):t.startsWith("audio/")?!T.test(t):t.startsWith("application/vnd.openxmlformats-officedocument.")||t.startsWith("application/vnd.oasis.opendocument.")||t.endsWith("+zip")?!0:S.has(t)}async function B(n,t,e){if(e.length===0)throw new Error("Choose a non-empty file.");if(e.length>67108864)throw new Error(`Files are limited to ${I} in this browser build.`);const r=y.encode(v(n)),i=y.encode(t||"application/octet-stream");if(r.length>65535||i.length>65535)throw new Error("The file name or media type is too long.");const s=e.length>=768&&!C(t),[a,o]=await Promise.all([L(e),s?M(e):Promise.resolve(void 0)]),l=o!==void 0&&o.length+64<e.length,u=l?o:e,f=l?"gzip":"none",d=new Uint8Array(49+r.length+i.length+u.length),c=new DataView(d.buffer);return d.set(m,0),c.setUint8(4,l?1:0),c.setUint16(5,r.length,!0),c.setUint16(7,i.length,!0),c.setUint32(9,e.length,!0),c.setUint32(13,u.length,!0),d.set(a,17),d.set(r,49),d.set(i,49+r.length),d.set(u,49+r.length+i.length),{container:d,compression:f,originalSize:e.length,transmittedSize:u.length}}async function H(n){if(n.length<49)throw new Error("The recovered file header is incomplete.");for(let d=0;d<m.length;d++)if(n[d]!==m[d])throw new Error("The recovered file header is invalid.");const t=new DataView(n.buffer,n.byteOffset,n.byteLength),e=t.getUint8(4);if(e>1)throw new Error("The recovered file uses unsupported compression.");const r=e===1?"gzip":"none",i=t.getUint16(5,!0),s=t.getUint16(7,!0),a=t.getUint32(9,!0),o=t.getUint32(13,!0),l=49+i+s;if(a===0||a>67108864||o===0||o>67108864||l+o!==n.length)throw new Error("The recovered file length does not match its header.");const u=n.slice(l);if(r==="gzip"){if(u.length<18)throw new Error("The recovered gzip payload is incomplete.");if(new DataView(u.buffer,u.byteOffset+u.byteLength-4,4).getUint32(0,!0)!==a)throw new Error("The gzip payload length does not match its file header.")}const f=r==="gzip"?await z(u,a):u;if(f.length!==a)throw new Error("The decompressed file length does not match its header.");return{name:v(g.decode(n.subarray(49,49+i))),type:g.decode(n.subarray(49+i,l))||"application/octet-stream",sha256:n.slice(17,49),bytes:f,compression:r,transmittedSize:o}}async function R(n){return(await L(n.bytes)).every((e,r)=>e===n.sha256[r])}function k(n,t){const e=new Uint8Array(20+t.length),r=new DataView(e.buffer);return r.setUint8(0,209),r.setUint8(1,12),r.setUint16(2,n.sessionId,!0),r.setUint32(4,n.seq,!0),r.setUint16(8,n.k,!0),r.setUint16(10,n.blockLen,!0),r.setUint32(12,n.totalLen,!0),r.setUint32(16,n.payloadFnv,!0),e.set(t,20),e}function N(n){if(n.length<=20||n[0]!==209||n[1]!==12)return null;const t=new DataView(n.buffer,n.byteOffset,n.byteLength),e={sessionId:t.getUint16(2,!0),seq:t.getUint32(4,!0),k:t.getUint16(8,!0),blockLen:t.getUint16(10,!0),totalLen:t.getUint32(12,!0),payloadFnv:t.getUint32(16,!0)};return e.k===0||e.blockLen===0||e.totalLen===0||n.length!==20+e.blockLen?null:{header:e,block:n.subarray(20)}}function P(n){return`${n.sessionId}:${n.k}:${n.blockLen}:${n.totalLen}:${n.payloadFnv}`}function O(n){let t=2166136261;for(let e=0;e<n.length;e++)t^=n[e],t=Math.imul(t,16777619);return t>>>0}function G(n){let t=n|0;return()=>{t=t+2654435769|0;let e=t^t>>>16;return e=Math.imul(e,569420461),e^=e>>>15,e=Math.imul(e,1935289751),e^=e>>>15,e>>>0}}const $=.6931471805599453;function E(n){let t=0,e=n;for(;e>=1.5;)e/=2,t++;for(;e<.75;)e*=2,t--;const r=(e-1)/(e+1),i=r*r;let s=r,a=0;for(let o=1;o<=21;o+=2)a+=s/o,s*=i;return t*$+2*a}const X=.1,A=.5;function p(n){const t=new Float64Array(n);if(n===1)return t[0]=1,t;const e=Math.max(1,X*E(n/A)*Math.sqrt(n)),r=Math.min(n,Math.ceil(n/e));let i=0;for(let s=1;s<=n;s++){const a=s===1?1/n:1/(s*(s-1));let o=0;s<r?o=e/(s*n):s===r&&(o=e*Math.max(0,E(e/A))/n),i+=a+o,t[s-1]=i}for(let s=0;s<n;s++)t[s]=t[s]/i;return t[n-1]=1,t}function Y(n,t){let e=Math.imul(n+1,2654435761)^t+2246822507|0;return e=Math.imul(e^e>>>13,3266489909),e^e>>>16|0}function b(n,t,e,r){const i=G(Y(e,r)),s=i()*2**-32;let a=0,o=n-1;for(;a<o;){const f=a+o>>1;t[f]>=s?o=f:a=f+1}const l=Math.min(n,a+1);if(l>n>>3){const f=new Uint32Array(n);for(let c=0;c<n;c++)f[c]=c;const d=new Array(l);for(let c=0;c<l;c++){const w=c+i()%(n-c),x=f[c];f[c]=f[w],f[w]=x,d[c]=f[c]}return d}const u=new Set;for(;u.size<l;)u.add(i()%n);return[...u]}function U(n,t){for(let e=0;e<n.length;e++)n[e]=(n[e]^t[e])>>>0}class W{constructor(t,e,r){this.blockLen=e;this.sessionId=r;h(this,"k");h(this,"words");h(this,"blocks");h(this,"cdf");this.k=Math.max(1,Math.ceil(t.length/e)),this.words=Math.ceil(e/4),this.blocks=new Uint32Array(this.k*this.words);const i=new Uint8Array(this.blocks.buffer);for(let s=0;s<this.k;s++){const a=t.subarray(s*e,Math.min((s+1)*e,t.length));i.set(a,s*this.words*4)}this.cdf=p(this.k)}encode(t){const e=b(this.k,this.cdf,this.sessionId,t),r=new Uint32Array(this.words);for(const i of e){const s=i*this.words;for(let a=0;a<this.words;a++)r[a]=(r[a]^this.blocks[s+a])>>>0}return new Uint8Array(r.buffer,0,this.blockLen)}}class V{constructor(t,e,r,i){this.k=t;this.blockLen=e;this.sessionId=r;this.totalLen=i;h(this,"words");h(this,"cdf");h(this,"solved");h(this,"byBlock",new Map);h(this,"seen",new Set);h(this,"solvedCount",0);h(this,"framesNew",0);h(this,"framesDup",0);this.words=Math.ceil(e/4),this.cdf=p(t),this.solved=new Array(t).fill(null)}get isComplete(){return this.solvedCount>=this.k}addFrame(t,e){if(this.seen.has(t)){this.framesDup++;return}if(this.seen.add(t),this.framesNew++,this.isComplete)return;const r=new Set(b(this.k,this.cdf,this.sessionId,t)),i=new Uint32Array(this.words);new Uint8Array(i.buffer).set(e.subarray(0,this.blockLen));for(const a of[...r]){const o=this.solved[a];o&&(U(i,o),r.delete(a))}if(r.size===0)return;if(r.size===1){this.resolve(r.values().next().value,i);return}const s={idx:r,words:i};for(const a of r){let o=this.byBlock.get(a);o||(o=new Set,this.byBlock.set(a,o)),o.add(s)}}resolve(t,e){const r=[[t,e]];for(;r.length>0;){const[i,s]=r.pop();if(this.solved[i])continue;this.solved[i]=s,this.solvedCount++;const a=this.byBlock.get(i);if(a){this.byBlock.delete(i);for(const o of a)if(U(o.words,s),o.idx.delete(i),o.idx.size===1){const l=o.idx.values().next().value;this.byBlock.get(l)?.delete(o),this.solved[l]||r.push([l,o.words])}}}}assemble(){if(!this.isComplete)return null;const t=new Uint8Array(this.totalLen);for(let e=0;e<this.k;e++){const r=e*this.blockLen,i=Math.min(this.blockLen,this.totalLen-r);i>0&&t.set(new Uint8Array(this.solved[e].buffer,0,i),r)}return t}}globalThis.AirFerryHighSpeed=Object.freeze({HEADER_LEN:20,MAX_FILE_BYTES:67108864,fnv1a:O,packFile:B,unpackFile:H,verifyFile:R,packFrame:k,parseFrame:N,streamIdentity:P,LTEncoder:W,LTDecoder:V,frameIndices:b,solitonCdf:p});})();
 </script>
   <script>(() => {
-  const P = window.AirFerryLiteProtocol;
   const H = window.AirFerryHighSpeed;
   const el = id => document.getElementById(id);
   const fileInput = el("fileInput");
   const dropZone = el("dropZone");
   const fileLabel = el("fileLabel");
-  const mode = el("mode");
   const chunkSize = el("chunkSize");
   const fps = el("fps");
   const prepareBtn = el("prepareBtn");
@@ -2626,30 +2392,16 @@ var qrcode = function() {
   const receiverUrl = el("receiverUrl");
   const receiverQrCanvas = el("receiverQrCanvas");
   const RECEIVER_URL = "https://shuipashui.github.io/airferry-lite/";
-  const PROFILES = {
-    highspeed: { chunk: 2331, fps: 30, protocol: "highspeed" },
-    stable: { chunk: 400, fps: 6, headerEvery: 8 },
-    balanced: { chunk: 700, fps: 8, headerEvery: 10 },
-    fast: { chunk: 900, fps: 12, headerEvery: 16 }
-  };
   const QR_CACHE_LIMIT = 64;
   let file = null;
   let transfer = null;
   let timer = null;
-  let playbackIndex = 0;
   let emitted = 0;
-  let round = 0;
   let nextTickAt = 0;
   let intervalMs = 125;
   const qrCache = new Map();
   const highQueue = [];
   let highNextSeq = 0;
-
-  function applyProfile() {
-    const profile = PROFILES[mode.value] || PROFILES.balanced;
-    chunkSize.value = String(profile.chunk);
-    fps.value = String(profile.fps);
-  }
 
   function selectFile(next) {
     file = next || null;
@@ -2659,7 +2411,6 @@ var qrcode = function() {
     statusText.textContent = file ? "文件已选择" : "等待文件";
   }
 
-  mode.addEventListener("change", applyProfile);
   fileInput.addEventListener("change", () => selectFile(fileInput.files[0]));
   ["dragenter", "dragover"].forEach(type => dropZone.addEventListener(type, event => {
     event.preventDefault();
@@ -2680,56 +2431,39 @@ var qrcode = function() {
     prepareBtn.disabled = true;
     try {
       const sourceBytes = new Uint8Array(await file.arrayBuffer());
-      let prepared;
-      if (mode.value === "highspeed") {
-        if (!H) throw new Error("高速协议未加载");
-        const packed = await H.packFile(file.name, file.type || "application/octet-stream", sourceBytes);
-        const frameBytes = Number(chunkSize.value);
-        const blockLen = frameBytes - H.HEADER_LEN;
-        const sessionId = (Math.floor(Math.random() * 0xffff) + 1) & 0xffff;
-        const encoder = new H.LTEncoder(packed.container, blockLen, sessionId);
-        transfer = {
-          highSpeed: true,
-          encoder,
-          header: {
-            sessionId,
-            seq: 0,
-            k: encoder.k,
-            blockLen,
-            totalLen: packed.container.length,
-            payloadFnv: H.fnv1a(packed.container)
-          },
-          session: sessionId.toString(16).padStart(4, "0"),
-          total: encoder.k,
-          compression: packed.compression,
-          transmittedSize: packed.transmittedSize
-        };
-        prepared = { encoding: packed.compression, originalSize: sourceBytes.length, savedBytes: sourceBytes.length - packed.transmittedSize };
-        highQueue.length = 0;
-        highNextSeq = 0;
-        fillHighQueue(3);
-      } else {
-        prepared = await P.preparePayload(sourceBytes);
-        transfer = P.makeTransfer(prepared.bytes, {
-          name: file.name,
-          mime: file.type || "application/octet-stream",
-          chunkSize: Number(chunkSize.value),
-          encoding: prepared.encoding,
-          originalSize: prepared.originalSize,
-          originalFileCrc: prepared.originalFileCrc
-        });
-      }
-      playbackIndex = 0;
+      if (!H) throw new Error("高速协议未加载");
+      const packed = await H.packFile(file.name, file.type || "application/octet-stream", sourceBytes);
+      const frameBytes = Number(chunkSize.value);
+      const blockLen = frameBytes - H.HEADER_LEN;
+      const sessionId = (Math.floor(Math.random() * 0xffff) + 1) & 0xffff;
+      const encoder = new H.LTEncoder(packed.container, blockLen, sessionId);
+      transfer = {
+        encoder,
+        header: {
+          sessionId,
+          seq: 0,
+          k: encoder.k,
+          blockLen,
+          totalLen: packed.container.length,
+          payloadFnv: H.fnv1a(packed.container)
+        },
+        session: sessionId.toString(16).padStart(4, "0"),
+        total: encoder.k,
+        compression: packed.compression,
+        transmittedSize: packed.transmittedSize
+      };
+      const prepared = { encoding: packed.compression, originalSize: sourceBytes.length, savedBytes: sourceBytes.length - packed.transmittedSize };
+      highQueue.length = 0;
+      highNextSeq = 0;
+      fillHighQueue(3);
       emitted = 0;
-      round = 0;
       qrCache.clear();
       sessionText.textContent = transfer.session;
       frameText.textContent = "0 / " + transfer.total;
       progressBar.style.width = "0%";
-      if (transfer.highSpeed) drawPattern(highQueue[0].pattern);
-      else drawFrame(transfer.frames[0]);
+      drawPattern(highQueue[0].pattern);
       overlay.classList.add("hidden");
-      statusText.textContent = (transfer.highSpeed ? "网页高速流已生成 · " : "") + (prepared.encoding === "gzip" ? "已压缩 " + Math.max(0, Math.round(prepared.savedBytes / prepared.originalSize * 100)) + "%" : "未压缩");
+      statusText.textContent = "高速流已生成 · " + (prepared.encoding === "gzip" ? "已压缩 " + Math.max(0, Math.round(prepared.savedBytes / prepared.originalSize * 100)) + "%" : "未压缩");
       playBtn.disabled = false;
       playBtn.textContent = "开始播放";
       resetBtn.disabled = false;
@@ -2788,44 +2522,20 @@ var qrcode = function() {
   }
 
   function tick() {
-    if (transfer.highSpeed) {
-      const next = highQueue.shift();
-      if (!next) {
-        fillHighQueue(1);
-        return;
-      }
-      drawPattern(next.pattern);
-      emitted += 1;
-      frameText.textContent = "喷泉帧 " + next.seq + " · K=" + transfer.total;
-      progressBar.style.width = Math.min(100, emitted / Math.ceil(transfer.total * 1.15) * 100) + "%";
+    const next = highQueue.shift();
+    if (!next) {
       fillHighQueue(1);
       return;
     }
-    const profile = PROFILES[mode.value] || PROFILES.balanced;
-    const showHeader = emitted % profile.headerEvery === 0;
-    if (showHeader) {
-      drawFrame(transfer.frames[0]);
-      frameText.textContent = "元数据 / 第 " + (round + 1) + " 轮";
-    } else {
-      const sequence = transfer.playbackFrames || transfer.frames.slice(1);
-      let frame = sequence[playbackIndex];
-      const parsed = P.parseFrame(frame);
-      if (parsed?.kind === "parity" && typeof P.makeRepairFrame === "function") frame = P.makeRepairFrame(transfer, parsed.groupStart, round + 1);
-      drawFrame(frame);
-      playbackIndex = (playbackIndex + 1) % sequence.length;
-      if (playbackIndex === 0) round += 1;
-      if (parsed?.kind === "parity") {
-        frameText.textContent = "修复帧 / 第 " + (round + 1) + " 轮";
-      } else {
-        frameText.textContent = (parsed.index + 1) + " / " + transfer.total + " · 第 " + (round + 1) + " 轮";
-        progressBar.style.width = ((parsed.index + 1) / transfer.total) * 100 + "%";
-      }
-    }
+    drawPattern(next.pattern);
     emitted += 1;
+    frameText.textContent = "喷泉帧 " + next.seq + " · K=" + transfer.total;
+    progressBar.style.width = Math.min(100, emitted / Math.ceil(transfer.total * 1.15) * 100) + "%";
+    fillHighQueue(1);
   }
 
   function fillHighQueue(max) {
-    if (!transfer?.highSpeed) return;
+    if (!transfer) return;
     for (let count = 0; count < max && highQueue.length < 3; count += 1) {
       const seq = highNextSeq++;
       const bytes = H.packFrame({ ...transfer.header, seq }, transfer.encoder.encode(seq));
@@ -2930,7 +2640,6 @@ var qrcode = function() {
     return (n / 1048576).toFixed(1) + " MB";
   }
 
-  applyProfile();
   receiverUrl.href = RECEIVER_URL;
   receiverUrl.textContent = RECEIVER_URL;
   drawLinkQr(RECEIVER_URL);

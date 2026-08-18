@@ -1,11 +1,9 @@
 (() => {
-  const P = window.AirFerryLiteProtocol;
   const H = window.AirFerryHighSpeed;
   const el = id => document.getElementById(id);
   const fileInput = el("fileInput");
   const dropZone = el("dropZone");
   const fileLabel = el("fileLabel");
-  const mode = el("mode");
   const chunkSize = el("chunkSize");
   const fps = el("fps");
   const prepareBtn = el("prepareBtn");
@@ -20,30 +18,16 @@
   const receiverUrl = el("receiverUrl");
   const receiverQrCanvas = el("receiverQrCanvas");
   const RECEIVER_URL = "https://shuipashui.github.io/airferry-lite/";
-  const PROFILES = {
-    highspeed: { chunk: 2331, fps: 30, protocol: "highspeed" },
-    stable: { chunk: 400, fps: 6, headerEvery: 8 },
-    balanced: { chunk: 700, fps: 8, headerEvery: 10 },
-    fast: { chunk: 900, fps: 12, headerEvery: 16 }
-  };
   const QR_CACHE_LIMIT = 64;
   let file = null;
   let transfer = null;
   let timer = null;
-  let playbackIndex = 0;
   let emitted = 0;
-  let round = 0;
   let nextTickAt = 0;
   let intervalMs = 125;
   const qrCache = new Map();
   const highQueue = [];
   let highNextSeq = 0;
-
-  function applyProfile() {
-    const profile = PROFILES[mode.value] || PROFILES.balanced;
-    chunkSize.value = String(profile.chunk);
-    fps.value = String(profile.fps);
-  }
 
   function selectFile(next) {
     file = next || null;
@@ -53,7 +37,6 @@
     statusText.textContent = file ? "文件已选择" : "等待文件";
   }
 
-  mode.addEventListener("change", applyProfile);
   fileInput.addEventListener("change", () => selectFile(fileInput.files[0]));
   ["dragenter", "dragover"].forEach(type => dropZone.addEventListener(type, event => {
     event.preventDefault();
@@ -74,56 +57,39 @@
     prepareBtn.disabled = true;
     try {
       const sourceBytes = new Uint8Array(await file.arrayBuffer());
-      let prepared;
-      if (mode.value === "highspeed") {
-        if (!H) throw new Error("高速协议未加载");
-        const packed = await H.packFile(file.name, file.type || "application/octet-stream", sourceBytes);
-        const frameBytes = Number(chunkSize.value);
-        const blockLen = frameBytes - H.HEADER_LEN;
-        const sessionId = (Math.floor(Math.random() * 0xffff) + 1) & 0xffff;
-        const encoder = new H.LTEncoder(packed.container, blockLen, sessionId);
-        transfer = {
-          highSpeed: true,
-          encoder,
-          header: {
-            sessionId,
-            seq: 0,
-            k: encoder.k,
-            blockLen,
-            totalLen: packed.container.length,
-            payloadFnv: H.fnv1a(packed.container)
-          },
-          session: sessionId.toString(16).padStart(4, "0"),
-          total: encoder.k,
-          compression: packed.compression,
-          transmittedSize: packed.transmittedSize
-        };
-        prepared = { encoding: packed.compression, originalSize: sourceBytes.length, savedBytes: sourceBytes.length - packed.transmittedSize };
-        highQueue.length = 0;
-        highNextSeq = 0;
-        fillHighQueue(3);
-      } else {
-        prepared = await P.preparePayload(sourceBytes);
-        transfer = P.makeTransfer(prepared.bytes, {
-          name: file.name,
-          mime: file.type || "application/octet-stream",
-          chunkSize: Number(chunkSize.value),
-          encoding: prepared.encoding,
-          originalSize: prepared.originalSize,
-          originalFileCrc: prepared.originalFileCrc
-        });
-      }
-      playbackIndex = 0;
+      if (!H) throw new Error("高速协议未加载");
+      const packed = await H.packFile(file.name, file.type || "application/octet-stream", sourceBytes);
+      const frameBytes = Number(chunkSize.value);
+      const blockLen = frameBytes - H.HEADER_LEN;
+      const sessionId = (Math.floor(Math.random() * 0xffff) + 1) & 0xffff;
+      const encoder = new H.LTEncoder(packed.container, blockLen, sessionId);
+      transfer = {
+        encoder,
+        header: {
+          sessionId,
+          seq: 0,
+          k: encoder.k,
+          blockLen,
+          totalLen: packed.container.length,
+          payloadFnv: H.fnv1a(packed.container)
+        },
+        session: sessionId.toString(16).padStart(4, "0"),
+        total: encoder.k,
+        compression: packed.compression,
+        transmittedSize: packed.transmittedSize
+      };
+      const prepared = { encoding: packed.compression, originalSize: sourceBytes.length, savedBytes: sourceBytes.length - packed.transmittedSize };
+      highQueue.length = 0;
+      highNextSeq = 0;
+      fillHighQueue(3);
       emitted = 0;
-      round = 0;
       qrCache.clear();
       sessionText.textContent = transfer.session;
       frameText.textContent = "0 / " + transfer.total;
       progressBar.style.width = "0%";
-      if (transfer.highSpeed) drawPattern(highQueue[0].pattern);
-      else drawFrame(transfer.frames[0]);
+      drawPattern(highQueue[0].pattern);
       overlay.classList.add("hidden");
-      statusText.textContent = (transfer.highSpeed ? "网页高速流已生成 · " : "") + (prepared.encoding === "gzip" ? "已压缩 " + Math.max(0, Math.round(prepared.savedBytes / prepared.originalSize * 100)) + "%" : "未压缩");
+      statusText.textContent = "高速流已生成 · " + (prepared.encoding === "gzip" ? "已压缩 " + Math.max(0, Math.round(prepared.savedBytes / prepared.originalSize * 100)) + "%" : "未压缩");
       playBtn.disabled = false;
       playBtn.textContent = "开始播放";
       resetBtn.disabled = false;
@@ -182,44 +148,20 @@
   }
 
   function tick() {
-    if (transfer.highSpeed) {
-      const next = highQueue.shift();
-      if (!next) {
-        fillHighQueue(1);
-        return;
-      }
-      drawPattern(next.pattern);
-      emitted += 1;
-      frameText.textContent = "喷泉帧 " + next.seq + " · K=" + transfer.total;
-      progressBar.style.width = Math.min(100, emitted / Math.ceil(transfer.total * 1.15) * 100) + "%";
+    const next = highQueue.shift();
+    if (!next) {
       fillHighQueue(1);
       return;
     }
-    const profile = PROFILES[mode.value] || PROFILES.balanced;
-    const showHeader = emitted % profile.headerEvery === 0;
-    if (showHeader) {
-      drawFrame(transfer.frames[0]);
-      frameText.textContent = "元数据 / 第 " + (round + 1) + " 轮";
-    } else {
-      const sequence = transfer.playbackFrames || transfer.frames.slice(1);
-      let frame = sequence[playbackIndex];
-      const parsed = P.parseFrame(frame);
-      if (parsed?.kind === "parity" && typeof P.makeRepairFrame === "function") frame = P.makeRepairFrame(transfer, parsed.groupStart, round + 1);
-      drawFrame(frame);
-      playbackIndex = (playbackIndex + 1) % sequence.length;
-      if (playbackIndex === 0) round += 1;
-      if (parsed?.kind === "parity") {
-        frameText.textContent = "修复帧 / 第 " + (round + 1) + " 轮";
-      } else {
-        frameText.textContent = (parsed.index + 1) + " / " + transfer.total + " · 第 " + (round + 1) + " 轮";
-        progressBar.style.width = ((parsed.index + 1) / transfer.total) * 100 + "%";
-      }
-    }
+    drawPattern(next.pattern);
     emitted += 1;
+    frameText.textContent = "喷泉帧 " + next.seq + " · K=" + transfer.total;
+    progressBar.style.width = Math.min(100, emitted / Math.ceil(transfer.total * 1.15) * 100) + "%";
+    fillHighQueue(1);
   }
 
   function fillHighQueue(max) {
-    if (!transfer?.highSpeed) return;
+    if (!transfer) return;
     for (let count = 0; count < max && highQueue.length < 3; count += 1) {
       const seq = highNextSeq++;
       const bytes = H.packFrame({ ...transfer.header, seq }, transfer.encoder.encode(seq));
@@ -324,7 +266,6 @@
     return (n / 1048576).toFixed(1) + " MB";
   }
 
-  applyProfile();
   receiverUrl.href = RECEIVER_URL;
   receiverUrl.textContent = RECEIVER_URL;
   drawLinkQr(RECEIVER_URL);

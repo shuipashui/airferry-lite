@@ -10,7 +10,6 @@ let html = read(path.join(here, "template.html"));
 const inject = (marker, file) => html = html.replace(marker, () => read(file));
 inject("/*__STYLES__*/", path.join(here, "styles.css"));
 inject("/*__QRCODE__*/", path.join(here, "vendor", "qrcode.js"));
-inject("/*__PROTOCOL__*/", path.join(root, "shared", "protocol.js"));
 inject("/*__HIGHSPEED_PROTOCOL__*/", path.join(root, "shared", "highspeed-protocol.js"));
 inject("/*__APP__*/", path.join(here, "app.js"));
 

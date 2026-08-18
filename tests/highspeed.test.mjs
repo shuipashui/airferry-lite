@@ -50,11 +50,12 @@ assert.ok(worker.includes("SPDX-License-Identifier: MIT"));
 
 const template = fs.readFileSync(new URL("../sender/template.html", import.meta.url), "utf8");
 const sender = fs.readFileSync(new URL("../sender/app.js", import.meta.url), "utf8");
-assert.ok(template.includes('<option value="highspeed" selected>'));
+assert.ok(!template.includes('id="mode"'), "legacy compatibility modes must not be exposed by the sender");
+assert.ok(!template.includes("兼容稳定") && !template.includes("兼容均衡") && !template.includes("兼容快速"));
 assert.ok(template.includes('<option value="2331" selected>'));
 assert.ok(template.includes('<option value="30" selected>'));
 assert.ok(template.includes('<option value="60">60 FPS'));
-assert.ok(sender.includes('highspeed: { chunk: 2331, fps: 30'));
+assert.ok(!sender.includes("PROFILES") && !sender.includes('el("mode")'));
 assert.ok(sender.includes('qrcode(frameBytes === 2953 ? 40 : 0, "L")'));
 assert.ok(sender.includes("qr.make(4)"));
 

@@ -8,9 +8,9 @@ Used by the standalone sender to render QR matrices. MIT licensed, Copyright (c)
 
 Used by the mobile web receiver to decode camera frames. The original license is included at `web-receiver/vendor/jsQR-LICENSE.txt`; the vendored file is `web-receiver/vendor/jsQR.js`.
 
-## zxing-android-embedded
+## AndroidX CameraX / ZXing Core
 
-The Android receiver declares `com.journeyapps:zxing-android-embedded:4.3.0`, which brings the ZXing Android barcode scanner. Its transitive license notices are distributed by the upstream project and Maven artifacts.
+The Android receiver uses AndroidX CameraX 1.4.1 for camera capture and `com.google.zxing:core:3.5.3` for parallel QR decoding. AndroidX is Apache-2.0 licensed; ZXing Core is Apache-2.0 licensed. Their license notices are distributed by the upstream Maven artifacts.
 
 ## Decimen Optical Transfer v0.3.0
 
