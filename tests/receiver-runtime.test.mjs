@@ -101,6 +101,7 @@ const elements = {
   fileName: element(),
   progressText: element(),
   progressBar: element(),
+  speedText: element(),
   missing: element(),
   cameraHint: element(),
   result: element({ hidden: true }),
@@ -136,11 +137,13 @@ function decode() {
   return data ? { data } : null;
 }
 
-function runFrame(delta = 300) {
+async function runFrame() {
   const callback = frameCallbacks.shift();
   assert.equal(typeof callback, "function", "receiver did not request the next camera frame");
-  now += delta;
+  now += 300;
   callback(now, {});
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 new vm.Script(source).runInContext(context);
@@ -148,11 +151,10 @@ await elements.startBtn.onclick();
 assert.equal(focusApplied, true, "continuous focus was not requested when supported");
 assert.equal(frameCallbacks.length, 1, "scan was not scheduled from a video frame callback");
 
-runFrame();
-runFrame(1);
-runFrame(299);
+await runFrame();
+await runFrame();
 const writesAfterData = widthWrites + heightWrites;
-runFrame();
+await runFrame();
 
 assert.equal(parseCalls, 2, "an already received data frame was parsed again");
 assert.equal(widthWrites + heightWrites, writesAfterData, "canvas dimensions were rewritten for an unchanged frame size");
