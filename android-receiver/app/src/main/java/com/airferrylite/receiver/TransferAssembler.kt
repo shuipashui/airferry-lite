@@ -1,9 +1,11 @@
 package com.airferrylite.receiver
 
 import android.util.Base64
+import java.io.ByteArrayInputStream
 import java.util.zip.CRC32
+import java.util.zip.GZIPInputStream
 
-data class TransferMeta(val session: String, val name: String, val mime: String, val size: Long, val chunkSize: Int, val total: Int, val fileCrc: Long)
+data class TransferMeta(val session: String, val name: String, val mime: String, val size: Long, val chunkSize: Int, val total: Int, val fileCrc: Long, val originalSize: Long, val originalFileCrc: Long, val encoding: String)
 data class TransferUpdate(val meta: TransferMeta?, val received: Int, val total: Int, val complete: ByteArray? = null, val error: String? = null)
 
 class TransferAssembler {
@@ -46,11 +48,16 @@ class TransferAssembler {
     }
 
     private fun acceptHeader(fields: List<String>): TransferUpdate {
-        if (fields.size != 9) return snapshot("描述帧字段数错误")
+        if (fields.size != 9 && fields.size != 12) return snapshot("描述帧字段数错误")
         val size = fields[5].toLong(); val chunkSize = fields[6].toInt(); val total = fields[7].toInt()
         if (size !in 0..MAX_FILE_SIZE || chunkSize !in 1..MAX_CHUNK_SIZE || total !in 1..MAX_CHUNKS) return snapshot("描述帧超出接收上限")
         if (total != maxOf(1, (size + chunkSize - 1) / chunkSize).toInt()) return snapshot("描述帧分片数错误")
-        val next = TransferMeta(fields[2], decodeText(fields[3]).take(255), decodeText(fields[4]).ifBlank { "application/octet-stream" }, size, chunkSize, total, fields[8].toLong(16) and 0xffffffffL)
+        val compressed = fields.size == 12
+        val originalSize = if (compressed) fields[9].toLong() else size
+        val originalFileCrc = if (compressed) fields[10].toLong(16) and 0xffffffffL else fields[8].toLong(16) and 0xffffffffL
+        val encoding = if (compressed) fields[11] else "raw"
+        if (originalSize !in 0..MAX_FILE_SIZE || encoding !in setOf("raw", "gzip")) return snapshot("描述帧压缩信息无效")
+        val next = TransferMeta(fields[2], decodeText(fields[3]).take(255), decodeText(fields[4]).ifBlank { "application/octet-stream" }, size, chunkSize, total, fields[8].toLong(16) and 0xffffffffL, originalSize, originalFileCrc, encoding)
         if (meta?.session != next.session) { chunks.clear(); parityFrames.clear(); parityLookup.clear() }
         meta = next; return snapshot()
     }
@@ -101,8 +108,11 @@ class TransferAssembler {
     private fun maybeComplete(): TransferUpdate {
         val current = meta ?: return snapshot(); if (chunks.size != current.total) return snapshot(); val output = ByteArray(current.size.toInt()); var offset = 0
         for (i in 0 until current.total) { val part = chunks[i] ?: return snapshot(); part.copyInto(output, offset); offset += part.size }
-        if (offset.toLong() != current.size || crc(output) != current.fileCrc) return snapshot(error = "文件校验失败")
-        return snapshot(complete = output)
+        if (offset.toLong() != current.size || crc(output) != current.fileCrc) return snapshot(error = "传输数据校验失败")
+        val restored = try { if (current.encoding == "gzip") GZIPInputStream(ByteArrayInputStream(output)).use { it.readBytes() } else output }
+            catch (_: Exception) { return snapshot(error = "文件解压失败") }
+        if (restored.size.toLong() != current.originalSize || crc(restored) != current.originalFileCrc) return snapshot(error = "原文件校验失败")
+        return snapshot(complete = restored)
     }
     private fun expectedChunkLength(index: Int, current: TransferMeta) = if (index == current.total - 1) (current.size - index.toLong() * current.chunkSize).toInt() else current.chunkSize
     fun missing(limit: Int = 40): List<Int> { val current = meta ?: return emptyList(); val output = mutableListOf<Int>(); for (index in 0 until current.total) if (!chunks.containsKey(index)) { output += index; if (output.size == limit) break }; return output }
