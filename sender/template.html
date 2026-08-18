@@ -20,16 +20,16 @@
           <select id="mode"><option value="highspeed" selected>网页高速（推荐）</option><option value="stable">兼容稳定</option><option value="balanced">兼容均衡</option><option value="fast">兼容快速</option></select>
         </label>
         <label>每帧数据
-          <select id="chunkSize"><option value="400">400 B</option><option value="700">700 B</option><option value="900">900 B</option><option value="1465">1465 B（高速兼容）</option><option value="2331">2331 B</option><option value="2953" selected>2953 B（最高吞吐）</option></select>
+          <select id="chunkSize"><option value="400">400 B</option><option value="700">700 B</option><option value="900">900 B</option><option value="1465">1465 B（高速兼容）</option><option value="2331" selected>2331 B（高速推荐）</option><option value="2953">2953 B（最高吞吐）</option></select>
         </label>
         <label>播放帧率
-          <select id="fps"><option value="6">6 FPS</option><option value="8">8 FPS</option><option value="10">10 FPS</option><option value="15">15 FPS</option><option value="20">20 FPS</option><option value="24">24 FPS</option><option value="30">30 FPS</option><option value="60" selected>60 FPS</option></select>
+          <select id="fps"><option value="6">6 FPS</option><option value="8">8 FPS</option><option value="10">10 FPS</option><option value="15">15 FPS</option><option value="20">20 FPS</option><option value="24">24 FPS</option><option value="30" selected>30 FPS（推荐）</option><option value="60">60 FPS（实验）</option></select>
         </label>
       </div>
       <div class="actions"><button id="prepareBtn" class="primary" disabled>生成二维码流</button><button id="playBtn" disabled>开始播放</button><button id="resetBtn" disabled>重置</button></div>
       <div class="status"><div><span>状态</span><strong id="statusText">等待文件</strong></div><div><span>会话</span><strong id="sessionText">—</strong></div><div><span>片段</span><strong id="frameText">—</strong></div></div>
       <div class="progress"><i id="progressBar"></i></div>
-      <p class="tip">“网页高速”使用二进制喷泉码，仅支持最新版网页接收端；Android APK 请使用兼容模式。</p>
+      <p class="tip">“网页高速”默认使用 2331 B / 30 FPS，适合 60 Hz 屏幕和手机摄像头；60 FPS 仍可手动选择，适合高刷新率设备。</p>
     </section>
     <section class="panel viewer">
       <canvas id="qrCanvas" width="900" height="900"></canvas>

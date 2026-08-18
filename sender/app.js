@@ -21,7 +21,7 @@
   const receiverQrCanvas = el("receiverQrCanvas");
   const RECEIVER_URL = "https://shuipashui.github.io/airferry-lite/";
   const PROFILES = {
-    highspeed: { chunk: 2953, fps: 60, protocol: "highspeed" },
+    highspeed: { chunk: 2331, fps: 30, protocol: "highspeed" },
     stable: { chunk: 400, fps: 6, headerEvery: 8 },
     balanced: { chunk: 700, fps: 8, headerEvery: 10 },
     fast: { chunk: 900, fps: 12, headerEvery: 16 }
