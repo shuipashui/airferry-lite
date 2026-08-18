@@ -29,13 +29,17 @@
       <div class="actions"><button id="prepareBtn" class="primary" disabled>生成二维码流</button><button id="playBtn" disabled>开始播放</button><button id="resetBtn" disabled>重置</button></div>
       <div class="status"><div><span>状态</span><strong id="statusText">等待文件</strong></div><div><span>会话</span><strong id="sessionText">—</strong></div><div><span>片段</span><strong id="frameText">—</strong></div></div>
       <div class="progress"><i id="progressBar"></i></div>
-      <section class="receiver-link" aria-label="手机网页接收端">
-        <div class="receiver-link-copy"><strong>手机网页接收端</strong><span>扫码后直接打开接收页面</span><a id="receiverUrl" target="_blank" rel="noopener"></a></div>
-        <div class="receiver-qr-wrap"><canvas id="receiverQrCanvas" width="300" height="300" aria-label="手机接收端网址二维码"></canvas></div>
-      </section>
       <p class="tip">手机扫码进入接收端后，允许摄像头权限并点击“开始扫描”，电脑端保持二维码循环播放。</p>
     </section>
-    <section class="panel viewer"><canvas id="qrCanvas" width="900" height="900"></canvas><div class="overlay" id="overlay"><strong>等待生成</strong><span>选择文件后点击“生成二维码流”</span></div></section>
+    <section class="panel viewer">
+      <canvas id="qrCanvas" width="900" height="900"></canvas>
+      <div class="overlay" id="overlay">
+        <section class="receiver-link" aria-label="手机网页接收端">
+          <div class="receiver-link-copy"><strong>手机网页接收端</strong><span>扫码后直接打开接收页面</span><a id="receiverUrl" target="_blank" rel="noopener"></a><small>选择文件并生成二维码流后，此入口会自动隐藏</small></div>
+          <div class="receiver-qr-wrap"><canvas id="receiverQrCanvas" width="300" height="300" aria-label="手机接收端网址二维码"></canvas></div>
+        </section>
+      </div>
+    </section>
   </main>
   <script>/*__QRCODE__*/</script>
   <script>/*__PROTOCOL__*/</script>
