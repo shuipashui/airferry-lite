@@ -17,4 +17,11 @@ for (const item of [{size: 700, max: 117}, {size: 900, max: 133}, {size: 1000, m
   assert.equal(decoded?.data, frame, item.size + " B frame did not decode at 2 px/module");
 }
 const fast = render(makeFrame(900, 0), 1); assert.ok(Math.floor(900 / (fast.modules + 8)) >= 6, "fast profile is too dense for the sender canvas");
+const template = fs.readFileSync(new URL("../sender/template.html", import.meta.url), "utf8");
+const senderStyles = fs.readFileSync(new URL("../sender/styles.css", import.meta.url), "utf8");
+assert.ok(template.indexOf('id="qrCanvas"') < template.indexOf('class="receiver-link"'), "receiver URL QR must live in the right viewer");
+assert.ok(template.indexOf('id="overlay"') < template.indexOf('class="receiver-link"'), "receiver URL QR must disappear with the generated-file overlay");
+assert.ok(senderStyles.includes("grid-template-columns:minmax(300px,380px)"), "sender controls must keep the narrower desktop width");
+assert.ok(senderStyles.includes(".overlay.hidden{display:none}"), "generated file QR must replace the receiver entry");
+assert.ok(senderStyles.includes("overflow:visible") && senderStyles.includes("width:200px;height:200px"), "receiver QR safety area may not be clipped");
 console.log("QR density tests ok");
