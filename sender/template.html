@@ -29,7 +29,11 @@
       <div class="actions"><button id="prepareBtn" class="primary" disabled>生成二维码流</button><button id="playBtn" disabled>开始播放</button><button id="resetBtn" disabled>重置</button></div>
       <div class="status"><div><span>状态</span><strong id="statusText">等待文件</strong></div><div><span>会话</span><strong id="sessionText">—</strong></div><div><span>片段</span><strong id="frameText">—</strong></div></div>
       <div class="progress"><i id="progressBar"></i></div>
-      <p class="tip">手机请打开 AirFerry Lite 网页接收端或 Android 接收端，对准右侧二维码。接收完成前保持循环播放。</p>
+      <section class="receiver-link" aria-label="手机网页接收端">
+        <div class="receiver-link-copy"><strong>手机网页接收端</strong><span>扫码后直接打开接收页面</span><a id="receiverUrl" target="_blank" rel="noopener"></a></div>
+        <canvas id="receiverQrCanvas" width="300" height="300" aria-label="手机接收端网址二维码"></canvas>
+      </section>
+      <p class="tip">手机扫码进入接收端后，允许摄像头权限并点击“开始扫描”，电脑端保持二维码循环播放。</p>
     </section>
     <section class="panel viewer"><canvas id="qrCanvas" width="900" height="900"></canvas><div class="overlay" id="overlay"><strong>等待生成</strong><span>选择文件后点击“生成二维码流”</span></div></section>
   </main>

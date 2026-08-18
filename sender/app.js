@@ -16,6 +16,9 @@
   const sessionText = el("sessionText");
   const frameText = el("frameText");
   const progressBar = el("progressBar");
+  const receiverUrl = el("receiverUrl");
+  const receiverQrCanvas = el("receiverQrCanvas");
+  const RECEIVER_URL = "https://shuipashui.github.io/airferry-lite/";
   const PROFILES = {
     stable: { chunk: 400, fps: 6, headerEvery: 8 },
     balanced: { chunk: 700, fps: 8, headerEvery: 10 },
@@ -147,8 +150,9 @@
       frameText.textContent = "元数据 / 第 " + (round + 1) + " 轮";
     } else {
       const sequence = transfer.playbackFrames || transfer.frames.slice(1);
-      const frame = sequence[playbackIndex];
+      let frame = sequence[playbackIndex];
       const parsed = P.parseFrame(frame);
+      if (parsed?.kind === "parity" && typeof P.makeRepairFrame === "function") frame = P.makeRepairFrame(transfer, parsed.groupStart, round + 1);
       drawFrame(frame);
       playbackIndex = (playbackIndex + 1) % sequence.length;
       if (playbackIndex === 0) round += 1;
@@ -207,6 +211,25 @@
     }
   }
 
+  function drawLinkQr(text) {
+    try {
+      const pattern = getQrPattern(text);
+      const context = receiverQrCanvas.getContext("2d", { alpha: false });
+      const quiet = 4;
+      const cell = Math.floor(receiverQrCanvas.width / (pattern.count + quiet * 2));
+      const used = cell * (pattern.count + quiet * 2);
+      const offset = Math.floor((receiverQrCanvas.width - used) / 2);
+      context.fillStyle = "#fff";
+      context.fillRect(0, 0, receiverQrCanvas.width, receiverQrCanvas.height);
+      context.fillStyle = "#000";
+      for (let row = 0; row < pattern.count; row += 1) for (let col = 0; col < pattern.count; col += 1) {
+        if (pattern.dark[row * pattern.count + col]) context.fillRect(offset + (col + quiet) * cell, offset + (row + quiet) * cell, cell, cell);
+      }
+    } catch (_) {
+      receiverQrCanvas.hidden = true;
+    }
+  }
+
   function clearCanvas() {
     const context = canvas.getContext("2d");
     context.fillStyle = "#fff";
@@ -220,5 +243,8 @@
   }
 
   applyProfile();
+  receiverUrl.href = RECEIVER_URL;
+  receiverUrl.textContent = RECEIVER_URL;
+  drawLinkQr(RECEIVER_URL);
   clearCanvas();
 })();
