@@ -410,6 +410,14 @@ var qrcode = function() {
       _dataCache = null;
     };
 
+    _this.addBytes = function(bytes) {
+      if (!bytes || typeof bytes.length != 'number') {
+        throw 'bytes required';
+      }
+      _dataList.push(qr8BitBytes(bytes));
+      _dataCache = null;
+    };
+
     _this.isDark = function(row, col) {
       if (row < 0 || _moduleCount <= row || col < 0 || _moduleCount <= col) {
         throw row + ',' + col;
@@ -421,7 +429,7 @@ var qrcode = function() {
       return _moduleCount;
     };
 
-    _this.make = function() {
+    _this.make = function(maskPattern) {
       if (_typeNumber < 1) {
         var typeNumber = 1;
 
@@ -449,7 +457,7 @@ var qrcode = function() {
         _typeNumber = typeNumber;
       }
 
-      makeImpl(false, getBestMaskPattern() );
+      makeImpl(false, typeof maskPattern == 'number' ? maskPattern : getBestMaskPattern() );
     };
 
     _this.createTableTag = function(cellSize, margin) {
@@ -1743,6 +1751,29 @@ var qrcode = function() {
     _this.write = function(buffer) {
       for (var i = 0; i < _bytes.length; i += 1) {
         buffer.put(_bytes[i], 8);
+      }
+    };
+
+    return _this;
+  };
+
+  var qr8BitBytes = function(data) {
+
+    var _mode = QRMode.MODE_8BIT_BYTE;
+    var _bytes = data;
+    var _this = {};
+
+    _this.getMode = function() {
+      return _mode;
+    };
+
+    _this.getLength = function() {
+      return _bytes.length;
+    };
+
+    _this.write = function(buffer) {
+      for (var i = 0; i < _bytes.length; i += 1) {
+        buffer.put(_bytes[i] & 0xff, 8);
       }
     };
 

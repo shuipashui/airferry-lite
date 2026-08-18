@@ -127,6 +127,7 @@ const context = vm.createContext({
   clearTimeout,
   URL: { createObjectURL: () => "blob:runtime", revokeObjectURL() {} },
   Blob,
+  TextDecoder,
   Uint8Array,
   Uint8ClampedArray,
   console: { error() {} }

@@ -3,5 +3,8 @@ android-receiver/.gradle/
 android-receiver/build/
 android-receiver/app/build/
 android-receiver/local.properties
+\.tools/
+\.npm-cache/
+gradle-*.zip
 *.iml
 .idea/

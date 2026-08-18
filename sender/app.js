@@ -1,5 +1,6 @@
 (() => {
   const P = window.AirFerryLiteProtocol;
+  const H = window.AirFerryHighSpeed;
   const el = id => document.getElementById(id);
   const fileInput = el("fileInput");
   const dropZone = el("dropZone");
@@ -20,6 +21,7 @@
   const receiverQrCanvas = el("receiverQrCanvas");
   const RECEIVER_URL = "https://shuipashui.github.io/airferry-lite/";
   const PROFILES = {
+    highspeed: { chunk: 2953, fps: 60, protocol: "highspeed" },
     stable: { chunk: 400, fps: 6, headerEvery: 8 },
     balanced: { chunk: 700, fps: 8, headerEvery: 10 },
     fast: { chunk: 900, fps: 12, headerEvery: 16 }
@@ -34,6 +36,8 @@
   let nextTickAt = 0;
   let intervalMs = 125;
   const qrCache = new Map();
+  const highQueue = [];
+  let highNextSeq = 0;
 
   function applyProfile() {
     const profile = PROFILES[mode.value] || PROFILES.balanced;
@@ -70,15 +74,45 @@
     prepareBtn.disabled = true;
     try {
       const sourceBytes = new Uint8Array(await file.arrayBuffer());
-      const prepared = await P.preparePayload(sourceBytes);
-      transfer = P.makeTransfer(prepared.bytes, {
-        name: file.name,
-        mime: file.type || "application/octet-stream",
-        chunkSize: Number(chunkSize.value),
-        encoding: prepared.encoding,
-        originalSize: prepared.originalSize,
-        originalFileCrc: prepared.originalFileCrc
-      });
+      let prepared;
+      if (mode.value === "highspeed") {
+        if (!H) throw new Error("高速协议未加载");
+        const packed = await H.packFile(file.name, file.type || "application/octet-stream", sourceBytes);
+        const frameBytes = Number(chunkSize.value);
+        const blockLen = frameBytes - H.HEADER_LEN;
+        const sessionId = (Math.floor(Math.random() * 0xffff) + 1) & 0xffff;
+        const encoder = new H.LTEncoder(packed.container, blockLen, sessionId);
+        transfer = {
+          highSpeed: true,
+          encoder,
+          header: {
+            sessionId,
+            seq: 0,
+            k: encoder.k,
+            blockLen,
+            totalLen: packed.container.length,
+            payloadFnv: H.fnv1a(packed.container)
+          },
+          session: sessionId.toString(16).padStart(4, "0"),
+          total: encoder.k,
+          compression: packed.compression,
+          transmittedSize: packed.transmittedSize
+        };
+        prepared = { encoding: packed.compression, originalSize: sourceBytes.length, savedBytes: sourceBytes.length - packed.transmittedSize };
+        highQueue.length = 0;
+        highNextSeq = 0;
+        fillHighQueue(3);
+      } else {
+        prepared = await P.preparePayload(sourceBytes);
+        transfer = P.makeTransfer(prepared.bytes, {
+          name: file.name,
+          mime: file.type || "application/octet-stream",
+          chunkSize: Number(chunkSize.value),
+          encoding: prepared.encoding,
+          originalSize: prepared.originalSize,
+          originalFileCrc: prepared.originalFileCrc
+        });
+      }
       playbackIndex = 0;
       emitted = 0;
       round = 0;
@@ -86,9 +120,10 @@
       sessionText.textContent = transfer.session;
       frameText.textContent = "0 / " + transfer.total;
       progressBar.style.width = "0%";
-      drawFrame(transfer.frames[0]);
+      if (transfer.highSpeed) drawPattern(highQueue[0].pattern);
+      else drawFrame(transfer.frames[0]);
       overlay.classList.add("hidden");
-      statusText.textContent = prepared.encoding === "gzip" ? "已压缩 " + Math.round(prepared.savedBytes / prepared.originalSize * 100) + "% · 二维码流已生成" : "二维码流已生成";
+      statusText.textContent = (transfer.highSpeed ? "网页高速流已生成 · " : "") + (prepared.encoding === "gzip" ? "已压缩 " + Math.max(0, Math.round(prepared.savedBytes / prepared.originalSize * 100)) + "%" : "未压缩");
       playBtn.disabled = false;
       playBtn.textContent = "开始播放";
       resetBtn.disabled = false;
@@ -147,6 +182,19 @@
   }
 
   function tick() {
+    if (transfer.highSpeed) {
+      const next = highQueue.shift();
+      if (!next) {
+        fillHighQueue(1);
+        return;
+      }
+      drawPattern(next.pattern);
+      emitted += 1;
+      frameText.textContent = "喷泉帧 " + next.seq + " · K=" + transfer.total;
+      progressBar.style.width = Math.min(100, emitted / Math.ceil(transfer.total * 1.15) * 100) + "%";
+      fillHighQueue(1);
+      return;
+    }
     const profile = PROFILES[mode.value] || PROFILES.balanced;
     const showHeader = emitted % profile.headerEvery === 0;
     if (showHeader) {
@@ -170,12 +218,36 @@
     emitted += 1;
   }
 
+  function fillHighQueue(max) {
+    if (!transfer?.highSpeed) return;
+    for (let count = 0; count < max && highQueue.length < 3; count += 1) {
+      const seq = highNextSeq++;
+      const bytes = H.packFrame({ ...transfer.header, seq }, transfer.encoder.encode(seq));
+      highQueue.push({ seq, pattern: getHighSpeedQrPattern(bytes) });
+    }
+  }
+
+  function getHighSpeedQrPattern(bytes) {
+    const frameBytes = bytes.length;
+    const qr = qrcode(frameBytes === 2953 ? 40 : 0, "L");
+    qr.addBytes(bytes);
+    qr.make(4);
+    return extractPattern(qr);
+  }
+
   function getQrPattern(text) {
     const hit = qrCache.get(text);
     if (hit) return hit;
     const qr = qrcode(0, "M");
     qr.addData(text, "Byte");
     qr.make();
+    const pattern = extractPattern(qr);
+    if (qrCache.size >= QR_CACHE_LIMIT) qrCache.delete(qrCache.keys().next().value);
+    qrCache.set(text, pattern);
+    return pattern;
+  }
+
+  function extractPattern(qr) {
     const count = qr.getModuleCount();
     const dark = new Uint8Array(count * count);
     for (let row = 0; row < count; row += 1) {
@@ -183,15 +255,21 @@
         dark[row * count + col] = qr.isDark(row, col) ? 1 : 0;
       }
     }
-    const pattern = { count, dark };
-    if (qrCache.size >= QR_CACHE_LIMIT) qrCache.delete(qrCache.keys().next().value);
-    qrCache.set(text, pattern);
-    return pattern;
+    return { count, dark };
   }
 
   function drawFrame(text) {
     try {
-      const pattern = getQrPattern(text);
+      drawPattern(getQrPattern(text));
+    } catch (error) {
+      stop();
+      statusText.textContent = "二维码过密，请降低每帧数据";
+      console.error(error);
+    }
+  }
+
+  function drawPattern(pattern) {
+    try {
       const quiet = 4;
       const size = canvas.width;
       const cell = Math.floor(size / (pattern.count + quiet * 2));

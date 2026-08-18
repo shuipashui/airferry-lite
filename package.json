@@ -3,7 +3,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build:sender": "node sender/build.mjs",
-    "test": "node tests/protocol.test.mjs && node tests/transfer-boundaries.test.mjs && node tests/qr-density.test.mjs && node tests/receiver-safety.test.mjs && node tests/receiver-runtime.test.mjs && node tests/fec-recovery.test.mjs && node tests/advanced-features.test.mjs"
+    "build:highspeed": "node build-highspeed.mjs",
+    "build:receiver": "npm run build:highspeed && node sync-receiver.mjs",
+    "build:sender": "npm run build:highspeed && node sender/build.mjs",
+    "build": "npm run build:receiver && npm run build:sender",
+    "test": "node tests/protocol.test.mjs && node tests/transfer-boundaries.test.mjs && node tests/qr-density.test.mjs && node tests/receiver-safety.test.mjs && node tests/receiver-runtime.test.mjs && node tests/fec-recovery.test.mjs && node tests/advanced-features.test.mjs && node tests/highspeed.test.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.9"
   }
 }

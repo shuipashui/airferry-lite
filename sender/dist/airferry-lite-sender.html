@@ -19,19 +19,19 @@
       </label>
       <div class="grid">
         <label>传输模式
-          <select id="mode"><option value="stable">稳定</option><option value="balanced" selected>均衡（推荐）</option><option value="fast">快速</option></select>
+          <select id="mode"><option value="highspeed" selected>网页高速（推荐）</option><option value="stable">兼容稳定</option><option value="balanced">兼容均衡</option><option value="fast">兼容快速</option></select>
         </label>
         <label>每帧数据
-          <select id="chunkSize"><option value="400">400 B（稳定）</option><option value="700" selected>700 B（推荐）</option><option value="900">900 B（高速）</option></select>
+          <select id="chunkSize"><option value="400">400 B</option><option value="700">700 B</option><option value="900">900 B</option><option value="1465">1465 B（高速兼容）</option><option value="2331">2331 B</option><option value="2953" selected>2953 B（最高吞吐）</option></select>
         </label>
         <label>播放帧率
-          <select id="fps"><option value="6">6 FPS</option><option value="8" selected>8 FPS</option><option value="10">10 FPS</option><option value="15">15 FPS</option><option value="20">20 FPS</option></select>
+          <select id="fps"><option value="6">6 FPS</option><option value="8">8 FPS</option><option value="10">10 FPS</option><option value="15">15 FPS</option><option value="20">20 FPS</option><option value="24">24 FPS</option><option value="30">30 FPS</option><option value="60" selected>60 FPS</option></select>
         </label>
       </div>
       <div class="actions"><button id="prepareBtn" class="primary" disabled>生成二维码流</button><button id="playBtn" disabled>开始播放</button><button id="resetBtn" disabled>重置</button></div>
       <div class="status"><div><span>状态</span><strong id="statusText">等待文件</strong></div><div><span>会话</span><strong id="sessionText">—</strong></div><div><span>片段</span><strong id="frameText">—</strong></div></div>
       <div class="progress"><i id="progressBar"></i></div>
-      <p class="tip">手机扫码进入接收端后，允许摄像头权限并点击“开始扫描”，电脑端保持二维码循环播放。</p>
+      <p class="tip">“网页高速”使用二进制喷泉码，仅支持最新版网页接收端；Android APK 请使用兼容模式。</p>
     </section>
     <section class="panel viewer">
       <canvas id="qrCanvas" width="900" height="900"></canvas>
@@ -455,6 +455,14 @@ var qrcode = function() {
       _dataCache = null;
     };
 
+    _this.addBytes = function(bytes) {
+      if (!bytes || typeof bytes.length != 'number') {
+        throw 'bytes required';
+      }
+      _dataList.push(qr8BitBytes(bytes));
+      _dataCache = null;
+    };
+
     _this.isDark = function(row, col) {
       if (row < 0 || _moduleCount <= row || col < 0 || _moduleCount <= col) {
         throw row + ',' + col;
@@ -466,7 +474,7 @@ var qrcode = function() {
       return _moduleCount;
     };
 
-    _this.make = function() {
+    _this.make = function(maskPattern) {
       if (_typeNumber < 1) {
         var typeNumber = 1;
 
@@ -494,7 +502,7 @@ var qrcode = function() {
         _typeNumber = typeNumber;
       }
 
-      makeImpl(false, getBestMaskPattern() );
+      makeImpl(false, typeof maskPattern == 'number' ? maskPattern : getBestMaskPattern() );
     };
 
     _this.createTableTag = function(cellSize, margin) {
@@ -1794,6 +1802,29 @@ var qrcode = function() {
     return _this;
   };
 
+  var qr8BitBytes = function(data) {
+
+    var _mode = QRMode.MODE_8BIT_BYTE;
+    var _bytes = data;
+    var _this = {};
+
+    _this.getMode = function() {
+      return _mode;
+    };
+
+    _this.getLength = function() {
+      return _bytes.length;
+    };
+
+    _this.write = function(buffer) {
+      for (var i = 0; i < _bytes.length; i += 1) {
+        buffer.put(_bytes[i] & 0xff, 8);
+      }
+    };
+
+    return _this;
+  };
+
   //---------------------------------------------------------------------
   // qrKanji
   //---------------------------------------------------------------------
@@ -2570,8 +2601,12 @@ var qrcode = function() {
   };
 });
 </script>
+  <script>/*! Derived from Decimen Optical Transfer v0.3.0, Copyright (c) 2026 Evan Crawley (Bash Alarmist), MIT License */
+(()=>{var F=Object.defineProperty;var _=(n,t,e)=>t in n?F(n,t,{enumerable:!0,configurable:!0,writable:!0,value:e}):n[t]=e;var h=(n,t,e)=>_(n,typeof t!="symbol"?t+"":t,e);const I="64 MB";const m=new Uint8Array([68,67,70,50]),y=new TextEncoder,g=new TextDecoder;async function L(n){const t=Uint8Array.from(n);return new Uint8Array(await crypto.subtle.digest("SHA-256",t))}async function M(n){const t=new Blob([n]).stream().pipeThrough(new CompressionStream("gzip"));return new Uint8Array(await new Response(t).arrayBuffer())}async function z(n,t){const r=new Blob([n]).stream().pipeThrough(new DecompressionStream("gzip")).getReader(),i=[];let s=0;for(;;){const{done:l,value:u}=await r.read();if(l)break;if(s+=u.length,s>t)throw await r.cancel(),new Error("The recovered file expands past its declared length.");i.push(u)}const a=new Uint8Array(s);let o=0;for(const l of i)a.set(l,o),o+=l.length;return a}function v(n){const e=(n.split(/[\\/]/).pop()??"").replace(/[\u0000-\u001f\u007f]/g,"").trim();return e===""||e==="."||e===".."?"transfer.bin":e}const S=new Set(["application/gzip","application/java-archive","application/vnd.rar","application/x-7z-compressed","application/x-brotli","application/x-bzip","application/x-bzip2","application/x-gzip","application/x-lzma","application/x-rar-compressed","application/x-xz","application/x-zip-compressed","application/zip","application/zstd"]),D=/^image\/(bmp|x-ms-bmp|svg\+xml|tiff|x-icon|vnd\.microsoft\.icon)$/,T=/^audio\/(wav|x-wav|wave|vnd\.wave|aiff|x-aiff|basic|l16)$/;function C(n){const t=n.split(";")[0].trim().toLowerCase();return t.startsWith("video/")?!0:t.startsWith("image/")?!D.test(t):t.startsWith("audio/")?!T.test(t):t.startsWith("application/vnd.openxmlformats-officedocument.")||t.startsWith("application/vnd.oasis.opendocument.")||t.endsWith("+zip")?!0:S.has(t)}async function B(n,t,e){if(e.length===0)throw new Error("Choose a non-empty file.");if(e.length>67108864)throw new Error(`Files are limited to ${I} in this browser build.`);const r=y.encode(v(n)),i=y.encode(t||"application/octet-stream");if(r.length>65535||i.length>65535)throw new Error("The file name or media type is too long.");const s=e.length>=768&&!C(t),[a,o]=await Promise.all([L(e),s?M(e):Promise.resolve(void 0)]),l=o!==void 0&&o.length+64<e.length,u=l?o:e,f=l?"gzip":"none",d=new Uint8Array(49+r.length+i.length+u.length),c=new DataView(d.buffer);return d.set(m,0),c.setUint8(4,l?1:0),c.setUint16(5,r.length,!0),c.setUint16(7,i.length,!0),c.setUint32(9,e.length,!0),c.setUint32(13,u.length,!0),d.set(a,17),d.set(r,49),d.set(i,49+r.length),d.set(u,49+r.length+i.length),{container:d,compression:f,originalSize:e.length,transmittedSize:u.length}}async function H(n){if(n.length<49)throw new Error("The recovered file header is incomplete.");for(let d=0;d<m.length;d++)if(n[d]!==m[d])throw new Error("The recovered file header is invalid.");const t=new DataView(n.buffer,n.byteOffset,n.byteLength),e=t.getUint8(4);if(e>1)throw new Error("The recovered file uses unsupported compression.");const r=e===1?"gzip":"none",i=t.getUint16(5,!0),s=t.getUint16(7,!0),a=t.getUint32(9,!0),o=t.getUint32(13,!0),l=49+i+s;if(a===0||a>67108864||o===0||o>67108864||l+o!==n.length)throw new Error("The recovered file length does not match its header.");const u=n.slice(l);if(r==="gzip"){if(u.length<18)throw new Error("The recovered gzip payload is incomplete.");if(new DataView(u.buffer,u.byteOffset+u.byteLength-4,4).getUint32(0,!0)!==a)throw new Error("The gzip payload length does not match its file header.")}const f=r==="gzip"?await z(u,a):u;if(f.length!==a)throw new Error("The decompressed file length does not match its header.");return{name:v(g.decode(n.subarray(49,49+i))),type:g.decode(n.subarray(49+i,l))||"application/octet-stream",sha256:n.slice(17,49),bytes:f,compression:r,transmittedSize:o}}async function R(n){return(await L(n.bytes)).every((e,r)=>e===n.sha256[r])}function k(n,t){const e=new Uint8Array(20+t.length),r=new DataView(e.buffer);return r.setUint8(0,209),r.setUint8(1,12),r.setUint16(2,n.sessionId,!0),r.setUint32(4,n.seq,!0),r.setUint16(8,n.k,!0),r.setUint16(10,n.blockLen,!0),r.setUint32(12,n.totalLen,!0),r.setUint32(16,n.payloadFnv,!0),e.set(t,20),e}function N(n){if(n.length<=20||n[0]!==209||n[1]!==12)return null;const t=new DataView(n.buffer,n.byteOffset,n.byteLength),e={sessionId:t.getUint16(2,!0),seq:t.getUint32(4,!0),k:t.getUint16(8,!0),blockLen:t.getUint16(10,!0),totalLen:t.getUint32(12,!0),payloadFnv:t.getUint32(16,!0)};return e.k===0||e.blockLen===0||e.totalLen===0||n.length!==20+e.blockLen?null:{header:e,block:n.subarray(20)}}function P(n){return`${n.sessionId}:${n.k}:${n.blockLen}:${n.totalLen}:${n.payloadFnv}`}function O(n){let t=2166136261;for(let e=0;e<n.length;e++)t^=n[e],t=Math.imul(t,16777619);return t>>>0}function G(n){let t=n|0;return()=>{t=t+2654435769|0;let e=t^t>>>16;return e=Math.imul(e,569420461),e^=e>>>15,e=Math.imul(e,1935289751),e^=e>>>15,e>>>0}}const $=.6931471805599453;function E(n){let t=0,e=n;for(;e>=1.5;)e/=2,t++;for(;e<.75;)e*=2,t--;const r=(e-1)/(e+1),i=r*r;let s=r,a=0;for(let o=1;o<=21;o+=2)a+=s/o,s*=i;return t*$+2*a}const X=.1,A=.5;function p(n){const t=new Float64Array(n);if(n===1)return t[0]=1,t;const e=Math.max(1,X*E(n/A)*Math.sqrt(n)),r=Math.min(n,Math.ceil(n/e));let i=0;for(let s=1;s<=n;s++){const a=s===1?1/n:1/(s*(s-1));let o=0;s<r?o=e/(s*n):s===r&&(o=e*Math.max(0,E(e/A))/n),i+=a+o,t[s-1]=i}for(let s=0;s<n;s++)t[s]=t[s]/i;return t[n-1]=1,t}function Y(n,t){let e=Math.imul(n+1,2654435761)^t+2246822507|0;return e=Math.imul(e^e>>>13,3266489909),e^e>>>16|0}function b(n,t,e,r){const i=G(Y(e,r)),s=i()*2**-32;let a=0,o=n-1;for(;a<o;){const f=a+o>>1;t[f]>=s?o=f:a=f+1}const l=Math.min(n,a+1);if(l>n>>3){const f=new Uint32Array(n);for(let c=0;c<n;c++)f[c]=c;const d=new Array(l);for(let c=0;c<l;c++){const w=c+i()%(n-c),x=f[c];f[c]=f[w],f[w]=x,d[c]=f[c]}return d}const u=new Set;for(;u.size<l;)u.add(i()%n);return[...u]}function U(n,t){for(let e=0;e<n.length;e++)n[e]=(n[e]^t[e])>>>0}class W{constructor(t,e,r){this.blockLen=e;this.sessionId=r;h(this,"k");h(this,"words");h(this,"blocks");h(this,"cdf");this.k=Math.max(1,Math.ceil(t.length/e)),this.words=Math.ceil(e/4),this.blocks=new Uint32Array(this.k*this.words);const i=new Uint8Array(this.blocks.buffer);for(let s=0;s<this.k;s++){const a=t.subarray(s*e,Math.min((s+1)*e,t.length));i.set(a,s*this.words*4)}this.cdf=p(this.k)}encode(t){const e=b(this.k,this.cdf,this.sessionId,t),r=new Uint32Array(this.words);for(const i of e){const s=i*this.words;for(let a=0;a<this.words;a++)r[a]=(r[a]^this.blocks[s+a])>>>0}return new Uint8Array(r.buffer,0,this.blockLen)}}class V{constructor(t,e,r,i){this.k=t;this.blockLen=e;this.sessionId=r;this.totalLen=i;h(this,"words");h(this,"cdf");h(this,"solved");h(this,"byBlock",new Map);h(this,"seen",new Set);h(this,"solvedCount",0);h(this,"framesNew",0);h(this,"framesDup",0);this.words=Math.ceil(e/4),this.cdf=p(t),this.solved=new Array(t).fill(null)}get isComplete(){return this.solvedCount>=this.k}addFrame(t,e){if(this.seen.has(t)){this.framesDup++;return}if(this.seen.add(t),this.framesNew++,this.isComplete)return;const r=new Set(b(this.k,this.cdf,this.sessionId,t)),i=new Uint32Array(this.words);new Uint8Array(i.buffer).set(e.subarray(0,this.blockLen));for(const a of[...r]){const o=this.solved[a];o&&(U(i,o),r.delete(a))}if(r.size===0)return;if(r.size===1){this.resolve(r.values().next().value,i);return}const s={idx:r,words:i};for(const a of r){let o=this.byBlock.get(a);o||(o=new Set,this.byBlock.set(a,o)),o.add(s)}}resolve(t,e){const r=[[t,e]];for(;r.length>0;){const[i,s]=r.pop();if(this.solved[i])continue;this.solved[i]=s,this.solvedCount++;const a=this.byBlock.get(i);if(a){this.byBlock.delete(i);for(const o of a)if(U(o.words,s),o.idx.delete(i),o.idx.size===1){const l=o.idx.values().next().value;this.byBlock.get(l)?.delete(o),this.solved[l]||r.push([l,o.words])}}}}assemble(){if(!this.isComplete)return null;const t=new Uint8Array(this.totalLen);for(let e=0;e<this.k;e++){const r=e*this.blockLen,i=Math.min(this.blockLen,this.totalLen-r);i>0&&t.set(new Uint8Array(this.solved[e].buffer,0,i),r)}return t}}globalThis.AirFerryHighSpeed=Object.freeze({HEADER_LEN:20,MAX_FILE_BYTES:67108864,fnv1a:O,packFile:B,unpackFile:H,verifyFile:R,packFrame:k,parseFrame:N,streamIdentity:P,LTEncoder:W,LTDecoder:V,frameIndices:b,solitonCdf:p});})();
+</script>
   <script>(() => {
   const P = window.AirFerryLiteProtocol;
+  const H = window.AirFerryHighSpeed;
   const el = id => document.getElementById(id);
   const fileInput = el("fileInput");
   const dropZone = el("dropZone");
@@ -2592,6 +2627,7 @@ var qrcode = function() {
   const receiverQrCanvas = el("receiverQrCanvas");
   const RECEIVER_URL = "https://shuipashui.github.io/airferry-lite/";
   const PROFILES = {
+    highspeed: { chunk: 2953, fps: 60, protocol: "highspeed" },
     stable: { chunk: 400, fps: 6, headerEvery: 8 },
     balanced: { chunk: 700, fps: 8, headerEvery: 10 },
     fast: { chunk: 900, fps: 12, headerEvery: 16 }
@@ -2606,6 +2642,8 @@ var qrcode = function() {
   let nextTickAt = 0;
   let intervalMs = 125;
   const qrCache = new Map();
+  const highQueue = [];
+  let highNextSeq = 0;
 
   function applyProfile() {
     const profile = PROFILES[mode.value] || PROFILES.balanced;
@@ -2642,15 +2680,45 @@ var qrcode = function() {
     prepareBtn.disabled = true;
     try {
       const sourceBytes = new Uint8Array(await file.arrayBuffer());
-      const prepared = await P.preparePayload(sourceBytes);
-      transfer = P.makeTransfer(prepared.bytes, {
-        name: file.name,
-        mime: file.type || "application/octet-stream",
-        chunkSize: Number(chunkSize.value),
-        encoding: prepared.encoding,
-        originalSize: prepared.originalSize,
-        originalFileCrc: prepared.originalFileCrc
-      });
+      let prepared;
+      if (mode.value === "highspeed") {
+        if (!H) throw new Error("高速协议未加载");
+        const packed = await H.packFile(file.name, file.type || "application/octet-stream", sourceBytes);
+        const frameBytes = Number(chunkSize.value);
+        const blockLen = frameBytes - H.HEADER_LEN;
+        const sessionId = (Math.floor(Math.random() * 0xffff) + 1) & 0xffff;
+        const encoder = new H.LTEncoder(packed.container, blockLen, sessionId);
+        transfer = {
+          highSpeed: true,
+          encoder,
+          header: {
+            sessionId,
+            seq: 0,
+            k: encoder.k,
+            blockLen,
+            totalLen: packed.container.length,
+            payloadFnv: H.fnv1a(packed.container)
+          },
+          session: sessionId.toString(16).padStart(4, "0"),
+          total: encoder.k,
+          compression: packed.compression,
+          transmittedSize: packed.transmittedSize
+        };
+        prepared = { encoding: packed.compression, originalSize: sourceBytes.length, savedBytes: sourceBytes.length - packed.transmittedSize };
+        highQueue.length = 0;
+        highNextSeq = 0;
+        fillHighQueue(3);
+      } else {
+        prepared = await P.preparePayload(sourceBytes);
+        transfer = P.makeTransfer(prepared.bytes, {
+          name: file.name,
+          mime: file.type || "application/octet-stream",
+          chunkSize: Number(chunkSize.value),
+          encoding: prepared.encoding,
+          originalSize: prepared.originalSize,
+          originalFileCrc: prepared.originalFileCrc
+        });
+      }
       playbackIndex = 0;
       emitted = 0;
       round = 0;
@@ -2658,9 +2726,10 @@ var qrcode = function() {
       sessionText.textContent = transfer.session;
       frameText.textContent = "0 / " + transfer.total;
       progressBar.style.width = "0%";
-      drawFrame(transfer.frames[0]);
+      if (transfer.highSpeed) drawPattern(highQueue[0].pattern);
+      else drawFrame(transfer.frames[0]);
       overlay.classList.add("hidden");
-      statusText.textContent = prepared.encoding === "gzip" ? "已压缩 " + Math.round(prepared.savedBytes / prepared.originalSize * 100) + "% · 二维码流已生成" : "二维码流已生成";
+      statusText.textContent = (transfer.highSpeed ? "网页高速流已生成 · " : "") + (prepared.encoding === "gzip" ? "已压缩 " + Math.max(0, Math.round(prepared.savedBytes / prepared.originalSize * 100)) + "%" : "未压缩");
       playBtn.disabled = false;
       playBtn.textContent = "开始播放";
       resetBtn.disabled = false;
@@ -2719,6 +2788,19 @@ var qrcode = function() {
   }
 
   function tick() {
+    if (transfer.highSpeed) {
+      const next = highQueue.shift();
+      if (!next) {
+        fillHighQueue(1);
+        return;
+      }
+      drawPattern(next.pattern);
+      emitted += 1;
+      frameText.textContent = "喷泉帧 " + next.seq + " · K=" + transfer.total;
+      progressBar.style.width = Math.min(100, emitted / Math.ceil(transfer.total * 1.15) * 100) + "%";
+      fillHighQueue(1);
+      return;
+    }
     const profile = PROFILES[mode.value] || PROFILES.balanced;
     const showHeader = emitted % profile.headerEvery === 0;
     if (showHeader) {
@@ -2742,12 +2824,36 @@ var qrcode = function() {
     emitted += 1;
   }
 
+  function fillHighQueue(max) {
+    if (!transfer?.highSpeed) return;
+    for (let count = 0; count < max && highQueue.length < 3; count += 1) {
+      const seq = highNextSeq++;
+      const bytes = H.packFrame({ ...transfer.header, seq }, transfer.encoder.encode(seq));
+      highQueue.push({ seq, pattern: getHighSpeedQrPattern(bytes) });
+    }
+  }
+
+  function getHighSpeedQrPattern(bytes) {
+    const frameBytes = bytes.length;
+    const qr = qrcode(frameBytes === 2953 ? 40 : 0, "L");
+    qr.addBytes(bytes);
+    qr.make(4);
+    return extractPattern(qr);
+  }
+
   function getQrPattern(text) {
     const hit = qrCache.get(text);
     if (hit) return hit;
     const qr = qrcode(0, "M");
     qr.addData(text, "Byte");
     qr.make();
+    const pattern = extractPattern(qr);
+    if (qrCache.size >= QR_CACHE_LIMIT) qrCache.delete(qrCache.keys().next().value);
+    qrCache.set(text, pattern);
+    return pattern;
+  }
+
+  function extractPattern(qr) {
     const count = qr.getModuleCount();
     const dark = new Uint8Array(count * count);
     for (let row = 0; row < count; row += 1) {
@@ -2755,15 +2861,21 @@ var qrcode = function() {
         dark[row * count + col] = qr.isDark(row, col) ? 1 : 0;
       }
     }
-    const pattern = { count, dark };
-    if (qrCache.size >= QR_CACHE_LIMIT) qrCache.delete(qrCache.keys().next().value);
-    qrCache.set(text, pattern);
-    return pattern;
+    return { count, dark };
   }
 
   function drawFrame(text) {
     try {
-      const pattern = getQrPattern(text);
+      drawPattern(getQrPattern(text));
+    } catch (error) {
+      stop();
+      statusText.textContent = "二维码过密，请降低每帧数据";
+      console.error(error);
+    }
+  }
+
+  function drawPattern(pattern) {
+    try {
       const quiet = 4;
       const size = canvas.width;
       const cell = Math.floor(size / (pattern.count + quiet * 2));

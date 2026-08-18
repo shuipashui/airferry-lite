@@ -6,6 +6,7 @@ AirFerry Lite 是一个无需服务器的离线光学文件传输项目：电脑
 - 网页接收端：GitHub Pages HTTPS 页面，支持 IndexedDB 断点恢复和 Android Chrome 等现代移动浏览器
 - Android 接收端：原生 APK 源码（Android 10+）
 - 传输协议：`AFL1` 描述帧、数据帧、GF(256) 线性修复帧、择优 gzip、分片 CRC-32 和原文件 CRC-32
+- 网页高速协议：`AFL2` 二进制帧、LT 喷泉码、V40-L QR、固定掩码 4、60 FPS、3 个 ZXing WASM 解码 Worker
 - 隐私：文件只在发送电脑和接收手机本地处理，不经过服务器
 
 ## 在线使用
@@ -17,17 +18,19 @@ AirFerry Lite 是一个无需服务器的离线光学文件传输项目：电脑
 使用步骤：
 
 1. 在电脑打开单文件发送端，选择文件。
-2. 推荐先使用“均衡”模式，点击“生成二维码流”和“开始播放”。
+2. 手机网页接收优先选择“网页高速（推荐）”模式，点击“生成二维码流”和“开始播放”；Android APK 请选择兼容模式。
 3. 手机打开网页接收端，允许摄像头权限并点击“开始扫描”。
 4. 保持手机稳定对准二维码，接收完成后下载文件。
 
 推荐参数：
 
-- 稳定：400 B / 6 FPS
-- 均衡：700 B / 8 FPS
-- 快速：900 B / 12 FPS（二维码密度基准通过，适合光线和对焦稳定的设备）
+- 网页高速：2953 B / 60 FPS（V40-L，目标接近 Decimen v0.3 单二维码约 128 KB/s，实际取决于屏幕、相机和手机）
+- 网页高速兼容：1465 B / 24 FPS（距离较远或普通显示器）
+- APK 兼容稳定：400 B / 6 FPS
+- APK 兼容均衡：700 B / 8 FPS
+- APK 兼容快速：900 B / 12 FPS
 
-网页接收端会优先使用浏览器原生二维码识别；不支持时自动在 Web Worker 中运行 `jsQR`，并在锁定二维码后缩小扫描区域以降低主线程开销。Worker 不可用时自动回退主线程解码。接收界面同时显示实时接收速度（B/s、KB/s 或 MB/s），采用短窗口平滑统计有效片段和修复片段的写入速率。
+网页高速模式会在 Worker 中运行 Decimen v0.3 使用的 ZXing WASM 解码器：每个摄像头帧只提交给空闲 Worker，忙时丢弃过期帧，不排队堆积；3 个 Worker 与 LT 喷泉码共同吸收丢帧。它返回原始二进制帧，因此没有 Base64 膨胀。旧模式仍会优先使用浏览器原生二维码识别，不支持时回退 `jsQR`。接收界面同时显示实时接收速度。
 
 生成二维码流前，发送端会尝试使用浏览器原生 gzip。仅当文件不小于 1 KiB 且压缩后至少缩小约 5% 时才发送压缩载荷，否则保持原始数据，避免压缩格式和额外字段反而降低速度。接收端同时校验传输载荷和解压后的原文件。
 
@@ -56,9 +59,21 @@ protocol/SPEC.md                            # 线协议说明
 ```powershell
 npm test
 npm run build:sender
+npm run build
 ```
 
-构建输出为 `sender/dist/airferry-lite-sender.html`。
+`npm run build` 会先生成高速协议 bundle、同步 `web-receiver/` 镜像，再生成 `sender/dist/airferry-lite-sender.html`。构建输出为 `sender/dist/airferry-lite-sender.html`。
+
+### Android APK
+
+仓库包含 Gradle Wrapper；本机可用的最小 Android 工具链位于项目 `.tools/`（该目录已忽略，不上传仓库）：Java 17、Gradle 8.9、Android SDK Platform 35、Build Tools 34/35 和 Platform Tools。C 盘主目录中直接运行：
+
+```powershell
+cd C:\codex_project\airferry-lite\android-receiver
+.\build-local.ps1 assembleDebug
+```
+
+APK 输出为 `android-receiver/app/build/outputs/apk/debug/app-debug.apk`。如果迁移项目目录，需要重新生成 `android-receiver/local.properties`，或把脚本中的 SDK 路径改为新的 `.tools/android-sdk`。
 
 ## 网页接收限制
 
@@ -69,9 +84,9 @@ npm run build:sender
 - 光学速度受屏幕亮度、摩尔纹、摄像头对焦、手机性能和环境反光影响。
 - 大文件或低性能设备建议使用稳定模式；Android 原生接收端更适合后续扩展大文件落盘。
 
-## 和 AirFerry 的关系
+## 和 AirFerry / Decimen 的关系
 
-本项目参考 AirFerry 的描述帧、连续 QR 视频流、接收端容错和 Android 接收思路，但没有复制其 Rust/RaptorQ 实现。当前采用更小、便于浏览器独立运行的循环分片与 GF(256) 线性修复方案。真正的 RaptorQ、二进制帧和同屏多二维码属于下一代不兼容协议，需配套可信的 RaptorQ WASM/Android 实现后再引入。
+本项目保留 AirFerry 的 Android 兼容协议，同时参考 `bashalarmistalt/decimen-optical-transfer` v0.3.0 的 MIT 实现引入网页专用 `AFL2` 二进制 LT 喷泉码、固定掩码、发送端 lookahead 和并行 WASM 解码。Decimen 当前 AGPL 版本的四二维码/RaptorQ 实现没有复制进 MIT 项目；后续若引入必须单独处理许可证、二进制协议和 Android 解码实现。当前目标是先达到其 v0.3 单二维码约 128 KB/s 的量级，不能把本机生成基准当成手机实测速度。
 
 ## 许可证
 

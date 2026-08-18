@@ -2,7 +2,9 @@
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 
   const P = window.AirFerryLiteProtocol;
+  const H = window.AirFerryHighSpeed;
   const Storage = window.AirFerryLiteStorage;
+  const utf8Decoder = new TextDecoder();
   const video = document.getElementById("video");
   const canvas = document.getElementById("scanCanvas");
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
@@ -31,6 +33,7 @@
   const MAX_FILE_SIZE = 64 * 1024 * 1024;
   const MAX_CHUNKS = 200000;
   const MAX_CHUNK_SIZE = 4096;
+  const HIGH_SPEED_WORKERS = Math.max(2, Math.min(3, navigator.hardwareConcurrency || 2));
 
   let stream = null;
   let scanTimer = 0;
@@ -65,6 +68,14 @@
   let chunkFlushTimer = 0;
   let restoring = false;
   let finishing = false;
+  let highDecoder = null;
+  let highStreamKey = "";
+  let highHeader = null;
+  let highStartedAt = 0;
+  let highFrameId = 0;
+  let highWorkers = [];
+  let highWorkerBusy = [];
+  let highWorkersDisabled = typeof Worker !== "function" || !H;
 
   startBtn.onclick = start;
   stopBtn.onclick = stop;
@@ -122,18 +133,21 @@
     }
     try {
       await setupDetector();
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: false
-      });
-      if (!barcodeDetector && typeof window.jsQR !== "function") throw new Error("DecoderUnavailable");
+      const camera = { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } };
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { ...camera, frameRate: { exact: 60 } }, audio: false });
+      } catch (_) {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { ...camera, frameRate: { ideal: 60 } }, audio: false });
+      }
+      startHighSpeedWorkers();
+      if (!highWorkers.length && !barcodeDetector && typeof window.jsQR !== "function") throw new Error("DecoderUnavailable");
       configureCameraTrack(stream);
       video.srcObject = stream;
       await video.play();
       hint.classList.add("hidden");
       startBtn.disabled = true;
       stopBtn.disabled = false;
-      status.textContent = barcodeDetector ? "正在快速扫描" : "正在扫描";
+      status.textContent = highWorkers.length ? "正在高速扫描" : barcodeDetector ? "正在快速扫描" : "正在扫描";
       scheduleScan();
     } catch (err) {
       closeCamera();
@@ -165,6 +179,7 @@
       video.cancelVideoFrameCallback(scanFrameCallback);
     }
     scanFrameCallback = 0;
+    stopHighSpeedWorkers();
     if (stream) stream.getTracks().forEach((track) => track.stop());
     stream = null;
     video.srcObject = null;
@@ -205,6 +220,10 @@
     speedWindowBytes = 0;
     speedBps = 0;
     finishing = false;
+    highDecoder = null;
+    highStreamKey = "";
+    highHeader = null;
+    highStartedAt = 0;
     speedText.textContent = "—";
     fileName.textContent = "-";
     progressText.textContent = "0%";
@@ -221,6 +240,22 @@
 
   function scheduleScan() {
     if (!stream || scanTimer || scanFrameCallback) return;
+    if (highWorkers.length && typeof video.requestVideoFrameCallback === "function") {
+      scanFrameCallback = video.requestVideoFrameCallback(() => {
+        scanFrameCallback = 0;
+        scanWithHighSpeedWorkers();
+        scheduleScan();
+      });
+      return;
+    }
+    if (highWorkers.length) {
+      scanTimer = setTimeout(() => {
+        scanTimer = 0;
+        scanWithHighSpeedWorkers();
+        scheduleScan();
+      }, 16);
+      return;
+    }
     const interval = barcodeDetector ? DETECTOR_INTERVAL : SCAN_INTERVAL;
     if (typeof video.requestVideoFrameCallback === "function") {
       scanFrameCallback = video.requestVideoFrameCallback(() => {
@@ -240,6 +275,128 @@
       lastScanStartedAt = performance.now();
       scan();
     }, interval);
+  }
+
+  function startHighSpeedWorkers() {
+    if (highWorkersDisabled || highWorkers.length) return;
+    try {
+      for (let index = 0; index < HIGH_SPEED_WORKERS; index += 1) {
+        const worker = new Worker("vendor/decimen/decoder-worker.js");
+        worker.onmessage = event => {
+          if (event.data?.id === -1) return;
+          highWorkerBusy[index] = false;
+          const bytes = event.data?.bytes;
+          if (bytes?.length) acceptDecodedBytes(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+        };
+        worker.onerror = () => disableHighSpeedWorkers();
+        highWorkers.push(worker);
+        highWorkerBusy.push(false);
+      }
+    } catch (_) {
+      disableHighSpeedWorkers();
+    }
+  }
+
+  function stopHighSpeedWorkers() {
+    for (const worker of highWorkers) worker.terminate();
+    highWorkers = [];
+    highWorkerBusy = [];
+  }
+
+  function disableHighSpeedWorkers() {
+    stopHighSpeedWorkers();
+    highWorkersDisabled = true;
+    if (stream) status.textContent = "高速解码器不可用，已切换兼容扫描";
+  }
+
+  function scanWithHighSpeedWorkers() {
+    if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
+    const slot = highWorkerBusy.indexOf(false);
+    if (slot < 0) return;
+    const width = video.videoWidth;
+    const height = video.videoHeight;
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    ctx.drawImage(video, 0, 0, width, height);
+    const image = ctx.getImageData(0, 0, width, height);
+    highWorkerBusy[slot] = true;
+    highWorkers[slot].postMessage({ id: ++highFrameId, buf: image.data.buffer, w: width, h: height }, [image.data.buffer]);
+  }
+
+  function acceptDecodedBytes(bytes) {
+    const parsed = H?.parseFrame(bytes);
+    if (parsed) {
+      acceptHighSpeedFrame(parsed);
+      return;
+    }
+    const text = utf8Decoder.decode(bytes);
+    if (text.startsWith("AFL1|")) acceptDecoded(text);
+  }
+
+  function acceptHighSpeedFrame(parsed) {
+    if (finishing) return;
+    const { header, block } = parsed;
+    const identity = H.streamIdentity(header);
+    if (!highDecoder || highStreamKey !== identity) {
+      highDecoder = new H.LTDecoder(header.k, header.blockLen, header.sessionId, header.totalLen);
+      highStreamKey = identity;
+      highHeader = header;
+      highStartedAt = performance.now();
+      meta = null;
+      result.hidden = true;
+      fileName.textContent = "高速文件流";
+      missingEl.textContent = "喷泉码接收中，无需等待指定片段";
+      copyMissing.disabled = true;
+      speedWindowStartedAt = performance.now();
+      speedWindowBytes = 0;
+      speedBps = 0;
+    }
+    const before = highDecoder.framesNew;
+    highDecoder.addFrame(header.seq, block);
+    if (highDecoder.framesNew > before) updateSpeed(block.length);
+    lastFrameAt = performance.now();
+    updateHighSpeedProgress();
+    if (highDecoder.isComplete) void finishHighSpeed();
+  }
+
+  function updateHighSpeedProgress() {
+    if (!highDecoder) return;
+    const expectedFrames = Math.max(highDecoder.k, Math.ceil(highDecoder.k * 1.15));
+    const frameProgress = highDecoder.framesNew / expectedFrames;
+    const solveProgress = highDecoder.solvedCount / highDecoder.k;
+    const percent = Math.min(highDecoder.isComplete ? 100 : 99, Math.floor(Math.max(frameProgress, solveProgress) * 100));
+    progressText.textContent = percent + "% (帧 " + highDecoder.framesNew + " · 块 " + highDecoder.solvedCount + "/" + highDecoder.k + ")";
+    progressBar.style.width = percent + "%";
+    status.textContent = "高速接收中";
+  }
+
+  async function finishHighSpeed() {
+    if (!highDecoder || !highHeader || finishing) return;
+    finishing = true;
+    try {
+      const container = highDecoder.assemble();
+      if (!container || H.fnv1a(container) !== highHeader.payloadFnv) throw new Error("高速流校验失败");
+      const opticalFile = await H.unpackFile(container);
+      if (!(await H.verifyFile(opticalFile))) throw new Error("文件 SHA-256 校验失败");
+      const seconds = Math.max(0.001, (performance.now() - highStartedAt) / 1000);
+      const blob = new Blob([opticalFile.bytes], { type: opticalFile.type });
+      if (download.href) URL.revokeObjectURL(download.href);
+      download.href = URL.createObjectURL(blob);
+      download.download = opticalFile.name;
+      fileName.textContent = opticalFile.name;
+      resultInfo.textContent = formatBytes(opticalFile.bytes.length) + " · " + formatRate(container.length / seconds) + " · SHA-256 校验通过";
+      result.hidden = false;
+      progressText.textContent = "100% (" + highDecoder.k + "/" + highDecoder.k + ")";
+      progressBar.style.width = "100%";
+      missingEl.textContent = "接收完成";
+      closeCamera();
+      status.textContent = "接收完成";
+    } catch (error) {
+      finishing = false;
+      status.textContent = error.message || "高速文件恢复失败";
+    }
   }
 
   async function scan() {

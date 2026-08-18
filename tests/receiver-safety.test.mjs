@@ -32,9 +32,12 @@ for (const needle of [
   ,"function restoreSavedSession"
   ,"function decodeWithWorker"
   ,"P.restorePayload(bytes, meta)"
+  ,"function acceptHighSpeedFrame"
+  ,"function scanWithHighSpeedWorkers"
+  ,"highWorkerBusy.indexOf(false)"
 ]) assert.ok(source.includes(needle), "missing receiver guard: " + needle);
-assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v8";'), "service worker cache version was not bumped");
-assert.ok(serviceWorker.includes('"./receiver-storage.js"') && serviceWorker.includes('"./decoder-worker.js"'), "new receiver assets are not cached");
+assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v9";'), "service worker cache version was not bumped");
+assert.ok(serviceWorker.includes('"./highspeed-protocol.js"') && serviceWorker.includes('"./vendor/decimen/zxing_reader-EOacYbLr.wasm"'), "high-speed receiver assets are not cached");
 assert.equal(mirrorSource, source, "web-receiver app.js drifted from the published root receiver");
 assert.equal(mirrorServiceWorker, serviceWorker, "web-receiver sw.js drifted from the published root receiver");
 console.log("receiver safety checks ok");
