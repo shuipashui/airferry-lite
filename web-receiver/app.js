@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v45";
+  const RECEIVER_BUILD = "v46";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -62,8 +62,8 @@
   const HIGH_LOCATE_EVERY = 5;
   const HIGH_TILE_PAD = 1.35;
   const HIGH_QUAD_ACQUIRE_MS = 100;
+  const HIGH_QUAD_TRACK_MS = 400;
   const HIGH_QUAD_TILE_MISS_LIMIT = 6;
-  const HIGH_MULTI_FULL_DECODE_EVERY = 3;
 
   let stream = null;
   let scanTimer = 0;
@@ -557,7 +557,7 @@
       if (highWorkerBusy[index] && now - highWorkerStartedAt[index] > HIGH_WORKER_TIMEOUT) restartHighSpeedWorker(index);
     }
     const locked = highTrackedTiles ? highTrackedTiles.filter(Boolean).length : 0;
-    if (barcodeDetector && !highLocateLock && highMultiLayout && locked < 4 && now - lastNativeLocate > HIGH_QUAD_ACQUIRE_MS) {
+    if (barcodeDetector && !highLocateLock && highMultiLayout && now - lastNativeLocate > (locked < 4 ? HIGH_QUAD_ACQUIRE_MS : HIGH_QUAD_TRACK_MS)) {
       lastNativeLocate = now;
       void locateQuadWithNative();
     }
@@ -1165,7 +1165,7 @@
   }
 
   function decodeQuadFrame() {
-    if (highGrabInFlight || highWorkerBusy.some(Boolean)) {
+    if (highGrabInFlight) {
       workerBusyDrops += 1;
       return;
     }
@@ -1173,11 +1173,15 @@
     highGrabInFlight = true;
     void (async () => {
       try {
-        const dueRelock = highScanMisses > 0 && highScanMisses % HIGH_MULTI_FULL_DECODE_EVERY === 0;
         const inferred = inferMissingQuadTiles(highTrackedTiles).filter(Boolean).map(tile => clampScanRegion(inflateRect(tile, HIGH_TILE_PAD)));
-        const region = !dueRelock && inferred.length >= 3 ? unionScanCrops(inferred) : chooseQuadRegion();
+        const region = inferred.length >= 3 ? unionScanCrops(inferred) : chooseQuadRegion();
         const packed = await grabPackedRegion(region);
+        highGrabInFlight = false;
         if (!stream || !packed) return;
+        if (highWorkerBusy.some(Boolean)) {
+          workerBusyDrops += 1;
+          return;
+        }
         const hits = [];
         const seen = new Set();
         const add = list => {
@@ -1190,7 +1194,7 @@
             hits.push(hit);
           }
         };
-        const crops = !dueRelock && inferred.length >= 3 ? inferred : overlappingQuadrants(region);
+        const crops = inferred.length >= 3 ? inferred : overlappingQuadrants(region);
         add(await readCropsFromPacked(packed, crops, false));
         rememberQuadHits(hits);
       } finally {
