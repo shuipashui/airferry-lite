@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v54";
+  const RECEIVER_BUILD = "v53";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -64,7 +64,6 @@
   const HIGH_QUAD_OVERLAP = 0.18;
   const HIGH_LOCATE_EVERY = 5;
   const HIGH_TILE_PAD = 1.35;
-  const HIGH_TILE_SCAN_PAD = 1.55;
   const HIGH_QUAD_ACQUIRE_MS = 100;
   const HIGH_QUAD_TILE_MISS_LIMIT = 6;
   const HIGH_QUAD_FROZEN_MISS_LIMIT = 24;
@@ -617,7 +616,7 @@
     if (filled >= 2) {
       const inferred = inferMissingQuadTiles(highTrackedTiles);
       const known = inferred[slot];
-      if (known) return clampScanRegion(inflateRect(known, quadScanPad()));
+      if (known) return clampScanRegion(inflateRect(known, HIGH_TILE_PAD));
     }
     return overlappingQuadrants(chooseQuadRegion())[slot];
   }
@@ -792,83 +791,11 @@
   function lockQuadSlots(fresh, sighting) {
     if (!fresh || fresh.length < 2) return;
     mergeVideoTiles(fresh, sighting);
-    const proven = highTileProven.slice();
     if ((highTrackedTiles || []).filter(Boolean).length >= 2) {
       highTrackedTiles = inferMissingQuadTiles(highTrackedTiles);
-      highTileProven = [0, 1, 2, 3].map(index => !!(highTrackedTiles && highTrackedTiles[index]) && !!proven[index]);
+      highTileProven = (highTrackedTiles || []).map(tile => !!tile);
     }
-    highQuadFrozen = fresh.length >= 4 && (highTrackedTiles || []).filter(Boolean).length >= 4;
-  }
-
-  function quadScanPad() {
-    return highQuadFrozen ? HIGH_TILE_SCAN_PAD : HIGH_TILE_PAD;
-  }
-
-  function hitBoxesFromHits(hits) {
-    const tiles = [];
-    for (const hit of hits) {
-      const mapped = mappedCorners(hit, hit.origin || { x: 0, y: 0, srcW: 1, srcH: 1, outW: 1, outH: 1 });
-      if (mapped.length < 2) continue;
-      let minX = Infinity;
-      let minY = Infinity;
-      let maxX = -Infinity;
-      let maxY = -Infinity;
-      for (const point of mapped) {
-        minX = Math.min(minX, point.x);
-        minY = Math.min(minY, point.y);
-        maxX = Math.max(maxX, point.x);
-        maxY = Math.max(maxY, point.y);
-      }
-      tiles.push({
-        x: minX,
-        y: minY,
-        width: Math.max(64, maxX - minX),
-        height: Math.max(64, maxY - minY)
-      });
-    }
-    return tiles;
-  }
-
-  function rebuildQuadTiles(fresh) {
-    if (!fresh || fresh.length < 3) return false;
-    const slotted = slotTilesByCluster(fresh);
-    if (slotted.filter(Boolean).length < 3) return false;
-    highTrackedTiles = inferMissingQuadTiles(slotted);
-    const proven = [false, false, false, false];
-    for (let index = 0; index < 4; index += 1) {
-      const tile = highTrackedTiles[index];
-      if (!tile) continue;
-      const c = tileCenter(tile);
-      proven[index] = fresh.some(hit => {
-        const h = tileCenter(hit);
-        const dx = h.x - c.x;
-        const dy = h.y - c.y;
-        const radius = Math.max(hit.width, hit.height) * 0.4;
-        return dx * dx + dy * dy <= radius * radius;
-      });
-    }
-    highTileProven = proven;
-    highQuadFrozen = fresh.length >= 4 && slotted.filter(Boolean).length >= 4;
-    return true;
-  }
-
-  function followOwnedQuadTile(box) {
-    if (!highTrackedTiles || !box) return;
-    const c = tileCenter(box);
-    let owner = -1;
-    for (let index = 0; index < 4; index += 1) {
-      const tile = highTrackedTiles[index];
-      if (!tile) continue;
-      const region = inflateRect(tile, HIGH_TILE_PAD);
-      if (c.x >= region.x && c.x < region.x + region.width && c.y >= region.y && c.y < region.y + region.height) {
-        if (owner >= 0) return;
-        owner = index;
-      }
-    }
-    if (owner >= 0) {
-      highTrackedTiles[owner] = box;
-      highTileProven[owner] = true;
-    }
+    highQuadFrozen = (highTrackedTiles || []).filter(Boolean).length >= 4;
   }
 
   function evenRect(x, y, width, height, maxW, maxH) {
@@ -1243,7 +1170,7 @@
     }
     const corners = [];
     for (const hit of transferHits) corners.push(...mappedCorners(hit, hit.origin || { x: 0, y: 0, srcW: 1, srcH: 1, outW: 1, outH: 1 }));
-    if (corners.length && (transferHits.length >= 3 || !highQuadFrozen)) {
+    if (corners.length && !highQuadFrozen) {
       let minX = Infinity;
       let minY = Infinity;
       let maxX = -Infinity;
@@ -1268,15 +1195,30 @@
       else if (transferHits.length >= 3) highScanRoi = unionHighScanRoi(highScanRoi || next, next);
       else highScanRoi = next;
     }
-    if (highMultiLayout && transferHits.length) {
-      const tiles = hitBoxesFromHits(transferHits);
-      if (!(tiles.length >= 3 && rebuildQuadTiles(tiles))) {
-        if ((highTrackedTiles || []).filter(Boolean).length >= 2) {
-          for (const box of tiles) followOwnedQuadTile(box);
-        } else if (tiles.length >= 2) {
-          lockQuadSlots(tiles, false);
+    if (highMultiLayout && transferHits.length && !highQuadFrozen) {
+      const tiles = [];
+      for (const hit of transferHits) {
+        const mapped = mappedCorners(hit, hit.origin || { x: 0, y: 0, srcW: 1, srcH: 1, outW: 1, outH: 1 });
+        if (mapped.length < 2) continue;
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        for (const point of mapped) {
+          minX = Math.min(minX, point.x);
+          minY = Math.min(minY, point.y);
+          maxX = Math.max(maxX, point.x);
+          maxY = Math.max(maxY, point.y);
         }
+        tiles.push({
+          x: minX,
+          y: minY,
+          width: Math.max(64, maxX - minX),
+          height: Math.max(64, maxY - minY)
+        });
       }
+      if (tiles.length >= 2) lockQuadSlots(tiles, false);
+      if (transferHits.length >= 4 && (highTrackedTiles || []).filter(Boolean).length >= 4) highQuadFrozen = true;
     }
   }
 
@@ -1289,7 +1231,7 @@
     highGrabInFlight = true;
     void (async () => {
       try {
-        const inferred = inferMissingQuadTiles(highTrackedTiles).filter(Boolean).map(tile => clampScanRegion(inflateRect(tile, quadScanPad())));
+        const inferred = inferMissingQuadTiles(highTrackedTiles).filter(Boolean).map(tile => clampScanRegion(inflateRect(tile, HIGH_TILE_PAD)));
         const region = inferred.length >= 3 ? unionScanCrops(inferred) : chooseQuadRegion();
         const packed = await grabPackedRegion(region);
         if (!stream || !packed) return;

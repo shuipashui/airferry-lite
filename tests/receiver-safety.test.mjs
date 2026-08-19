@@ -55,7 +55,7 @@ for (const needle of [
   ,"const HIGH_QUAD_PACKED_SIZE = 720;"
   ,">= 4 ? 4 : 2"
   ,"!/Android/i.test(navigator.userAgent || \"\")"
-  ,"const RECEIVER_BUILD = \"v54\";"
+  ,"const RECEIVER_BUILD = \"v53\";"
   ,"function grabLumaRegion"
   ,"function cropLuma"
   ,"function downscaleLuma"
@@ -77,14 +77,7 @@ for (const needle of [
   ,"function tileCenter"
   ,"HIGH_QUAD_FROZEN_MISS_LIMIT"
   ,"let highQuadFrozen = false;"
-  ,"if (highMultiLayout && transferHits.length)"
-  ,"if (!(tiles.length >= 3 && rebuildQuadTiles(tiles)))"
-  ,"function rebuildQuadTiles"
-  ,"function followOwnedQuadTile"
-  ,"function hitBoxesFromHits"
-  ,"function quadScanPad"
-  ,"HIGH_TILE_SCAN_PAD"
-  ,"fresh.length >= 4 && (highTrackedTiles || []).filter(Boolean).length >= 4"
+  ,"if (highMultiLayout && transferHits.length && !highQuadFrozen)"
   ,"if (highGrabInFlight || highWorkerBusy.some(Boolean))"
   ,"if (!fresh || fresh.length < 2) return;"
   ,"quadPackCanvas"
@@ -146,7 +139,7 @@ assert.ok(!source.includes("HIGH_TILE_PAD_LOCK"), "quad tiles must not use a sec
 assert.ok(source.includes("highQuadFrozen ? HIGH_QUAD_FROZEN_MISS_LIMIT : HIGH_QUAD_TILE_MISS_LIMIT"), "frozen quad grid must survive brief handshake misses");
 assert.ok(source.includes("const useLuma = highMultiLayout &&"), "single-code scans must not use the quad luma grab");
 assert.ok(!source.includes("probeMulti"), "single-code scans must not be shredded into quad quadrants");
-assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v54";'), "service worker cache version was not bumped");
+assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v53";'), "service worker cache version was not bumped");
 assert.ok(serviceWorker.includes('path.endsWith(".wasm")'), "service worker must cache WASM/worker files instead of no-store");
 assert.ok(serviceWorker.includes('"./highspeed-protocol.js"') && serviceWorker.includes('"./vendor/decimen/highspeed-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/multi-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/zxing_reader-EOacYbLr.wasm"'), "high-speed receiver assets are not cached");
 assert.equal(mirrorSource, source, "web-receiver app.js drifted from the published root receiver");
