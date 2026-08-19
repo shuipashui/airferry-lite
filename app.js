@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v38";
+  const RECEIVER_BUILD = "v39";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -49,17 +49,18 @@
   const MAX_FILE_SIZE = 64 * 1024 * 1024;
   const MAX_CHUNKS = 200000;
   const MAX_CHUNK_SIZE = 4096;
-  const HIGH_SPEED_WORKERS = (navigator.hardwareConcurrency || 0) >= 8 ? 3 : 2;
+  const HIGH_SPEED_WORKERS = (navigator.hardwareConcurrency || 4) >= 4 ? 4 : 2;
   const HIGH_WORKER_TIMEOUT = 2500;
   const HIGH_ACQUIRE_SIZE = 1440;
   const HIGH_TRACK_SIZE = 960;
   const HIGH_TILE_SIZE = 720;
+  const HIGH_QUAD_TILE_SIZE = 480;
   const HIGH_FULL_SCAN_EVERY_MISSES = 12;
-  const HIGH_ROI_MISS_LIMIT = 3;
+  const HIGH_ROI_MISS_LIMIT = 8;
   const HIGH_CLOSE_BOX_RATIO = 0.5;
   const HIGH_QUAD_OVERLAP = 0.18;
   const HIGH_LOCATE_EVERY = 5;
-  const HIGH_TILE_PAD = 1.35;
+  const HIGH_TILE_PAD = 1.18;
   const HIGH_QUAD_ACQUIRE_MS = 100;
   const HIGH_QUAD_DEGRADED_MS = 400;
 
@@ -151,11 +152,9 @@
   let lastNativeLocate = 0;
   let highTileProven = [false, false, false, false];
   let highQuadCursor = 0;
-  let clusterHuntFlip = 0;
+  let highSingleConfirmed = false;
   let startInFlight = false;
   let hideStopTimer = 0;
-  let cameraRetryCount = 0;
-  let cameraStartedAt = 0;
   let highScanRoi = null;
   let highTrackedTiles = null;
   let lastHitBox = 0;
@@ -164,6 +163,7 @@
   let highLocateLock = false;
   let highLocateTick = 0;
   const highDecodeMeta = new Map();
+  const highJobWaiters = new Map();
 
   startBtn.onclick = start;
   stopBtn.onclick = stop;
@@ -253,13 +253,12 @@
     try {
       await setupDetector();
       const camera = { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1440 } };
-      const relaxed = cameraRetryCount > 0;
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: relaxed ? camera : { ...camera, frameRate: { ideal: 120 } },
+          video: { ...camera, frameRate: { ideal: 120 } },
           audio: false
         });
-        cameraRequestedFps = relaxed ? 60 : 120;
+        cameraRequestedFps = 120;
       } catch (_) {
         cameraRequestedFps = 60;
         stream = await navigator.mediaDevices.getUserMedia({ video: camera, audio: false });
@@ -276,7 +275,6 @@
       }
       if (!highWorkers.length && !barcodeDetector && typeof window.jsQR !== "function") throw new Error("DecoderUnavailable");
       resetScanStats();
-      cameraStartedAt = performance.now();
       configureCameraTrack(stream);
       video.srcObject = stream;
       await waitForCameraVideo();
@@ -304,16 +302,7 @@
     if (!track) return;
     track.addEventListener("ended", () => {
       if (stream !== activeStream) return;
-      const early = cameraStartedAt && performance.now() - cameraStartedAt < 1600;
       closeCamera();
-      if (early && cameraRetryCount < 2) {
-        cameraRetryCount += 1;
-        status.textContent = "摄像头重试中";
-        setTimeout(() => {
-          if (!stream && !startInFlight) void start();
-        }, 80);
-        return;
-      }
       status.textContent = "摄像头连接已中断，请重新开始";
     }, { once: true });
     try {
@@ -322,7 +311,7 @@
       cameraFrameRate = Number(settings?.frameRate) || 0;
       const capabilities = track.getCapabilities?.();
       cameraCapabilities = capabilities || null;
-      if (capabilities?.focusMode?.includes("continuous")) {
+      if (capabilities?.focusMode?.includes("continuous") && !/Android/i.test(navigator.userAgent || "")) {
         track.applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(() => {});
       }
     } catch (_) {}
@@ -352,7 +341,7 @@
     highTrackedTiles = null;
     lastHitBox = 0;
     highQuadCursor = 0;
-    clusterHuntFlip = 0;
+    highSingleConfirmed = false;
     highDecodeMeta.clear();
     lastScanStartedAt = -Infinity;
     highBitmapLock = false;
@@ -368,7 +357,6 @@
   }
 
   function stop(message) {
-    cameraRetryCount = 0;
     if (!stream) return;
     closeCamera();
     status.textContent = message || (meta ? "已暂停" : "等待开始");
@@ -499,10 +487,17 @@
       const codes = normalizeDecodedCodes(decoded);
       validQrFrames += codes.length;
       sessionValidCodes += codes.length;
+      for (const code of codes) acceptDecodedBytes(code.bytes);
+      const waiter = event.data?.id != null ? highJobWaiters.get(event.data.id) : null;
+      if (waiter) {
+        highJobWaiters.delete(event.data.id);
+        clearTimeout(waiter.timer);
+        waiter.resolve(codes.map(code => ({ bytes: code.bytes, position: code.position, origin })));
+        return;
+      }
       if (codes.length) {
         highScanMisses = 0;
         if (origin) updateHighScanRoiFromHits(codes, origin);
-        for (const code of codes) acceptDecodedBytes(code.bytes);
       } else {
         highScanMisses += 1;
         if (!highMultiLayout && highScanMisses >= HIGH_ROI_MISS_LIMIT) {
@@ -530,7 +525,16 @@
     }
   }
 
+  function clearJobWaiters() {
+    for (const waiter of highJobWaiters.values()) {
+      clearTimeout(waiter.timer);
+      waiter.resolve([]);
+    }
+    highJobWaiters.clear();
+  }
+
   function stopHighSpeedWorkers() {
+    clearJobWaiters();
     for (const worker of highWorkers) worker?.terminate();
     highWorkers = [];
     highWorkerBusy = [];
@@ -558,9 +562,8 @@
       lastNativeLocate = now;
       void locateQuadWithNative();
     }
-    const probeMulti = !highMultiLayout && lastHitBox < 700 && highScanMisses > 0 && highScanMisses % HIGH_FULL_SCAN_EVERY_MISSES === 0;
-    if (highMultiLayout || probeMulti) {
-      scanQuadFromLuma();
+    if (highMultiLayout || !highSingleConfirmed) {
+      decodeQuadFrame();
       return;
     }
     if (highGrabInFlight) return;
@@ -609,7 +612,7 @@
     const known = inferred[slot];
     if (known && highTileProven[slot]) return clampScanRegion(inflateRect(known, HIGH_TILE_PAD));
     if (known) return clampScanRegion(known);
-    return clusterHuntLayout().fallback[slot];
+    return exclusiveQuadrants(chooseQuadRegion())[slot];
   }
 
   function exclusiveQuadrants(source) {
@@ -633,7 +636,7 @@
       y: cy - template.height / 2,
       width: template.width,
       height: template.height
-    }, 1.28);
+    }, 1.16);
   }
 
   function inferMissingQuadTiles(tiles) {
@@ -687,8 +690,8 @@
     try {
       const codes = await barcodeDetector.detect(video);
       const tiles = nativeCodesToTiles(codes);
-      if (tiles.length >= 2) highMultiLayout = true;
-      if (highMultiLayout && tiles.length) mergeVideoTiles(tiles, true);
+      if (tiles.length >= 3) mergeVideoTiles(tiles, true);
+      else if (tiles.length >= 2) highMultiLayout = true;
     } catch (_) {
     } finally {
       highLocateLock = false;
@@ -985,7 +988,15 @@
       maxSymbols,
       retryBinarizer
     }, [copy.buffer]);
-    return true;
+    return new Promise(resolve => {
+      const timer = setTimeout(() => {
+        if (!highJobWaiters.has(id)) return;
+        highJobWaiters.delete(id);
+        highWorkerBusy[slot] = false;
+        resolve([]);
+      }, HIGH_WORKER_TIMEOUT);
+      highJobWaiters.set(id, { resolve, timer });
+    });
   }
 
   function unionScanCrops(crops) {
@@ -1008,119 +1019,191 @@
     });
   }
 
-  function clusterHuntLayout() {
-    const slots = highTrackedTiles || [null, null, null, null];
-    const filled = slots.filter(Boolean);
-    if (filled.length < 2) {
-      const src = fullFrameSource();
-      return { src, fallback: exclusiveQuadrants(src) };
-    }
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    let size = 0;
-    for (const tile of filled) {
-      minX = Math.min(minX, tile.x);
-      minY = Math.min(minY, tile.y);
-      maxX = Math.max(maxX, tile.x + tile.width);
-      maxY = Math.max(maxY, tile.y + tile.height);
-      size = Math.max(size, tile.width, tile.height);
-    }
-    const cw = Math.max(1, maxX - minX);
-    const ch = Math.max(1, maxY - minY);
-    const pad = size * 0.08;
-    if (filled.length >= 3 || (cw > size * 1.35 && ch > size * 1.35)) {
-      const side = Math.max(cw, ch) + pad * 2;
-      const src = clampScanRegion({
-        x: minX + cw / 2 - side / 2,
-        y: minY + ch / 2 - side / 2,
-        width: side,
-        height: side
-      });
-      return { src, fallback: exclusiveQuadrants(src) };
-    }
-    clusterHuntFlip += 1;
-    if (slots[0] && slots[1]) {
-      const side = Math.max(cw, size * 1.92) + pad * 2;
-      const extendDown = !!(clusterHuntFlip & 1);
-      const src = clampScanRegion({
-        x: minX + cw / 2 - side / 2,
-        y: extendDown ? minY - pad : maxY + pad - side,
-        width: side,
-        height: side
-      });
-      const quads = exclusiveQuadrants(src);
-      return { src, fallback: extendDown ? quads : [quads[0], quads[1], quads[0], quads[1]] };
-    }
-    const side = Math.max(ch, size * 1.92) + pad * 2;
-    const extendRight = !!(clusterHuntFlip & 1);
-    const src = clampScanRegion({
-      x: extendRight ? minX - pad : maxX + pad - side,
-      y: minY + ch / 2 - side / 2,
-      width: side,
-      height: side
-    });
-    const quads = exclusiveQuadrants(src);
-    return { src, fallback: extendRight ? quads : [quads[0], quads[0], quads[2], quads[2]] };
+  function acquireQuadRegion() {
+    return video.videoHeight >= video.videoWidth ? fullFrameSource() : centerSquareSource();
   }
 
-  function clusterQuadSource() {
-    return clusterHuntLayout().src;
+  function chooseQuadRegion() {
+    const tiles = (highTrackedTiles || []).filter(Boolean);
+    if (tiles.length >= 3 && highScanRoi && highScanMisses < HIGH_ROI_MISS_LIMIT) {
+      if (highScanMisses > 0) return inflateRect(highScanRoi, 1 + highScanMisses * 0.22);
+      return highScanRoi;
+    }
+    return acquireQuadRegion();
   }
 
-  function nextQuadCrops(count) {
-    const inferred = inferMissingQuadTiles(highTrackedTiles);
-    const locked = (highTrackedTiles || []).filter(Boolean).length;
-    const provenCount = highTileProven.filter(Boolean).length;
-    const hunt = clusterHuntLayout();
-    const crops = [];
-    for (let index = 0; index < 4 && crops.length < count; index += 1) {
-      const quad = (highQuadCursor + index) % 4;
-      const known = inferred[quad];
-      if (known) {
-        crops.push(clampScanRegion(highTileProven[quad] ? inflateRect(known, HIGH_TILE_PAD) : known));
-      } else {
-        crops.push(hunt.fallback[quad]);
+  function transferHitKey(hit) {
+    if (!hit?.bytes || !H?.parseFrame) return null;
+    const parsed = H.parseFrame(hit.bytes);
+    if (!parsed) return null;
+    return parsed.header.sessionId + ":" + parsed.header.seq;
+  }
+
+  function transferCount(hits) {
+    return hits.filter(hit => transferHitKey(hit)).length;
+  }
+
+  function hitCenter(hit) {
+    const corners = mappedCorners(hit, hit.origin || { x: 0, y: 0, srcW: 1, srcH: 1, outW: 1, outH: 1 });
+    if (!corners.length) return null;
+    return {
+      x: corners.reduce((sum, point) => sum + point.x, 0) / corners.length,
+      y: corners.reduce((sum, point) => sum + point.y, 0) / corners.length
+    };
+  }
+
+  function tileCovered(tile, hits) {
+    for (const hit of hits) {
+      const center = hitCenter(hit);
+      if (!center) continue;
+      if (center.x >= tile.x && center.x < tile.x + tile.width && center.y >= tile.y && center.y < tile.y + tile.height) return true;
+    }
+    return false;
+  }
+
+  async function readCropsFromPacked(packed, crops, retryBinarizer) {
+    const hits = [];
+    let offset = 0;
+    while (offset < crops.length) {
+      const batch = [];
+      for (let slot = 0; slot < highWorkers.length && offset < crops.length; slot += 1) {
+        if (highWorkerBusy[slot] || !highWorkerReady[slot]) continue;
+        const crop = crops[offset];
+        offset += 1;
+        const cropped = cropLuma(packed, crop);
+        if (!cropped) continue;
+        const sized = downscaleLuma(cropped.lum, cropped.width, cropped.height, HIGH_QUAD_TILE_SIZE);
+        batch.push(postLumaToWorker(slot, sized, cropped.source, 1, retryBinarizer));
       }
+      if (!batch.length) break;
+      const parts = await Promise.all(batch);
+      for (const list of parts) hits.push(...list);
     }
-    highQuadCursor = (highQuadCursor + Math.max(1, crops.length)) % 4;
-    return { crops, locked, provenCount, src: hunt.src };
+    return hits;
   }
 
-  function scanQuadFromLuma() {
-    if (highGrabInFlight) return;
-    const freeSlots = [];
-    for (let index = 0; index < highWorkers.length; index += 1) {
-      if (!highWorkerBusy[index] && highWorkerReady[index]) freeSlots.push(index);
+  function rememberQuadHits(hits) {
+    const transferHits = hits.filter(hit => transferHitKey(hit));
+    if (!transferHits.length) {
+      if (highScanMisses + 1 >= 2) {
+        highTrackedTiles = null;
+        highTileProven = [false, false, false, false];
+      }
+      highScanMisses += 1;
+      return;
     }
-    if (!freeSlots.length) {
+    highScanMisses = 0;
+    const quadFrame = transferHits.some(hit => H.parseFrame(hit.bytes)?.header.layoutCodes === 4);
+    if (quadFrame || transferHits.length >= 2) {
+      highMultiLayout = true;
+      highSingleConfirmed = false;
+    } else {
+      highSingleConfirmed = true;
+    }
+    const corners = [];
+    for (const hit of transferHits) corners.push(...mappedCorners(hit, hit.origin || { x: 0, y: 0, srcW: 1, srcH: 1, outW: 1, outH: 1 }));
+    if (corners.length) {
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const point of corners) {
+        minX = Math.min(minX, point.x);
+        minY = Math.min(minY, point.y);
+        maxX = Math.max(maxX, point.x);
+        maxY = Math.max(maxY, point.y);
+      }
+      lastHitBox = Math.max(maxX - minX, maxY - minY, 64);
+      const boxW = Math.max(1, maxX - minX);
+      const boxH = Math.max(1, maxY - minY);
+      const pad = transferHits.length >= 4 ? 1.4 : highMultiLayout && transferHits.length < 4 ? (transferHits.length >= 2 ? 2.15 : 3.8) : 1.35;
+      const next = clampScanRegion({
+        x: minX - boxW * (pad - 1) / 2,
+        y: minY - boxH * (pad - 1) / 2,
+        width: boxW * pad,
+        height: boxH * pad
+      });
+      if (transferHits.length >= 4) highScanRoi = next;
+      else if (transferHits.length >= 3) highScanRoi = unionHighScanRoi(highScanRoi || acquireQuadRegion(), next);
+      else highScanRoi = acquireQuadRegion();
+    }
+    if (highMultiLayout && transferHits.length >= 3) {
+      const tiles = [];
+      for (const hit of transferHits) {
+        const mapped = mappedCorners(hit, hit.origin || { x: 0, y: 0, srcW: 1, srcH: 1, outW: 1, outH: 1 });
+        if (mapped.length < 2) continue;
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        for (const point of mapped) {
+          minX = Math.min(minX, point.x);
+          minY = Math.min(minY, point.y);
+          maxX = Math.max(maxX, point.x);
+          maxY = Math.max(maxY, point.y);
+        }
+        tiles.push(inflateRegion({
+          x: minX,
+          y: minY,
+          width: Math.max(64, maxX - minX),
+          height: Math.max(64, maxY - minY)
+        }, HIGH_TILE_PAD));
+      }
+      highTrackedTiles = slotTilesByCluster(tiles);
+      highTileProven = highTrackedTiles.map(tile => !!tile);
+    } else if (transferHits.length < 2) {
+      highTrackedTiles = null;
+      highTileProven = [false, false, false, false];
+    }
+  }
+
+  function decodeQuadFrame() {
+    if (highGrabInFlight) {
       workerBusyDrops += 1;
       return;
     }
-    const retry = highScanMisses >= 2;
-    const planned = nextQuadCrops(freeSlots.length);
-    const crops = planned.crops;
-    const packedSrc = planned.locked >= 2 || planned.provenCount >= 4
-      ? unionScanCrops(crops)
-      : (planned.src || fullFrameSource());
+    if (!highWorkerReady.some(Boolean)) return;
     highGrabInFlight = true;
-    void grabPackedRegion(packedSrc).then((packed) => {
+    void (async () => {
       try {
+        const region = chooseQuadRegion();
+        const packed = await grabPackedRegion(region);
         if (!stream || !packed) return;
-        for (let index = 0; index < freeSlots.length; index += 1) {
-          if (highWorkerBusy[freeSlots[index]] || !highWorkerReady[freeSlots[index]]) continue;
-          const cropped = cropLuma(packed, crops[index]);
-          if (!cropped) continue;
-          const sized = downscaleLuma(cropped.lum, cropped.width, cropped.height, HIGH_TILE_SIZE);
-          postLumaToWorker(freeSlots[index], sized, cropped.source, 1, retry);
+        const hits = [];
+        const seen = new Set();
+        const add = list => {
+          for (const hit of list) {
+            const key = transferHitKey(hit);
+            if (key) {
+              if (seen.has(key)) continue;
+              seen.add(key);
+            }
+            hits.push(hit);
+          }
+        };
+        const previous = (highTrackedTiles || []).filter(Boolean).map(tile => clampScanRegion(inflateRect(tile, HIGH_TILE_PAD)));
+        if (previous.length >= 3) add(await readCropsFromPacked(packed, previous, false));
+        if (transferCount(hits) < 4) {
+          const exclusive = exclusiveQuadrants(region);
+          const overlays = overlappingQuadrants(region);
+          const pending = overlays.filter((crop, index) => !tileCovered(exclusive[index], hits));
+          add(await readCropsFromPacked(packed, pending, false));
         }
+        if (transferCount(hits) < 4) {
+          const retries = exclusiveQuadrants(region)
+            .filter(tile => !tileCovered(tile, hits))
+            .map(tile => inflateRect(tile, 1.28));
+          add(await readCropsFromPacked(packed, retries, true));
+        }
+        rememberQuadHits(hits);
       } finally {
         highGrabInFlight = false;
       }
-    }).catch(() => {
-      highGrabInFlight = false;
-    });
+    })();
+  }
+
+  function scanQuadFromLuma() {
+    decodeQuadFrame();
   }
 
   async function postHighSpeedRegion(slot, source, maxSymbols, retryBinarizer, tile) {
@@ -1183,13 +1266,13 @@
 
   function scanSizeForSource(source, tile) {
     const longest = Math.max(source.width, source.height, 64);
-    if (tile || highMultiLayout) return Math.min(HIGH_TILE_SIZE, longest);
+    if (tile || highMultiLayout) return Math.min(highMultiLayout ? HIGH_QUAD_TILE_SIZE : HIGH_TILE_SIZE, longest);
     if (highScanRoi) return Math.min(lastHitBox >= 700 ? HIGH_TILE_SIZE : HIGH_TRACK_SIZE, longest);
     return Math.min(HIGH_ACQUIRE_SIZE, longest);
   }
 
   function currentHighScanSize() {
-    return lastPostedScanSize || (highMultiLayout ? HIGH_TILE_SIZE : highScanRoi ? HIGH_TRACK_SIZE : HIGH_ACQUIRE_SIZE);
+    return lastPostedScanSize || (highMultiLayout ? HIGH_QUAD_TILE_SIZE : highScanRoi ? HIGH_TRACK_SIZE : HIGH_ACQUIRE_SIZE);
   }
 
   function centerSquareSource() {
@@ -1390,7 +1473,11 @@
   function rememberTilesFromHits(codes, origin) {
     const fresh = tilesFromHits(codes, origin);
     if (highMultiLayout) {
-      mergeVideoTiles(fresh, false);
+      if (fresh.length >= 3) mergeVideoTiles(fresh, false);
+      else if (fresh.length < 2) {
+        highTrackedTiles = null;
+        highTileProven = [false, false, false, false];
+      }
       return;
     }
     for (const tile of fresh) mergeTrackedTile(tile);
@@ -1496,7 +1583,7 @@
     highLocateLock = false;
     highLocateTick = 0;
     highQuadCursor = 0;
-    clusterHuntFlip = 0;
+    highSingleConfirmed = false;
     lastNativeLocate = 0;
     highTileProven = [false, false, false, false];
     lastUsedLuma = false;

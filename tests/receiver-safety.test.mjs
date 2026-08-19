@@ -51,7 +51,10 @@ for (const needle of [
   ,"const HIGH_ACQUIRE_SIZE = 1440;"
   ,"const HIGH_TRACK_SIZE = 960;"
   ,"const HIGH_TILE_SIZE = 720;"
-  ,"const RECEIVER_BUILD = \"v38\";"
+  ,"const HIGH_QUAD_TILE_SIZE = 480;"
+  ,">= 4 ? 4 : 2"
+  ,"!/Android/i.test(navigator.userAgent || \"\")"
+  ,"const RECEIVER_BUILD = \"v39\";"
   ,"function grabLumaRegion"
   ,"function cropLuma"
   ,"function downscaleLuma"
@@ -62,15 +65,17 @@ for (const needle of [
   ,"function grabPackedCenter"
   ,"function grabPackedRegion"
   ,"function unionScanCrops"
-  ,"function nextQuadCrops"
-  ,"function clusterQuadSource"
-  ,"function clusterHuntLayout"
-  ,"cw > size * 1.35"
-  ,"planned.locked >= 2"
+  ,"function decodeQuadFrame"
+  ,"function rememberQuadHits"
+  ,"function chooseQuadRegion"
+  ,"function readCropsFromPacked"
+  ,"function tileCovered"
+  ,"highJobWaiters"
+  ,"highSingleConfirmed"
+  ,"previous.length >= 3"
   ,"let startInFlight = false;"
   ,"function waitForCameraVideo"
   ,"hideStopTimer"
-  ,"const src = fullFrameSource();"
   ,"inferMissingQuadTiles(highTrackedTiles)"
   ,"let highGrabInFlight = false;"
   ,"mergeVideoTiles(tiles, true)"
@@ -98,7 +103,7 @@ for (const needle of [
   ,"function fullFrameSource"
   ,"function inflateRect"
   ,"updateHighScanRoiFromHits"
-  ,"HIGH_ROI_MISS_LIMIT"
+  ,"const HIGH_ROI_MISS_LIMIT = 8;"
   ,"HIGH_CLOSE_BOX_RATIO"
   ,"centerSquareSource"
   ,"retryBinarizer"
@@ -111,7 +116,7 @@ for (const needle of [
   ,"elapsed < 1000"
   ," · 每帧 "
 ]) assert.ok(source.includes(needle), "missing receiver guard: " + needle);
-assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v38";'), "service worker cache version was not bumped");
+assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v39";'), "service worker cache version was not bumped");
 assert.ok(serviceWorker.includes('path.endsWith(".wasm")'), "service worker must cache WASM/worker files instead of no-store");
 assert.ok(serviceWorker.includes('"./highspeed-protocol.js"') && serviceWorker.includes('"./vendor/decimen/highspeed-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/multi-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/zxing_reader-EOacYbLr.wasm"'), "high-speed receiver assets are not cached");
 assert.equal(mirrorSource, source, "web-receiver app.js drifted from the published root receiver");
