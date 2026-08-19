@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v26";
+  const RECEIVER_BUILD = "v27";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -420,7 +420,7 @@
         for (const code of codes) acceptDecodedBytes(code.bytes);
       } else {
         highScanMisses += 1;
-        if (highScanMisses >= HIGH_ROI_MISS_LIMIT) {
+        if (highScanMisses >= (highMultiLayout ? 8 : HIGH_ROI_MISS_LIMIT)) {
           highScanRoi = null;
           highTrackedTiles = null;
         }
@@ -481,16 +481,15 @@
   }
 
   function nextHighScanJobs() {
-    const retry = highScanMisses > 0;
+    const retry = highMultiLayout ? highScanMisses >= 2 : highScanMisses > 0;
     const probeMulti = !highMultiLayout && lastHitBox < 700 && highScanMisses > 0 && highScanMisses % HIGH_FULL_SCAN_EVERY_MISSES === 0;
-    if (highMultiLayout || probeMulti || (highTrackedTiles && highTrackedTiles.length >= 3)) {
-      const tiles = highTrackedTiles && highTrackedTiles.length >= 3
+    if (highMultiLayout || probeMulti) {
+      const tiles = highTrackedTiles && highTrackedTiles.length >= 4
         ? highTrackedTiles.map(clampScanRegion)
         : overlappingQuadrants(centerSquareSource());
-      const start = tiles.length ? highQuadCursor % tiles.length : 0;
-      if (tiles.length) highQuadCursor = (start + 1) % tiles.length;
-      const rotated = tiles.slice(start).concat(tiles.slice(0, start));
-      return rotated.map(source => ({ source, maxSymbols: 1, retry, tile: true }));
+      const source = tiles[highQuadCursor % tiles.length];
+      highQuadCursor = (highQuadCursor + 1) % Math.max(tiles.length, 1);
+      return [{ source, maxSymbols: 1, retry, tile: true }];
     }
     return [{ source: getHighSpeedSource(), maxSymbols: 1, retry, tile: false }];
   }
@@ -678,7 +677,7 @@
     const view = Math.min(video.videoWidth, video.videoHeight);
     const box = Math.max(maxX - minX, maxY - minY, 64);
     lastHitBox = box;
-    if (highMultiLayout && codes.length < 3) {
+    if (highMultiLayout && codes.length < 4) {
       highScanRoi = centerSquareSource();
     } else if (box >= view * HIGH_CLOSE_BOX_RATIO && !highMultiLayout) {
       highScanRoi = inflateRect({
@@ -752,7 +751,7 @@
   function rememberTilesFromHits(codes, origin) {
     const fresh = tilesFromHits(codes, origin);
     for (const tile of fresh) mergeTrackedTile(tile);
-    if (highTrackedTiles && highTrackedTiles.length < 2) highTrackedTiles = null;
+    if (!highMultiLayout && highTrackedTiles && highTrackedTiles.length < 2) highTrackedTiles = null;
   }
 
   function mergeTrackedTile(tile) {
