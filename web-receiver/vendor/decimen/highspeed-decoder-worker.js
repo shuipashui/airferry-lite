@@ -5,11 +5,12 @@ let captureCanvas = null;
 let captureContext = null;
 
 async function bridgeMessage(event) {
-  const { bitmap, id, maxSymbols, retryBinarizer } = event.data || {};
-  if (!bitmap) {
+  const data = event.data || {};
+  if (data.lum || !data.bitmap) {
     decodeMessage(event);
     return;
   }
+  const { bitmap, id, maxSymbols, retryBinarizer } = data;
 
   try {
     const width = bitmap.width;

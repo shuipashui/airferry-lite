@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v32";
+  const RECEIVER_BUILD = "v33";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -142,6 +142,8 @@
   let lastDecodeBackend = "—";
   let lastWorkerCount = 0;
   let captureViaCanvas = false;
+  let lastUsedLuma = false;
+  let lumaUnavailable = false;
   let highQuadCursor = 0;
   let highScanRoi = null;
   let highTrackedTiles = null;
@@ -217,6 +219,8 @@
         cameraRequestedFps = 60;
         stream = await navigator.mediaDevices.getUserMedia({ video: { ...camera, frameRate: { ideal: 60, max: 60 } }, audio: false });
       }
+      lastUsedLuma = false;
+      lumaUnavailable = false;
       startHighSpeedWorkers();
       if (highWorkers.length) {
         lastDecodeBackend = "AFL2 WASM Worker";
@@ -287,6 +291,8 @@
     highBitmapLock = false;
     highLocateLock = false;
     highLocateTick = 0;
+    lastUsedLuma = false;
+    lumaUnavailable = false;
     startBtn.disabled = false;
     stopBtn.disabled = true;
   }
@@ -480,6 +486,11 @@
       highLocateTick += 1;
       if (locked < 4 ? highLocateTick % 3 === 1 : highLocateTick % HIGH_LOCATE_EVERY === 0) void locateQuadWithNative();
     }
+    const probeMulti = !highMultiLayout && lastHitBox < 700 && highScanMisses > 0 && highScanMisses % HIGH_FULL_SCAN_EVERY_MISSES === 0;
+    if (highMultiLayout || probeMulti) {
+      await scanQuadFromLuma();
+      return;
+    }
     let jobs;
     try {
       jobs = nextHighScanJobs();
@@ -665,7 +676,208 @@
     highTrackedTiles = slotTilesByCluster(current);
   }
 
+  function evenRect(x, y, width, height, maxW, maxH) {
+    x = Math.max(0, x & ~1);
+    y = Math.max(0, y & ~1);
+    width = Math.max(2, Math.min(maxW - x, width) & ~1);
+    height = Math.max(2, Math.min(maxH - y, height) & ~1);
+    return { x, y, width, height };
+  }
+
+  async function grabLumaRegion(source) {
+    if (lumaUnavailable || typeof VideoFrame !== "function") return null;
+    let frame = null;
+    try {
+      frame = new VideoFrame(video);
+      const vis = frame.visibleRect || {
+        x: 0,
+        y: 0,
+        width: frame.codedWidth || frame.displayWidth || video.videoWidth,
+        height: frame.codedHeight || frame.displayHeight || video.videoHeight
+      };
+      const vw = Math.max(1, video.videoWidth || vis.width);
+      const vh = Math.max(1, video.videoHeight || vis.height);
+      const scaleX = vis.width / vw;
+      const scaleY = vis.height / vh;
+      const rect = evenRect(
+        vis.x + Math.round(source.x * scaleX),
+        vis.y + Math.round(source.y * scaleY),
+        Math.round(source.width * scaleX),
+        Math.round(source.height * scaleY),
+        vis.x + vis.width,
+        vis.y + vis.height
+      );
+      const extractY = async (format) => {
+        const opts = { format, rect };
+        const buf = new Uint8Array(frame.allocationSize(opts));
+        const planes = await frame.copyTo(buf, opts);
+        const yPlane = planes && planes[0];
+        const offset = yPlane?.offset || 0;
+        const stride = yPlane?.stride || rect.width;
+        if (stride === rect.width) return buf.subarray(offset, offset + rect.width * rect.height);
+        const lum = new Uint8Array(rect.width * rect.height);
+        for (let row = 0; row < rect.height; row += 1) {
+          const start = offset + row * stride;
+          lum.set(buf.subarray(start, start + rect.width), row * rect.width);
+        }
+        return lum;
+      };
+      let lum = null;
+      for (const format of ["I420", "NV12"]) {
+        try {
+          lum = await extractY(format);
+          break;
+        } catch (_) {}
+      }
+      frame.close();
+      frame = null;
+      if (!lum) throw new Error("no-y");
+      lastUsedLuma = true;
+      return {
+        lum,
+        width: rect.width,
+        height: rect.height,
+        x: (rect.x - vis.x) / scaleX,
+        y: (rect.y - vis.y) / scaleY,
+        regionW: rect.width / scaleX,
+        regionH: rect.height / scaleY
+      };
+    } catch (_) {
+      try { frame?.close(); } catch (ignore) {}
+      lumaUnavailable = true;
+      lastUsedLuma = false;
+      return null;
+    }
+  }
+
+  function cropLuma(packed, tile) {
+    const sx = packed.width / Math.max(packed.regionW || packed.width, 1);
+    const sy = packed.height / Math.max(packed.regionH || packed.height, 1);
+    const x = Math.max(0, Math.round((tile.x - packed.x) * sx));
+    const y = Math.max(0, Math.round((tile.y - packed.y) * sy));
+    const width = Math.max(1, Math.min(Math.round(tile.width * sx), packed.width - x));
+    const height = Math.max(1, Math.min(Math.round(tile.height * sy), packed.height - y));
+    if (width < 16 || height < 16) return null;
+    const lum = new Uint8Array(width * height);
+    for (let row = 0; row < height; row += 1) {
+      const start = (y + row) * packed.width + x;
+      lum.set(packed.lum.subarray(start, start + width), row * width);
+    }
+    return {
+      lum,
+      width,
+      height,
+      source: {
+        x: packed.x + x / sx,
+        y: packed.y + y / sy,
+        width: width / sx,
+        height: height / sy
+      }
+    };
+  }
+
+  function downscaleLuma(lum, width, height, maxSide) {
+    const scale = Math.min(1, maxSide / Math.max(width, height, 1));
+    if (scale >= 0.995) return { lum, width, height };
+    const nextW = Math.max(1, Math.round(width * scale));
+    const nextH = Math.max(1, Math.round(height * scale));
+    const out = new Uint8Array(nextW * nextH);
+    for (let row = 0; row < nextH; row += 1) {
+      const srcY = Math.min(height - 1, Math.round(row / scale));
+      for (let col = 0; col < nextW; col += 1) {
+        const srcX = Math.min(width - 1, Math.round(col / scale));
+        out[row * nextW + col] = lum[srcY * width + srcX];
+      }
+    }
+    return { lum: out, width: nextW, height: nextH };
+  }
+
+  function postLumaToWorker(slot, sized, source, maxSymbols, retryBinarizer) {
+    highWorkerBusy[slot] = true;
+    highWorkerStartedAt[slot] = performance.now();
+    lastPostedScanSize = Math.max(sized.width, sized.height);
+    const id = ++highFrameId;
+    const copy = sized.lum.byteOffset === 0 && sized.lum.byteLength === sized.lum.buffer.byteLength
+      ? sized.lum
+      : sized.lum.slice();
+    highDecodeMeta.set(id, {
+      x: source.x,
+      y: source.y,
+      srcW: source.width,
+      srcH: source.height,
+      outW: sized.width,
+      outH: sized.height,
+      postedAt: performance.now()
+    });
+    highWorkers[slot].postMessage({
+      id,
+      lum: copy.buffer,
+      w: sized.width,
+      h: sized.height,
+      maxSymbols,
+      retryBinarizer
+    }, [copy.buffer]);
+    return true;
+  }
+
+  async function scanQuadFromLuma() {
+    const freeSlots = [];
+    for (let index = 0; index < highWorkers.length; index += 1) {
+      if (!highWorkerBusy[index] && highWorkerReady[index]) freeSlots.push(index);
+    }
+    if (!freeSlots.length) {
+      workerBusyDrops += 1;
+      return;
+    }
+    const src = centerSquareSource();
+    const retry = highScanMisses >= 2;
+    highBitmapLock = true;
+    let packed = null;
+    try {
+      packed = await grabLumaRegion(src);
+    } finally {
+      highBitmapLock = false;
+    }
+    if (!packed) {
+      const job = nextHighScanJobs()[0];
+      const slot = freeSlots[0];
+      highBitmapLock = true;
+      try {
+        await postHighSpeedRegion(slot, job.source, job.maxSymbols, job.retry, job.tile);
+      } catch (_) {
+        highWorkerBusy[slot] = false;
+      } finally {
+        highBitmapLock = false;
+      }
+      return;
+    }
+    const slots = inferMissingQuadTiles(highTrackedTiles);
+    const fallback = exclusiveQuadrants({
+      x: packed.x,
+      y: packed.y,
+      width: packed.regionW || packed.width,
+      height: packed.regionH || packed.height
+    });
+    for (const workerSlot of freeSlots) {
+      const quad = highQuadCursor % 4;
+      highQuadCursor = (highQuadCursor + 1) % 4;
+      const tile = clampScanRegion(slots[quad] || fallback[quad]);
+      const cropped = cropLuma(packed, tile);
+      if (!cropped) continue;
+      const sized = downscaleLuma(cropped.lum, cropped.width, cropped.height, HIGH_TILE_SIZE);
+      postLumaToWorker(workerSlot, sized, cropped.source, 1, retry);
+    }
+  }
+
   async function postHighSpeedRegion(slot, source, maxSymbols, retryBinarizer, tile) {
+    const cap = scanSizeForSource(source, tile);
+    const smallEnough = Math.max(source.width, source.height) <= cap + 1 || source.width * source.height <= HIGH_TILE_SIZE * HIGH_TILE_SIZE * 2;
+    const luma = smallEnough ? await grabLumaRegion(source) : null;
+    if (luma && (Math.max(luma.width, luma.height) <= cap + 1 || luma.width * luma.height <= HIGH_TILE_SIZE * HIGH_TILE_SIZE * 2)) {
+      const sized = downscaleLuma(luma.lum, luma.width, luma.height, cap);
+      return postLumaToWorker(slot, sized, { x: luma.x, y: luma.y, width: luma.regionW || luma.width, height: luma.regionH || luma.height }, maxSymbols, retryBinarizer);
+    }
+    lastUsedLuma = false;
     highWorkerBusy[slot] = true;
     highWorkerStartedAt[slot] = performance.now();
     const scanSize = scanSizeForSource(source, tile);
@@ -1042,6 +1254,7 @@
     highLocateLock = false;
     highLocateTick = 0;
     highQuadCursor = 0;
+    lastUsedLuma = false;
     highDecodeMeta.clear();
     highUniqueFrames = 0;
     highInvalidFrames = 0;
@@ -1565,7 +1778,7 @@
     const fpsRange = fpsCapability
       ? ((fpsCapability.min ?? "?") + "-" + (fpsCapability.max ?? "?"))
       : "未知";
-    const backend = highWorkers.length ? "AFL2 WASM Worker" : lastDecodeBackend;
+    const backend = highWorkers.length ? (lastUsedLuma ? "AFL2 zxing-cpp Y" : "AFL2 WASM RGBA") : lastDecodeBackend;
     const workerCount = highWorkers.length || lastWorkerCount;
     const avgDecode = decodeSamples ? (decodeTimeMs / decodeSamples).toFixed(1) + " ms" : "—";
     diagnosticsEl.textContent = [

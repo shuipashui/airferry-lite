@@ -14,7 +14,7 @@ const multiWorker = await fs.readFile(new URL("../vendor/decimen/multi-decoder-w
 new vm.Script(source);
 new vm.Script(storage);
 new vm.Script(worker);
-assert.ok(multiWorker.includes("f.data.maxSymbols"), "multi-code worker was not generated");
+assert.ok(multiWorker.includes("d.lum") && multiWorker.includes("d.maxSymbols"), "multi-code worker must expand Y-plane luma and accept a per-frame symbol limit");
 assert.ok(multiWorker.includes("tryHarder:false") && multiWorker.includes("tryRotate:false"), "WASM decoder must skip extra screen-search passes");
 assert.ok(multiWorker.includes("tryInvert:false"), "WASM decoder must not invert screen QR codes");
 assert.ok(multiWorker.includes("GlobalHistogram") && multiWorker.includes("retryBinarizer"), "WASM decoder must retry GlobalHistogram only when asked");
@@ -51,7 +51,13 @@ for (const needle of [
   ,"const HIGH_ACQUIRE_SIZE = 1440;"
   ,"const HIGH_TRACK_SIZE = 960;"
   ,"const HIGH_TILE_SIZE = 720;"
-  ,"const RECEIVER_BUILD = \"v32\";"
+  ,"const RECEIVER_BUILD = \"v33\";"
+  ,"function grabLumaRegion"
+  ,"function cropLuma"
+  ,"function downscaleLuma"
+  ,"function postLumaToWorker"
+  ,"function scanQuadFromLuma"
+  ,"lum: copy.buffer"
   ,"function locateQuadWithNative"
   ,"function nativeCodesToTiles"
   ,"function mergeVideoTiles"
@@ -86,7 +92,7 @@ for (const needle of [
   ,"elapsed < 1000"
   ," · 每帧 "
 ]) assert.ok(source.includes(needle), "missing receiver guard: " + needle);
-assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v32";'), "service worker cache version was not bumped");
+assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v33";'), "service worker cache version was not bumped");
 assert.ok(serviceWorker.includes('path.endsWith(".wasm")'), "service worker must cache WASM/worker files instead of no-store");
 assert.ok(serviceWorker.includes('"./highspeed-protocol.js"') && serviceWorker.includes('"./vendor/decimen/highspeed-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/multi-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/zxing_reader-EOacYbLr.wasm"'), "high-speed receiver assets are not cached");
 assert.equal(mirrorSource, source, "web-receiver app.js drifted from the published root receiver");

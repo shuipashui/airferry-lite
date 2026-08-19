@@ -68,10 +68,12 @@ assert.equal(qr.getModuleCount(), 177, "2953-byte frame must fit QR V40-L");
   assert.ok(worker.includes("SPDX-License-Identifier: MIT"));
   assert.ok(workerBridge.includes('importScripts("./multi-decoder-worker.js")'));
   assert.ok(workerBridge.includes("maxSymbols"), "bitmap bridge must forward maxSymbols to the WASM decoder");
+  assert.ok(workerBridge.includes("data.lum"), "bitmap bridge must forward packed luma without a canvas round-trip");
   const publishedApp = fs.readFileSync(new URL("../app.js", import.meta.url), "utf8");
   assert.ok(publishedApp.includes('new Worker("vendor/decimen/highspeed-decoder-worker.js")'), "WASM worker must start from vendor/decimen so locateFile finds the wasm");
   const multiWorker = fs.readFileSync(new URL("../vendor/decimen/multi-decoder-worker.js", import.meta.url), "utf8");
-  assert.ok(multiWorker.includes("f.data.maxSymbols"), "multi-code worker must accept a per-frame symbol limit");
+  assert.ok(multiWorker.includes("d.maxSymbols"), "multi-code worker must accept a per-frame symbol limit");
+  assert.ok(multiWorker.includes("d.lum") && multiWorker.includes("new ImageData(rgba,M,c)"), "multi-code worker must expand Y-plane luma to RGBA for zxing-wasm 2.2.4");
   let bridgedMessage = null;
   const bridgeSelf = {
     onmessage: null,
@@ -83,6 +85,10 @@ assert.equal(qr.getModuleCount(), 177, "2953-byte frame must fit QR V40-L");
   });
   await bridgeSelf.onmessage({ data: { id: 77, buf: new ArrayBuffer(4), w: 1, h: 1 } });
   assert.equal(bridgedMessage.id, 77, "worker bridge did not forward messages to the warmed decoder");
+  await bridgeSelf.onmessage({ data: { id: 88, lum: new ArrayBuffer(8), w: 2, h: 4, maxSymbols: 1 } });
+  assert.equal(bridgedMessage.id, 88, "worker bridge must forward luma payloads without a canvas round-trip");
+  assert.equal(bridgedMessage.w, 2);
+  assert.ok(bridgedMessage.lum);
 
 const template = fs.readFileSync(new URL("../sender/template.html", import.meta.url), "utf8");
 const sender = fs.readFileSync(new URL("../sender/app.js", import.meta.url), "utf8");
