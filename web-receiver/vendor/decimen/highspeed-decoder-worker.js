@@ -1,7 +1,5 @@
-/* Moves camera RGBA extraction off the page's main thread before ZXing WASM decoding.
-   Prefer vendor/decimen/highspeed-decoder-worker.js as the Worker URL so the WASM
-   file resolves next to this script. This root entry exists for older cached pages. */
-importScripts("vendor/decimen/multi-decoder-worker.js");
+/* Bitmap/RGBA bridge. Must live next to zxing_reader-*.wasm so relative locateFile works. */
+importScripts("./multi-decoder-worker.js");
 const decodeMessage = self.onmessage;
 let captureCanvas = null;
 let captureContext = null;

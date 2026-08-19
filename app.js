@@ -38,7 +38,7 @@
   const MAX_CHUNK_SIZE = 4096;
   const HIGH_SPEED_WORKERS = (navigator.hardwareConcurrency || 0) >= 8 ? 3 : 2;
   const HIGH_WORKER_TIMEOUT = 2500;
-  const HIGH_SCAN_SIZE = 800;
+  const HIGH_SCAN_SIZE = 1280;
   const HIGH_FULL_SCAN_EVERY_MISSES = 12;
 
   let stream = null;
@@ -110,6 +110,9 @@
   let lastCaptureFps = 0;
   let lastDecodeFps = 0;
   let lastValidFps = 0;
+  let lastDecodeBackend = "—";
+  let lastWorkerCount = 0;
+  let captureViaCanvas = /Android/i.test(navigator.userAgent || "");
 
   startBtn.onclick = start;
   stopBtn.onclick = stop;
@@ -176,6 +179,13 @@
         stream = await navigator.mediaDevices.getUserMedia({ video: { ...camera, frameRate: { ideal: 60, max: 60 } }, audio: false });
       }
       startHighSpeedWorkers();
+      if (highWorkers.length) {
+        lastDecodeBackend = "AFL2 WASM Worker";
+        lastWorkerCount = highWorkers.length;
+      } else {
+        lastDecodeBackend = barcodeDetector ? "BarcodeDetector" : (workerDisabled ? "jsQR 主线程" : "AFL1 Worker");
+        lastWorkerCount = 0;
+      }
       if (!highWorkers.length && !barcodeDetector && typeof window.jsQR !== "function") throw new Error("DecoderUnavailable");
       resetScanStats();
       configureCameraTrack(stream);
@@ -340,7 +350,7 @@
   }
 
   function startHighSpeedWorker(index) {
-    const worker = new Worker("highspeed-decoder-worker.js");
+    const worker = new Worker("vendor/decimen/highspeed-decoder-worker.js");
     highWorkers[index] = worker;
     highWorkerBusy[index] = false;
     highWorkerReady[index] = false;
@@ -397,6 +407,8 @@
   function disableHighSpeedWorkers() {
     stopHighSpeedWorkers();
     highWorkersDisabled = true;
+    lastDecodeBackend = barcodeDetector ? "BarcodeDetector" : (workerDisabled ? "jsQR 主线程" : "AFL1 Worker");
+    lastWorkerCount = 0;
     if (stream) status.textContent = "高速解码器不可用，已切换兼容扫描";
   }
 
@@ -413,13 +425,15 @@
     }
     highWorkerBusy[slot] = true;
     highWorkerStartedAt[slot] = now;
+    if (highScanMisses >= HIGH_FULL_SCAN_EVERY_MISSES) captureViaCanvas = true;
     const source = getHighSpeedSource();
     const scale = Math.min(1, HIGH_SCAN_SIZE / Math.max(source.width, source.height));
     const width = Math.max(1, Math.round(source.width * scale));
     const height = Math.max(1, Math.round(source.height * scale));
     try {
       const id = ++highFrameId;
-      if (typeof createImageBitmap === "function" && typeof OffscreenCanvas === "function") {
+      const useBitmap = !captureViaCanvas && typeof createImageBitmap === "function" && typeof OffscreenCanvas === "function";
+      if (useBitmap) {
         const bitmap = await createImageBitmap(video, source.x, source.y, source.width, source.height, {
           resizeWidth: width,
           resizeHeight: height,
@@ -436,6 +450,7 @@
       const image = ctx.getImageData(0, 0, width, height);
       highWorkers[slot].postMessage({ id, buf: image.data.buffer, w: width, h: height }, [image.data.buffer]);
     } catch (_) {
+      captureViaCanvas = true;
       restartHighSpeedWorker(slot);
     }
   }
@@ -966,19 +981,16 @@
     const fpsRange = fpsCapability
       ? ((fpsCapability.min ?? "?") + "-" + (fpsCapability.max ?? "?"))
       : "未知";
-    const backend = highWorkers.length
-      ? "AFL2 WASM Worker"
-      : barcodeDetector
-        ? "BarcodeDetector"
-        : workerDisabled ? "jsQR 主线程" : "AFL1 Worker";
+    const backend = highWorkers.length ? "AFL2 WASM Worker" : lastDecodeBackend;
+    const workerCount = highWorkers.length || lastWorkerCount;
     const avgDecode = decodeSamples ? (decodeTimeMs / decodeSamples).toFixed(1) + " ms" : "—";
     diagnosticsEl.textContent = [
       "相机：" + (settings.width || video.videoWidth || "?") + "×" + (settings.height || video.videoHeight || "?") +
         " · 实际/报告 " + (cameraFrameRate || settings.frameRate || "?") + " FPS · 请求上限 " + cameraRequestedFps,
       "相机能力：FPS " + fpsRange + " · facingMode " + (settings.facingMode || "未知"),
       "实时：采集 " + lastCaptureFps.toFixed(1) + " · 分析 " + lastDecodeFps.toFixed(1) + " · 有效码 " + lastValidFps.toFixed(1) + " FPS",
-      "解码：" + backend + " · Worker " + highWorkers.length + " · 平均 " + avgDecode,
-      "调度：Worker 就绪 " + highWorkerReady.filter(Boolean).length + "/" + highWorkers.length +
+      "解码：" + backend + " · Worker " + workerCount + " · 平均 " + avgDecode,
+      "调度：Worker 就绪 " + highWorkerReady.filter(Boolean).length + "/" + workerCount +
         " · 忙时丢弃 " + workerBusyDrops + " · 重启 " + workerRestarts + " · 错误 " + workerErrors +
         " · 连续未识别 " + highScanMisses,
       "协议：识别 " + highFramesSeen + " · 唯一 " + highUniqueFrames + " · 重复 " + highDuplicateFrames +

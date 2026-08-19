@@ -6,10 +6,13 @@ import androidx.camera.core.ImageProxy
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.DecodeHintType
+import com.google.zxing.LuminanceSource
 import com.google.zxing.MultiFormatReader
 import com.google.zxing.PlanarYUVLuminanceSource
+import com.google.zxing.ReaderException
 import com.google.zxing.Result
 import com.google.zxing.ResultMetadataType
+import com.google.zxing.common.GlobalHistogramBinarizer
 import com.google.zxing.common.HybridBinarizer
 import java.nio.ByteBuffer
 import java.util.ArrayDeque
@@ -52,9 +55,12 @@ private data class ScanRegion(val left: Int, val top: Int, val width: Int, val h
 private data class LumaFrame(
     val bytes: ByteArray,
     val region: ScanRegion,
+    val lumaWidth: Int,
+    val lumaHeight: Int,
     val imageWidth: Int,
     val imageHeight: Int,
-    val sequence: Long
+    val sequence: Long,
+    val scale: Int = 1
 )
 
 /** Keeps CameraX non-blocking, reuses luma buffers and tracks the last decoded QR region. */
@@ -103,7 +109,7 @@ class QrFrameAnalyzer(
         val frame = try {
             val plane = image.planes[0]
             copyLumaRegion(plane.buffer, plane.rowStride, plane.pixelStride, region, bytes)
-            LumaFrame(bytes, region, image.width, image.height, sequence)
+            LumaFrame(bytes, region, region.width, region.height, image.width, image.height, sequence)
         } catch (_: Exception) {
             releaseBuffer(bytes)
             availableWorkers.release()
@@ -115,16 +121,18 @@ class QrFrameAnalyzer(
         try {
             submittedFrames.incrementAndGet()
             decodeExecutor.execute {
+                var scaled = frame
                 try {
                     val started = System.nanoTime()
-                    val results = decode(frame)
+                    scaled = maybeDownscale(frame)
+                    val results = decode(scaled)
                     decodeNanos.addAndGet(System.nanoTime() - started)
                     decodeSamples.incrementAndGet()
                     decodedInWindow.incrementAndGet()
                     if (results.isNotEmpty()) {
                         roiMisses.set(0)
                         validQrInWindow.addAndGet(results.size.toLong())
-                        if (!multiLayout.get()) updateTrackedRegion(results, frame)
+                        if (!multiLayout.get()) updateTrackedRegion(results, scaled)
                         if (multiLayout.get() || frame.sequence % LEGACY_MULTI_SCAN_EVERY == 0L) {
                             multiHits.addAndGet(results.size.toLong())
                         } else {
@@ -139,6 +147,7 @@ class QrFrameAnalyzer(
                         }
                     }
                 } finally {
+                    if (scaled.bytes !== frame.bytes) releaseBuffer(scaled.bytes)
                     releaseBuffer(frame.bytes)
                     availableWorkers.release()
                 }
@@ -172,19 +181,28 @@ class QrFrameAnalyzer(
         return ScanRegion((width - side) / 2, (height - side) / 2, side, side)
     }
 
+    private fun maybeDownscale(frame: LumaFrame): LumaFrame {
+        val scale = LumaScaler.scaleFactor(frame.lumaWidth, frame.lumaHeight, multiLayout.get())
+        if (scale == 1) return frame
+        val outWidth = frame.lumaWidth / scale
+        val outHeight = frame.lumaHeight / scale
+        val scaled = acquireBuffer(outWidth * outHeight)
+        LumaScaler.downscale(frame.bytes, frame.lumaWidth, frame.lumaHeight, scale, scaled)
+        return frame.copy(bytes = scaled, lumaWidth = outWidth, lumaHeight = outHeight, scale = scale)
+    }
+
     private fun decode(frame: LumaFrame): List<Result> {
         val source = PlanarYUVLuminanceSource(
             frame.bytes,
-            frame.region.width,
-            frame.region.height,
+            frame.lumaWidth,
+            frame.lumaHeight,
             0,
             0,
-            frame.region.width,
-            frame.region.height,
+            frame.lumaWidth,
+            frame.lumaHeight,
             false
         )
         val reader = readers.get() ?: return emptyList()
-        val sequence = frame.sequence
         return try {
             if (multiLayout.get()) {
                 multiScans.incrementAndGet()
@@ -193,36 +211,46 @@ class QrFrameAnalyzer(
             // Keep the hot path on ZXing's single-code decoder. A full
             // multi-code search is considerably more expensive on Android's
             // Java decoder and used to starve analysis at high camera FPS.
-            if (sequence % LEGACY_MULTI_SCAN_EVERY != 0L) {
-                listOf(reader.decodeWithState(BinaryBitmap(HybridBinarizer(source))))
+            if (frame.sequence % LEGACY_MULTI_SCAN_EVERY != 0L) {
+                listOfNotNull(decodeSingle(reader, source))
             } else {
                 multiScans.incrementAndGet()
                 try {
                     val multiple = com.google.zxing.multi.GenericMultipleBarcodeReader(reader)
                     multiple.decodeMultiple(BinaryBitmap(HybridBinarizer(source))).toList()
-                } catch (_: Exception) {
-                    decodeErrors.incrementAndGet()
+                } catch (_: ReaderException) {
                     reader.reset()
-                    listOf(reader.decodeWithState(BinaryBitmap(HybridBinarizer(source))))
+                    listOfNotNull(decodeSingle(reader, source))
                 }
             }
-        } catch (_: Exception) {
-            decodeErrors.incrementAndGet()
-            try {
-                reader.reset()
-                listOf(reader.decodeWithState(BinaryBitmap(HybridBinarizer(source))))
-            } catch (_: Exception) {
-                decodeErrors.incrementAndGet()
-                emptyList()
-            }
+        } catch (error: Exception) {
+            if (error !is ReaderException) decodeErrors.incrementAndGet()
+            emptyList()
         } finally {
             reader.reset()
         }
     }
 
+    private fun decodeSingle(reader: MultiFormatReader, source: LuminanceSource): Result? {
+        reader.reset()
+        try {
+            return reader.decodeWithState(BinaryBitmap(HybridBinarizer(source)))
+        } catch (_: ReaderException) {
+            // HybridBinarizer's 8×8 windows fight V40 modules that are ~8px
+            // on a 1440p crop. Histogram fallback is cheap and better for
+            // a bright, uniform laptop screen.
+        }
+        reader.reset()
+        return try {
+            reader.decodeWithState(BinaryBitmap(GlobalHistogramBinarizer(source)))
+        } catch (_: ReaderException) {
+            null
+        }
+    }
+
     private fun decodeQuadrants(frame: LumaFrame, reader: MultiFormatReader): List<Result> {
-        val width = frame.region.width
-        val height = frame.region.height
+        val width = frame.lumaWidth
+        val height = frame.lumaHeight
         val halfWidth = width / 2
         val halfHeight = height / 2
         val output = ArrayList<Result>(4)
@@ -232,22 +260,17 @@ class QrFrameAnalyzer(
                 val top = row * halfHeight
                 val cropWidth = if (column == 0) halfWidth else width - left
                 val cropHeight = if (row == 0) halfHeight else height - top
-                try {
-                    reader.reset()
-                    val source = PlanarYUVLuminanceSource(
-                        frame.bytes,
-                        width,
-                        height,
-                        left,
-                        top,
-                        cropWidth,
-                        cropHeight,
-                        false
-                    )
-                    output += reader.decodeWithState(BinaryBitmap(HybridBinarizer(source)))
-                } catch (_: Exception) {
-                    // Quadrants are independent; preserve codes already found.
-                }
+                val source = PlanarYUVLuminanceSource(
+                    frame.bytes,
+                    width,
+                    height,
+                    left,
+                    top,
+                    cropWidth,
+                    cropHeight,
+                    false
+                )
+                decodeSingle(reader, source)?.let { output += it }
             }
         }
         return output
@@ -265,10 +288,11 @@ class QrFrameAnalyzer(
         val spanY = max(32.0, maxY - minY)
         val marginX = spanX * ROI_MARGIN
         val marginY = spanY * ROI_MARGIN
-        val left = frame.region.left + (minX - marginX).roundToInt()
-        val top = frame.region.top + (minY - marginY).roundToInt()
-        val right = frame.region.left + (maxX + marginX).roundToInt()
-        val bottom = frame.region.top + (maxY + marginY).roundToInt()
+        val scale = frame.scale.coerceAtLeast(1)
+        val left = frame.region.left + (minX * scale - marginX * scale).roundToInt()
+        val top = frame.region.top + (minY * scale - marginY * scale).roundToInt()
+        val right = frame.region.left + (maxX * scale + marginX * scale).roundToInt()
+        val bottom = frame.region.top + (maxY * scale + marginY * scale).roundToInt()
         val candidate = ScanRegion(left, top, max(MIN_ROI_SIZE, right - left), max(MIN_ROI_SIZE, bottom - top))
         trackedRegion.set(clampRegion(candidate, frame.imageWidth, frame.imageHeight))
     }

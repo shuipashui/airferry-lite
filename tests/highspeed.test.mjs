@@ -63,10 +63,12 @@ qr.make(4);
 assert.equal(qr.getModuleCount(), 177, "2953-byte frame must fit QR V40-L");
 
   const worker = fs.readFileSync(new URL("../vendor/decimen/decoder-worker.js", import.meta.url), "utf8");
-  const workerBridge = fs.readFileSync(new URL("../highspeed-decoder-worker.js", import.meta.url), "utf8");
+  const workerBridge = fs.readFileSync(new URL("../vendor/decimen/highspeed-decoder-worker.js", import.meta.url), "utf8");
   assert.ok(worker.includes("zxing_reader-EOacYbLr.wasm"));
   assert.ok(worker.includes("SPDX-License-Identifier: MIT"));
-  assert.ok(workerBridge.includes('importScripts("vendor/decimen/multi-decoder-worker.js")'));
+  assert.ok(workerBridge.includes('importScripts("./multi-decoder-worker.js")'));
+  const publishedApp = fs.readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  assert.ok(publishedApp.includes('new Worker("vendor/decimen/highspeed-decoder-worker.js")'), "WASM worker must start from vendor/decimen so locateFile finds the wasm");
   const multiWorker = fs.readFileSync(new URL("../vendor/decimen/multi-decoder-worker.js", import.meta.url), "utf8");
   assert.ok(multiWorker.includes("maxNumberOfSymbols:4"), "multi-code worker must request up to four symbols");
   let bridgedMessage = null;

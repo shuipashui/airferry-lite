@@ -240,6 +240,7 @@ class MainActivity : AppCompatActivity() {
             )
             .setTargetRotation(rotation)
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
         if (fpsRange != null) {
             Camera2Interop.Extender(builder).setCaptureRequestOption(
                 CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
@@ -386,7 +387,7 @@ class MainActivity : AppCompatActivity() {
         val now = SystemClock.elapsedRealtime()
         val highAge = if (highLastFrameAt == 0L) "—" else "${(now - highLastFrameAt).coerceAtLeast(0)} ms"
         diagnosticsText.text = listOf(
-            "设备：${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} · App 0.7.0",
+            "设备：${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} · App 0.7.1",
             "相机：${stats?.width ?: "?"}×${stats?.height ?: "?"} · 采集 ${stats?.captureFps?.let { "%.1f".format(it) } ?: "?"} FPS · 目标 ${preferredFpsLabel()}",
             "分析流 FPS：$availableCameraFpsLabel",
             "高速录像能力：$highSpeedCameraFpsLabel（CameraX 分析流不可直接使用）",
