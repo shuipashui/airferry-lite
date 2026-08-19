@@ -54,7 +54,7 @@ for (const needle of [
   ,"const HIGH_QUAD_TILE_SIZE = 720;"
   ,">= 4 ? 4 : 2"
   ,"!/Android/i.test(navigator.userAgent || \"\")"
-  ,"const RECEIVER_BUILD = \"v43\";"
+  ,"const RECEIVER_BUILD = \"v44\";"
   ,"function grabLumaRegion"
   ,"function cropLuma"
   ,"function downscaleLuma"
@@ -77,7 +77,9 @@ for (const needle of [
   ,"else highScanRoi = next"
   ,"overlappingQuadrants(chooseQuadRegion())"
   ,"const useLuma"
-  ,"previous.length < 4"
+  ,"HIGH_QUAD_TILE_MISS_LIMIT"
+  ,"inferred.length < 3 && previous.length < 2"
+  ,"unionScanCrops(inferred)"
   ,"highScanRoi = null;"
   ,"if (!androidCam)"
   ,"let startInFlight = false;"
@@ -124,7 +126,7 @@ for (const needle of [
   ," · 每帧 "
 ]) assert.ok(source.includes(needle), "missing receiver guard: " + needle);
 assert.ok(!source.includes("highMultiLayout || !highSingleConfirmed"), "single-code acquire must not be replaced by quadrant crops");
-assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v43";'), "service worker cache version was not bumped");
+assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v44";'), "service worker cache version was not bumped");
 assert.ok(serviceWorker.includes('path.endsWith(".wasm")'), "service worker must cache WASM/worker files instead of no-store");
 assert.ok(serviceWorker.includes('"./highspeed-protocol.js"') && serviceWorker.includes('"./vendor/decimen/highspeed-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/multi-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/zxing_reader-EOacYbLr.wasm"'), "high-speed receiver assets are not cached");
 assert.equal(mirrorSource, source, "web-receiver app.js drifted from the published root receiver");

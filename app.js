@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v43";
+  const RECEIVER_BUILD = "v44";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -62,7 +62,7 @@
   const HIGH_LOCATE_EVERY = 5;
   const HIGH_TILE_PAD = 1.18;
   const HIGH_QUAD_ACQUIRE_MS = 100;
-  const HIGH_QUAD_DEGRADED_MS = 400;
+  const HIGH_QUAD_TILE_MISS_LIMIT = 6;
 
   let stream = null;
   let scanTimer = 0;
@@ -556,7 +556,7 @@
       if (highWorkerBusy[index] && now - highWorkerStartedAt[index] > HIGH_WORKER_TIMEOUT) restartHighSpeedWorker(index);
     }
     const locked = highTrackedTiles ? highTrackedTiles.filter(Boolean).length : 0;
-    if (barcodeDetector && !highLocateLock && highMultiLayout && locked < 4 && now - lastNativeLocate > (locked < 2 ? HIGH_QUAD_ACQUIRE_MS : HIGH_QUAD_DEGRADED_MS)) {
+    if (barcodeDetector && !highLocateLock && highMultiLayout && locked < 4 && now - lastNativeLocate > HIGH_QUAD_ACQUIRE_MS) {
       lastNativeLocate = now;
       void locateQuadWithNative();
     }
@@ -1087,7 +1087,7 @@
   function rememberQuadHits(hits) {
     const transferHits = hits.filter(hit => transferHitKey(hit));
     if (!transferHits.length) {
-      if (highScanMisses + 1 >= 2) {
+      if (highScanMisses + 1 >= HIGH_QUAD_TILE_MISS_LIMIT) {
         highTrackedTiles = null;
         highTileProven = [false, false, false, false];
       }
@@ -1167,7 +1167,9 @@
     highGrabInFlight = true;
     void (async () => {
       try {
-        const region = chooseQuadRegion();
+        const previous = (highTrackedTiles || []).filter(Boolean).map(tile => clampScanRegion(inflateRect(tile, HIGH_TILE_PAD)));
+        const inferred = inferMissingQuadTiles(highTrackedTiles).filter(Boolean).map(tile => clampScanRegion(inflateRect(tile, HIGH_TILE_PAD)));
+        const region = inferred.length >= 3 ? unionScanCrops(inferred) : chooseQuadRegion();
         const packed = await grabPackedRegion(region);
         if (!stream || !packed) return;
         const hits = [];
@@ -1182,17 +1184,15 @@
             hits.push(hit);
           }
         };
-        const previous = (highTrackedTiles || []).filter(Boolean).map(tile => clampScanRegion(inflateRect(tile, HIGH_TILE_PAD)));
-        const inferred = inferMissingQuadTiles(highTrackedTiles).filter(Boolean).map(tile => clampScanRegion(inflateRect(tile, HIGH_TILE_PAD)));
         if (inferred.length >= 3) add(await readCropsFromPacked(packed, inferred, false));
         else if (previous.length >= 3) add(await readCropsFromPacked(packed, previous, false));
-        if (transferCount(hits) < 4 && previous.length < 4) {
+        if (transferCount(hits) < 4 && inferred.length < 3 && previous.length < 2) {
           const exclusive = exclusiveQuadrants(region);
           const overlays = overlappingQuadrants(region);
           const pending = overlays.filter((crop, index) => !tileCovered(exclusive[index], hits));
           add(await readCropsFromPacked(packed, pending, false));
         }
-        if (transferCount(hits) < 4 && previous.length < 4 && highScanMisses >= 1) {
+        if (transferCount(hits) < 4 && inferred.length < 3 && previous.length < 2 && highScanMisses >= 1) {
           const retries = exclusiveQuadrants(region)
             .filter(tile => !tileCovered(tile, hits))
             .map(tile => inflateRect(tile, 1.28));
