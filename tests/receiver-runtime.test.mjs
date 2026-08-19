@@ -124,7 +124,23 @@ const context = vm.createContext({
   document: {
     hidden: false,
     getElementById: id => elements[id],
-    addEventListener() {}
+    addEventListener() {},
+    createElement() {
+      let width = 0;
+      let height = 0;
+      return {
+        get width() { return width; },
+        set width(value) { width = value; },
+        get height() { return height; },
+        set height(value) { height = value; },
+        getContext() {
+          return {
+            drawImage() {},
+            getImageData() { return { data: new Uint8ClampedArray(4) }; }
+          };
+        }
+      };
+    }
   },
   performance: { now: () => now },
   setTimeout,

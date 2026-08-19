@@ -55,7 +55,7 @@ for (const needle of [
   ,"const HIGH_QUAD_PACKED_SIZE = 720;"
   ,">= 4 ? 4 : 2"
   ,"!/Android/i.test(navigator.userAgent || \"\")"
-  ,"const RECEIVER_BUILD = \"v52\";"
+  ,"const RECEIVER_BUILD = \"v53\";"
   ,"function grabLumaRegion"
   ,"function cropLuma"
   ,"function downscaleLuma"
@@ -75,13 +75,12 @@ for (const needle of [
   ,"highSingleConfirmed"
   ,"function lockQuadSlots"
   ,"function tileCenter"
-  ,"HIGH_TILE_TRACK"
-  ,"HIGH_QUAD_TRACK_MISS_LIMIT"
+  ,"HIGH_QUAD_FROZEN_MISS_LIMIT"
   ,"let highQuadFrozen = false;"
-  ,"if (highMultiLayout && transferHits.length)"
-  ,"if (highGrabInFlight)"
-  ,"highWorkerBusy.some(Boolean)"
-  ,"fresh.length >= 3 || locked < 3"
+  ,"if (highMultiLayout && transferHits.length && !highQuadFrozen)"
+  ,"if (highGrabInFlight || highWorkerBusy.some(Boolean))"
+  ,"if (!fresh || fresh.length < 2) return;"
+  ,"quadPackCanvas"
   ,"highGrabInFlight = false;"
   ,"highScanRoi = null;"
   ,"if (!androidCam)"
@@ -131,15 +130,16 @@ for (const needle of [
 assert.ok(!source.includes("highMultiLayout || !highSingleConfirmed"), "single-code acquire must not be replaced by quadrant crops");
 assert.ok(!source.includes("dueRelock"), "quad must not fall back to overlapping quadrants after empty misses");
 assert.ok(!source.includes("HIGH_MULTI_FULL_DECODE_EVERY"), "quad must not periodic-relock the whole ROI");
-assert.ok(source.includes("locked < 3 && now - lastNativeLocate > HIGH_QUAD_ACQUIRE_MS"), "native locate must stop once three real tiles are locked");
+assert.ok(source.includes("locked < 4 && now - lastNativeLocate > HIGH_QUAD_ACQUIRE_MS"), "native locate must stop once four tiles are locked");
 assert.ok(!source.includes("HIGH_QUAD_TRACK_MS"), "locked quad must not keep running full-frame BarcodeDetector");
 assert.ok(!source.includes("}, HIGH_TILE_PAD));"), "tracked quad boxes must not be stored with the scan pad");
 assert.ok(source.includes("if (highMultiLayout) return grabBitmapPacked(source);"), "quad packed grabs must use a single resized ImageBitmap");
 assert.ok(!source.includes("nudgeFrozenTiles"), "quad tiles must not be nudged by neighbor hits");
 assert.ok(!source.includes("HIGH_TILE_PAD_LOCK"), "quad tiles must not use a second lock pad");
-assert.ok(source.includes("locked >= 3 ? HIGH_QUAD_TRACK_MISS_LIMIT : HIGH_QUAD_TILE_MISS_LIMIT"), "tracked quad tiles must survive brief misses");
-assert.ok(source.includes("fresh.length >= 3 || locked < 3"), "quad must rebuild from three hits like the APK and keep a 3-tile lock");
-assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v52";'), "service worker cache version was not bumped");
+assert.ok(source.includes("highQuadFrozen ? HIGH_QUAD_FROZEN_MISS_LIMIT : HIGH_QUAD_TILE_MISS_LIMIT"), "frozen quad grid must survive brief handshake misses");
+assert.ok(source.includes("const useLuma = highMultiLayout &&"), "single-code scans must not use the quad luma grab");
+assert.ok(!source.includes("probeMulti"), "single-code scans must not be shredded into quad quadrants");
+assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v53";'), "service worker cache version was not bumped");
 assert.ok(serviceWorker.includes('path.endsWith(".wasm")'), "service worker must cache WASM/worker files instead of no-store");
 assert.ok(serviceWorker.includes('"./highspeed-protocol.js"') && serviceWorker.includes('"./vendor/decimen/highspeed-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/multi-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/zxing_reader-EOacYbLr.wasm"'), "high-speed receiver assets are not cached");
 assert.equal(mirrorSource, source, "web-receiver app.js drifted from the published root receiver");
