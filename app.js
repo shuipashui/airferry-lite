@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v57";
+  const RECEIVER_BUILD = "v58";
   if ("serviceWorker" in navigator) {
     let swRefreshing = false;
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
@@ -1280,12 +1280,19 @@
       highDecodeMeta.set(id, { x: source.x, y: source.y, srcW: source.width, srcH: source.height, outW: width, outH: height });
       const useBitmap = !captureViaCanvas && typeof createImageBitmap === "function" && typeof OffscreenCanvas === "function";
       if (useBitmap) {
-        const bitmap = await createImageBitmap(video, source.x, source.y, source.width, source.height, {
-          resizeWidth: width,
-          resizeHeight: height,
-          resizeQuality: "pixelated",
-          colorSpaceConversion: "none"
-        });
+        const bitmap = (!tile && !highMultiLayout)
+          ? await createImageBitmap(video, {
+              resizeWidth: width,
+              resizeHeight: height,
+              resizeQuality: "pixelated",
+              colorSpaceConversion: "none"
+            })
+          : await createImageBitmap(video, source.x, source.y, source.width, source.height, {
+              resizeWidth: width,
+              resizeHeight: height,
+              resizeQuality: "pixelated",
+              colorSpaceConversion: "none"
+            });
         const meta = highDecodeMeta.get(id);
         if (meta) meta.postedAt = performance.now();
         highWorkers[slot].postMessage({ id, bitmap, maxSymbols, retryBinarizer }, [bitmap]);
@@ -1320,12 +1327,11 @@
   function scanSizeForSource(source, tile) {
     const longest = Math.max(source.width, source.height, 64);
     if (tile || highMultiLayout) return Math.min(HIGH_TILE_SIZE, longest);
-    if (highScanRoi) return Math.min(HIGH_TRACK_SIZE, longest);
     return Math.min(HIGH_ACQUIRE_SIZE, longest);
   }
 
   function currentHighScanSize() {
-    return lastPostedScanSize || (highMultiLayout ? HIGH_QUAD_TILE_SIZE : highScanRoi ? HIGH_TRACK_SIZE : HIGH_ACQUIRE_SIZE);
+    return lastPostedScanSize || (highMultiLayout ? HIGH_QUAD_TILE_SIZE : HIGH_ACQUIRE_SIZE);
   }
 
   function centerSquareSource() {
@@ -1350,10 +1356,6 @@
   }
 
   function getHighSpeedSource() {
-    if (highScanRoi && highScanMisses < HIGH_ROI_MISS_LIMIT) {
-      if (highScanMisses > 0 && !highMultiLayout) return inflateRect(highScanRoi, 1.2 + highScanMisses * 0.2);
-      return highScanRoi;
-    }
     return fullFrameSource();
   }
 
@@ -1451,17 +1453,19 @@
       maxX = Math.max(maxX, point.x);
       maxY = Math.max(maxY, point.y);
     }
-    const view = Math.min(video.videoWidth, video.videoHeight);
     const box = Math.max(maxX - minX, maxY - minY, 64);
     lastHitBox = box;
-    const close = !highMultiLayout && box >= view * HIGH_CLOSE_BOX_RATIO;
-    const pad = close ? 1.18 : codes.length >= 4 ? 1.35 : codes.length >= 2 ? 2.15 : highMultiLayout ? 3.8 : 1.4;
-    highScanRoi = clampScanRegion({
-      x: minX - (maxX - minX) * (pad - 1) / 2,
-      y: minY - (maxY - minY) * (pad - 1) / 2,
-      width: (maxX - minX) * pad,
-      height: (maxY - minY) * pad
-    });
+    if (highMultiLayout) {
+      const pad = codes.length >= 4 ? 1.35 : codes.length >= 2 ? 2.15 : 3.8;
+      highScanRoi = clampScanRegion({
+        x: minX - (maxX - minX) * (pad - 1) / 2,
+        y: minY - (maxY - minY) * (pad - 1) / 2,
+        width: (maxX - minX) * pad,
+        height: (maxY - minY) * pad
+      });
+    } else {
+      highScanRoi = null;
+    }
     if (highMultiLayout || codes.length >= 2) rememberTilesFromHits(codes, origin);
     else if (!highMultiLayout) highTrackedTiles = null;
   }
@@ -2082,7 +2086,6 @@
   }
 
   function updateSpeed(byteCount) {
-    if (!highMultiLayout && !highScanRoi) return;
     const now = performance.now();
     if (!sessionStartedAt) sessionStartedAt = now;
     if (!speedWindowStartedAt) speedWindowStartedAt = now;
