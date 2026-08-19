@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v36";
+  const RECEIVER_BUILD = "v37";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -151,6 +151,7 @@
   let lastNativeLocate = 0;
   let highTileProven = [false, false, false, false];
   let highQuadCursor = 0;
+  let clusterHuntFlip = 0;
   let highScanRoi = null;
   let highTrackedTiles = null;
   let lastHitBox = 0;
@@ -292,6 +293,7 @@
     highTrackedTiles = null;
     lastHitBox = 0;
     highQuadCursor = 0;
+    clusterHuntFlip = 0;
     highDecodeMeta.clear();
     lastScanStartedAt = -Infinity;
     highBitmapLock = false;
@@ -541,11 +543,13 @@
   }
 
   function nextQuadSource() {
-    const slots = inferMissingQuadTiles(highTrackedTiles);
     const slot = highQuadCursor % 4;
     highQuadCursor = (highQuadCursor + 1) % 4;
-    if (slots[slot]) return clampScanRegion(slots[slot]);
-    return exclusiveQuadrants(centerSquareSource())[slot];
+    const inferred = inferMissingQuadTiles(highTrackedTiles);
+    const known = inferred[slot];
+    if (known && highTileProven[slot]) return clampScanRegion(inflateRect(known, HIGH_TILE_PAD));
+    if (known) return clampScanRegion(known);
+    return clusterHuntLayout().fallback[slot];
   }
 
   function exclusiveQuadrants(source) {
@@ -684,7 +688,7 @@
           best = index;
         }
       }
-      const radius = Math.max(tile.width, tile.height) * 0.45;
+      const radius = Math.max(tile.width, tile.height) * 0.34;
       if (best >= 0 && bestDist <= radius * radius) {
         if (!sighting) current[best] = tile;
       } else if (current.length < 4) {
@@ -697,7 +701,7 @@
       const tile = highTrackedTiles[index];
       if (!tile) continue;
       const c = tileCenter(tile);
-      const radius = Math.max(tile.width, tile.height) * 0.45;
+      const radius = Math.max(tile.width, tile.height) * 0.34;
       const near = (point) => {
         const dx = point.x - c.x;
         const dy = point.y - c.y;
@@ -944,23 +948,84 @@
     });
   }
 
+  function clusterHuntLayout() {
+    const slots = highTrackedTiles || [null, null, null, null];
+    const filled = slots.filter(Boolean);
+    if (filled.length < 2) {
+      const src = fullFrameSource();
+      return { src, fallback: exclusiveQuadrants(src) };
+    }
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    let size = 0;
+    for (const tile of filled) {
+      minX = Math.min(minX, tile.x);
+      minY = Math.min(minY, tile.y);
+      maxX = Math.max(maxX, tile.x + tile.width);
+      maxY = Math.max(maxY, tile.y + tile.height);
+      size = Math.max(size, tile.width, tile.height);
+    }
+    const cw = Math.max(1, maxX - minX);
+    const ch = Math.max(1, maxY - minY);
+    const pad = size * 0.08;
+    if (filled.length >= 3 || Math.min(cw, ch) > size * 0.75) {
+      const side = Math.max(cw, ch) + pad * 2;
+      const src = clampScanRegion({
+        x: minX + cw / 2 - side / 2,
+        y: minY + ch / 2 - side / 2,
+        width: side,
+        height: side
+      });
+      return { src, fallback: exclusiveQuadrants(src) };
+    }
+    clusterHuntFlip += 1;
+    if (slots[0] && slots[1]) {
+      const side = Math.max(cw, size * 1.92) + pad * 2;
+      const extendDown = !!(clusterHuntFlip & 1);
+      const src = clampScanRegion({
+        x: minX + cw / 2 - side / 2,
+        y: extendDown ? minY - pad : maxY + pad - side,
+        width: side,
+        height: side
+      });
+      const quads = exclusiveQuadrants(src);
+      return { src, fallback: extendDown ? quads : [quads[0], quads[1], quads[0], quads[1]] };
+    }
+    const side = Math.max(ch, size * 1.92) + pad * 2;
+    const extendRight = !!(clusterHuntFlip & 1);
+    const src = clampScanRegion({
+      x: extendRight ? minX - pad : maxX + pad - side,
+      y: minY + ch / 2 - side / 2,
+      width: side,
+      height: side
+    });
+    const quads = exclusiveQuadrants(src);
+    return { src, fallback: extendRight ? quads : [quads[0], quads[0], quads[2], quads[2]] };
+  }
+
+  function clusterQuadSource() {
+    return clusterHuntLayout().src;
+  }
+
   function nextQuadCrops(count) {
-    const src = centerSquareSource();
-    const fallback = exclusiveQuadrants(src);
-    const slots = inferMissingQuadTiles(highTrackedTiles);
-    const filled = slots.filter(Boolean).length;
+    const inferred = inferMissingQuadTiles(highTrackedTiles);
+    const locked = (highTrackedTiles || []).filter(Boolean).length;
+    const provenCount = highTileProven.filter(Boolean).length;
+    const hunt = clusterHuntLayout();
     const crops = [];
     for (let index = 0; index < 4 && crops.length < count; index += 1) {
       const quad = (highQuadCursor + index) % 4;
-      const known = slots[quad];
+      const known = inferred[quad];
       if (known) {
         crops.push(clampScanRegion(highTileProven[quad] ? inflateRect(known, HIGH_TILE_PAD) : known));
       } else {
-        crops.push(fallback[quad]);
+        crops.push(hunt.fallback[quad]);
       }
     }
     highQuadCursor = (highQuadCursor + Math.max(1, crops.length)) % 4;
-    return { crops, filled };
+    return { crops, locked, provenCount, src: hunt.src };
   }
 
   function scanQuadFromLuma() {
@@ -976,7 +1041,7 @@
     const retry = highScanMisses >= 2;
     const planned = nextQuadCrops(freeSlots.length);
     const crops = planned.crops;
-    const packedSrc = planned.filled >= 2 ? unionScanCrops(crops) : centerSquareSource();
+    const packedSrc = planned.provenCount >= 4 ? unionScanCrops(crops) : planned.src;
     highGrabInFlight = true;
     void grabPackedRegion(packedSrc).then((packed) => {
       try {
@@ -1091,7 +1156,7 @@
       if (highScanMisses > 0 && !highMultiLayout) return inflateRect(highScanRoi, 1.2 + highScanMisses * 0.2);
       return highScanRoi;
     }
-    return highMultiLayout ? centerSquareSource() : fullFrameSource();
+    return fullFrameSource();
   }
 
   function overlappingQuadrants(source) {
@@ -1191,9 +1256,7 @@
     const view = Math.min(video.videoWidth, video.videoHeight);
     const box = Math.max(maxX - minX, maxY - minY, 64);
     lastHitBox = box;
-    if (highMultiLayout && codes.length < 4) {
-      highScanRoi = centerSquareSource();
-    } else if (box >= view * HIGH_CLOSE_BOX_RATIO && !highMultiLayout) {
+    if (box >= view * HIGH_CLOSE_BOX_RATIO && !highMultiLayout) {
       highScanRoi = inflateRect({
         x: minX,
         y: minY,
@@ -1371,6 +1434,7 @@
     highLocateLock = false;
     highLocateTick = 0;
     highQuadCursor = 0;
+    clusterHuntFlip = 0;
     lastNativeLocate = 0;
     highTileProven = [false, false, false, false];
     lastUsedLuma = false;

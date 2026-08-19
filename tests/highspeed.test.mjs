@@ -96,8 +96,8 @@ assert.ok(!template.includes('id="mode"'), "legacy compatibility modes must not 
 assert.ok(!template.includes("兼容稳定") && !template.includes("兼容均衡") && !template.includes("兼容快速"));
 assert.ok(template.includes('<option value="2331" selected>'));
 assert.ok(template.includes('<option value="30" selected>'));
-assert.ok(template.includes("30 FPS（单码推荐）"));
-assert.ok(template.includes("60 FPS（四码推荐）"));
+assert.ok(template.includes("30 FPS（60 Hz 推荐）"));
+assert.ok(template.includes("60 FPS（高刷四码）"));
 assert.ok(template.includes('id="fullscreenBtn"'));
 assert.ok(template.includes('<option value="60">60 FPS'));
 assert.ok(template.includes('<option value="45">45 FPS'));
@@ -125,8 +125,10 @@ assert.ok(sender.includes("function currentLayout"));
 assert.ok(sender.includes("function renderRateHint"));
 assert.ok(sender.includes("formatRate(rate.screen)"));
 assert.ok(sender.includes("function syncFpsToLayout"));
-assert.ok(sender.includes('fps.value = "60"'));
+assert.ok(!sender.includes('fps.value = "60"'));
+assert.ok(sender.includes("60 Hz 屏上四码"));
 assert.ok(template.includes("四码请全屏"));
+assert.ok(template.includes("60 Hz 电脑用 30 FPS"));
 assert.ok(template.includes('id="openReceiver"'), "sender must link to the receiver");
 assert.ok(sender.includes("openReceiver.href = RECEIVER_URL"));
 

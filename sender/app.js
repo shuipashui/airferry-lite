@@ -435,7 +435,7 @@
     let text = "理论速度：" + formatRate(rate.screen) + "（" + rate.bytes + " B × " + rate.codes + " 码 × " + rate.fps + " FPS）· 载荷约 " + formatRate(rate.payload);
     if (rate.cell) text += " · 屏上约 " + rate.cell + " px/模块";
     if (rate.codes === 4 && rate.cell && rate.cell < 4) text += "。模块偏小，请全屏后再播";
-    if (rate.codes === 4 && rate.fps < 60) text += "。相机约 60 FPS 时，低于 60 的发送帧率会重复扫同一屏";
+    if (rate.codes === 4 && rate.fps >= 60) text += "。60 Hz 屏上四码 60 FPS 容易拖影，改用 30 FPS 通常更快";
     if (rate.codes === 1 && rate.fps > 30) text += "。单码超过 30 FPS 时相机会拍到换码拖影，通常更慢";
     if (rate.fps > 60) text += "。分析流约 60 FPS，更高发送帧率不会增加唯一码";
     if (rate.codes === 4 && rate.bytes === QUAD_MAX_FRAME_BYTES && Number(chunkSize.value) > QUAD_MAX_FRAME_BYTES) {
@@ -446,9 +446,7 @@
   }
 
   function syncFpsToLayout() {
-    if (qrMode.value === "quad") {
-      if (Number(fps.value) < 60) fps.value = "60";
-    } else if (Number(fps.value) > 30) fps.value = "30";
+    if (qrMode.value !== "quad" && Number(fps.value) > 30) fps.value = "30";
     renderRateHint();
   }
 

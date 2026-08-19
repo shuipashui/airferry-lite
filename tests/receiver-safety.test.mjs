@@ -51,7 +51,7 @@ for (const needle of [
   ,"const HIGH_ACQUIRE_SIZE = 1440;"
   ,"const HIGH_TRACK_SIZE = 960;"
   ,"const HIGH_TILE_SIZE = 720;"
-  ,"const RECEIVER_BUILD = \"v36\";"
+  ,"const RECEIVER_BUILD = \"v37\";"
   ,"function grabLumaRegion"
   ,"function cropLuma"
   ,"function downscaleLuma"
@@ -63,6 +63,10 @@ for (const needle of [
   ,"function grabPackedRegion"
   ,"function unionScanCrops"
   ,"function nextQuadCrops"
+  ,"function clusterQuadSource"
+  ,"function clusterHuntLayout"
+  ,"const src = fullFrameSource();"
+  ,"inferMissingQuadTiles(highTrackedTiles)"
   ,"let highGrabInFlight = false;"
   ,"mergeVideoTiles(tiles, true)"
   ,"lum: copy.buffer"
@@ -102,7 +106,7 @@ for (const needle of [
   ,"elapsed < 1000"
   ," · 每帧 "
 ]) assert.ok(source.includes(needle), "missing receiver guard: " + needle);
-assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v36";'), "service worker cache version was not bumped");
+assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v37";'), "service worker cache version was not bumped");
 assert.ok(serviceWorker.includes('path.endsWith(".wasm")'), "service worker must cache WASM/worker files instead of no-store");
 assert.ok(serviceWorker.includes('"./highspeed-protocol.js"') && serviceWorker.includes('"./vendor/decimen/highspeed-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/multi-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/zxing_reader-EOacYbLr.wasm"'), "high-speed receiver assets are not cached");
 assert.equal(mirrorSource, source, "web-receiver app.js drifted from the published root receiver");
