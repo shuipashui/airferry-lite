@@ -2,7 +2,7 @@
 
 本文给后续接手的人：当前能跑什么、什么不能动、哪些路已经烧死、网页怎么发到 GitHub Pages。用户向文档见 [README.md](README.md)。
 
-**交接时点：** 2026-08-20。网页接收端已从失败的 **v54** 退回 **v53**。Android APK 冻结 **0.8.12**。
+**交接时点：** 2026-08-20。网页接收端当前 **v55**（v54 四码跟踪已回退；v53 靠近单码把全图压到 720 的问题已修）。Android APK 冻结 **0.8.12**。
 
 ## 1. 项目一句话
 
@@ -26,11 +26,13 @@
 
 | 部件 | 版本 | 状态 |
 |---|---|---|
-| 网页接收端 | **v53** | 单码已达标，**单码路径不要再动** |
+| 网页接收端 | **v55** | 单码 ImageBitmap 全图 + 扫描 1440。靠近后不要再把整幅压到 720。四码仍是 v53 那套冻结格子 |
 | Android APK | **0.8.12**（versionCode 27） | 未经明确要求不要改。峰值是 **0.8.8：60 Hz 四码约 193 KB/s** |
 | 发送端 | AFL2，单文件 HTML | 60 Hz 上单码超过 30 FPS 会拉回 30；四码每码上限 **1273 B** |
 
 v54（2026-08-20）尝试「≥3 命中重排 2×2 + 格子内跟随」以提高四码每帧命中，已按要求整版回退。不要在没新证据时再合回去。
+
+v53 单码在码变大（`lastHitBox >= 700`）后仍扫全图，但把 1440×1920 压到最长边 720。V34 模块不够，解码约 64 ms，采集约 12 FPS，实时约 15 KB/s。**v55 删掉这条 720 帽**：全图用 `HIGH_ACQUIRE_SIZE` 1440，有 ROI 才用 960，四码窗口仍是 720。
 
 ## 4. 实测基线（请当回归标准）
 
@@ -44,7 +46,7 @@ v54（2026-08-20）尝试「≥3 命中重排 2×2 + 格子内跟随」以提高
 - 识别 1212 · 唯一 1207 · 重复 5 · 序列跳跃 3592 · 解块 657/1695
 - 实时 **56.1** · 平均 **48.7** · 会话 **38.0 KB/s** · 流 `…:1253:…:4:1`
 
-单码 v43/v53：ImageBitmap、全图、采集约 60、约 **60 KB/s**。用户原话：「单码好了」。
+单码 v43/v55：ImageBitmap、全图、扫描 1440、采集约 60、约 **60 KB/s**。v53 靠近后会掉到扫描 720 / 采集 12 / 约 15 KB/s，那不是回归标准。
 
 ### 网页诊断里的「每帧」
 
@@ -76,11 +78,12 @@ tests/                          npm test 串起来的协议/安全/运行时针
 
 ## 6. 硬约束（违反过就会立刻掉速或黑屏）
 
-### 单码（已冻结）
+### 单码（ImageBitmap 路径不要拆，扫描尺寸按 v55）
 
 - 不要动 `postHighSpeedRegion` 的 ImageBitmap 路径。
 - `useLuma = highMultiLayout && size <= HIGH_TILE_SIZE+16`。单码不要走四码的 VideoFrame/Y。
 - 靠近时 `highScanRoi = null`（全图），不要切竖屏中心方块（会裁掉 V34 定位点）。
+- **不要** `if (lastHitBox >= 700) return 720`。全图必须 `HIGH_ACQUIRE_SIZE` 1440，否则靠近 V34 会采集 12 FPS、解码 60+ ms。
 - 不要 `probeMulti`，不要把一张单码切成四象限。
 - 诊断第一行必须是 `网页：vN`。
 
@@ -113,16 +116,16 @@ tests/                          npm test 串起来的协议/安全/运行时针
 - 不要改 git config，不要 `--force` 推 `main`。
 - 不要 commit `.env`、密钥、`.tools/`。
 
-## 7. 网页 v53 四码实际在做什么
+## 7. 网页 v55 四码 / 单码实际在做什么
 
 - 采集：`grabBitmapPacked`，一张 `createImageBitmap`，最大 `HIGH_QUAD_PACKED_SIZE` 720，画在 **`quadPackCanvas`** 上（不是 `#scanCanvas`）。
 - 调度：`highGrabInFlight || highWorkerBusy.some(Boolean)` 就丢帧。不和 WASM 重叠抓帧。
 - 锁定：`BarcodeDetector` 仅在 `locked < 4` 且间隔 `HIGH_QUAD_ACQUIRE_MS`（100 ms）。格 4 后停止。
 - 冻结：4 个槽填满后 `highQuadFrozen`，之后**不再**用命中去 merge 格子。空窗 miss：冻结 24，未冻结 6。
 - 扫描 pad：`HIGH_TILE_PAD = 1.35`，只在 decode 时 inflate。
-- 单码：`nextHighScanJobs` 只有 `getHighSpeedSource()` / `tile: false`。
+- 单码：`nextHighScanJobs` 只有 `getHighSpeedSource()` / `tile: false`。全图扫描 1440，有 ROI 才 960。
 
-四码剩余缺口：冻结窗口不跟手抖，每帧约 0.31。下一步若还做四码，优先「只加大冻结后扫描边距、存的框不动」；不要再 nearest-neighbor，也不要再碰单码。v54 那套重建网格已经回退，重做前先用新诊断证明不会掉回格 1 / 采集 12 FPS。
+四码剩余缺口：冻结窗口不跟手抖，每帧约 0.31。下一步若还做四码，优先「只加大冻结后扫描边距、存的框不动」；不要再 nearest-neighbor。v54 那套重建网格已经回退。单码不要再加 `lastHitBox >= 700` 的 720 帽。
 
 ## 8. 发送端要点
 
@@ -151,7 +154,7 @@ tests/                          npm test 串起来的协议/安全/运行时针
 
 ## 11. 已知缺口（按优先级）
 
-1. **网页四码每帧命中**（0.31 vs APK ~2.7）。这是网页吞吐离 APK 最远的地方。单码已够用。
+1. **网页四码每帧命中**（0.31 vs APK ~2.7）。这是网页吞吐离 APK 最远的地方。单码 v55 应回到靠近也能 1440 扫描。
 2. 会话平均被瞄准段拉低；锁格 4 之前偏慢。
 3. AFL2 进度只在内存，刷新即丢。IndexedDB 只服务 AFL1。
 4. 文件上限 64 MiB。
@@ -159,7 +162,7 @@ tests/                          npm test 串起来的协议/安全/运行时针
 
 ## 12. 不要做的「优化」清单（摘要）
 
-`dueRelock`、全图 BarcodeDetector 跟踪、YUV `copyTo` 当快路径、四次 `createImageBitmap`、双倍 pad、nudge、probeMulti、删 `tileCenter`、1 个命中锁格、Android 连续对焦、Android 120 FPS 请求、visibility 停相机、120 FPS 发送（60 Hz 屏）。
+`dueRelock`、全图 BarcodeDetector 跟踪、YUV `copyTo` 当快路径、四次 `createImageBitmap`、双倍 pad、nudge、probeMulti、删 `tileCenter`、1 个命中锁格、Android 连续对焦、Android 120 FPS 请求、visibility 停相机、120 FPS 发送（60 Hz 屏）、单码全图因 `lastHitBox >= 700` 压到 720。
 
 ## 13. 许可证
 
@@ -167,4 +170,4 @@ MIT。第三方见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。只使用 
 
 ---
 
-交接时网页应为 **v53**，APK **0.8.12**。先保住单码和格 4 的峰值，再谈四码每帧。
+交接时网页应为 **v55**，APK **0.8.12**。单码靠近应看到扫描 1440、采集 50+；四码先保住格 4 的峰值，再谈每帧。

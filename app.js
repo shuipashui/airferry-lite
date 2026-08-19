@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v53";
+  const RECEIVER_BUILD = "v55";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -1321,13 +1321,12 @@
   function scanSizeForSource(source, tile) {
     const longest = Math.max(source.width, source.height, 64);
     if (tile || highMultiLayout) return Math.min(HIGH_TILE_SIZE, longest);
-    if (lastHitBox >= 700) return Math.min(HIGH_TILE_SIZE, longest);
     if (highScanRoi) return Math.min(HIGH_TRACK_SIZE, longest);
     return Math.min(HIGH_ACQUIRE_SIZE, longest);
   }
 
   function currentHighScanSize() {
-    return lastPostedScanSize || (highMultiLayout ? HIGH_QUAD_TILE_SIZE : lastHitBox >= 700 ? HIGH_TILE_SIZE : highScanRoi ? HIGH_TRACK_SIZE : HIGH_ACQUIRE_SIZE);
+    return lastPostedScanSize || (highMultiLayout ? HIGH_QUAD_TILE_SIZE : highScanRoi ? HIGH_TRACK_SIZE : HIGH_ACQUIRE_SIZE);
   }
 
   function centerSquareSource() {
