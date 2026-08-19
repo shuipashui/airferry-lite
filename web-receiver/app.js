@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v31";
+  const RECEIVER_BUILD = "v32";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -58,6 +58,7 @@
   const HIGH_ROI_MISS_LIMIT = 3;
   const HIGH_CLOSE_BOX_RATIO = 0.5;
   const HIGH_QUAD_OVERLAP = 0.18;
+  const HIGH_LOCATE_EVERY = 5;
 
   let stream = null;
   let scanTimer = 0;
@@ -147,6 +148,8 @@
   let lastHitBox = 0;
   let lastPostedScanSize = 0;
   let highBitmapLock = false;
+  let highLocateLock = false;
+  let highLocateTick = 0;
   const highDecodeMeta = new Map();
 
   startBtn.onclick = start;
@@ -282,6 +285,8 @@
     highDecodeMeta.clear();
     lastScanStartedAt = -Infinity;
     highBitmapLock = false;
+    highLocateLock = false;
+    highLocateTick = 0;
     startBtn.disabled = false;
     stopBtn.disabled = true;
   }
@@ -470,13 +475,13 @@
     for (let index = 0; index < highWorkers.length; index += 1) {
       if (highWorkerBusy[index] && now - highWorkerStartedAt[index] > HIGH_WORKER_TIMEOUT) restartHighSpeedWorker(index);
     }
+    const locked = highTrackedTiles ? highTrackedTiles.filter(Boolean).length : 0;
+    if (barcodeDetector && !highLocateLock && highMultiLayout) {
+      highLocateTick += 1;
+      if (locked < 4 ? highLocateTick % 3 === 1 : highLocateTick % HIGH_LOCATE_EVERY === 0) void locateQuadWithNative();
+    }
     let jobs;
     try {
-      const probeMulti = !highMultiLayout && lastHitBox < 700 && highScanMisses > 0 && highScanMisses % HIGH_FULL_SCAN_EVERY_MISSES === 0;
-      if (highMultiLayout || probeMulti) {
-        await scanQuadFromSingleCapture();
-        return;
-      }
       jobs = nextHighScanJobs();
     } catch (_) {
       return;
@@ -497,6 +502,7 @@
       } finally {
         highBitmapLock = false;
       }
+      break;
     }
   }
 
@@ -591,91 +597,72 @@
     return slots;
   }
 
-  function mapTileToBitmap(tile, src, size) {
-    const scaleX = size / Math.max(src.width, 1);
-    const scaleY = size / Math.max(src.height, 1);
-    let x = Math.round((tile.x - src.x) * scaleX);
-    let y = Math.round((tile.y - src.y) * scaleY);
-    let width = Math.max(8, Math.round(tile.width * scaleX));
-    let height = Math.max(8, Math.round(tile.height * scaleY));
-    if (x < 0) {
-      width += x;
-      x = 0;
-    }
-    if (y < 0) {
-      height += y;
-      y = 0;
-    }
-    if (x + width > size) width = size - x;
-    if (y + height > size) height = size - y;
-    if (width < 8 || height < 8) return null;
-    return { x, y, width, height };
-  }
-
-  function postReadyBitmap(slot, bitmap, source, maxSymbols, retryBinarizer) {
-    highWorkerBusy[slot] = true;
-    highWorkerStartedAt[slot] = performance.now();
-    lastPostedScanSize = Math.max(bitmap.width, bitmap.height);
-    const id = ++highFrameId;
-    highDecodeMeta.set(id, {
-      x: source.x,
-      y: source.y,
-      srcW: source.width,
-      srcH: source.height,
-      outW: bitmap.width,
-      outH: bitmap.height,
-      postedAt: performance.now()
-    });
-    highWorkers[slot].postMessage({ id, bitmap, maxSymbols, retryBinarizer }, [bitmap]);
-  }
-
-  async function scanQuadFromSingleCapture() {
-    const freeSlots = [];
-    for (let index = 0; index < highWorkers.length; index += 1) {
-      if (!highWorkerBusy[index] && highWorkerReady[index]) freeSlots.push(index);
-    }
-    if (!freeSlots.length) {
-      workerBusyDrops += 1;
-      return;
-    }
-    const src = centerSquareSource();
-    const size = HIGH_TILE_SIZE;
-    const retry = highScanMisses >= 2;
-    const slots = inferMissingQuadTiles(highTrackedTiles);
-    const fallback = exclusiveQuadrants(src);
-    highBitmapLock = true;
-    let full = null;
+  async function locateQuadWithNative() {
+    if (!barcodeDetector || highLocateLock) return;
+    highLocateLock = true;
     try {
-      if (!captureViaCanvas && typeof createImageBitmap === "function") {
-        full = await createImageBitmap(video, src.x, src.y, src.width, src.height, {
-          resizeWidth: size,
-          resizeHeight: size,
-          resizeQuality: "pixelated",
-          colorSpaceConversion: "none"
-        });
+      const codes = await barcodeDetector.detect(video);
+      const tiles = nativeCodesToTiles(codes);
+      if (tiles.length >= 2) highMultiLayout = true;
+      if (highMultiLayout && tiles.length) mergeVideoTiles(tiles);
+    } catch (_) {
+    } finally {
+      highLocateLock = false;
+    }
+  }
+
+  function nativeCodesToTiles(codes) {
+    const tiles = [];
+    for (const code of codes || []) {
+      if (code.format && code.format !== "qr_code") continue;
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const point of code.cornerPoints || []) {
+        if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+        minX = Math.min(minX, point.x);
+        minY = Math.min(minY, point.y);
+        maxX = Math.max(maxX, point.x);
+        maxY = Math.max(maxY, point.y);
       }
-      for (const workerSlot of freeSlots) {
-        const quad = highQuadCursor % 4;
-        highQuadCursor = (highQuadCursor + 1) % 4;
-        const tile = clampScanRegion(slots[quad] || fallback[quad]);
-        if (full) {
-          const mapped = mapTileToBitmap(tile, src, size);
-          if (!mapped) continue;
-          const piece = await createImageBitmap(full, mapped.x, mapped.y, mapped.width, mapped.height);
-          postReadyBitmap(workerSlot, piece, tile, 1, retry);
-        } else {
-          await postHighSpeedRegion(workerSlot, tile, 1, retry, true);
+      const box = code.boundingBox;
+      if (!Number.isFinite(minX) && box) {
+        minX = box.x;
+        minY = box.y;
+        maxX = box.x + box.width;
+        maxY = box.y + box.height;
+      }
+      if (!Number.isFinite(minX)) continue;
+      tiles.push(inflateRect({
+        x: minX,
+        y: minY,
+        width: Math.max(64, maxX - minX),
+        height: Math.max(64, maxY - minY)
+      }, 1.22));
+    }
+    return tiles;
+  }
+
+  function mergeVideoTiles(fresh) {
+    const current = (highTrackedTiles || []).filter(Boolean);
+    for (const tile of fresh) {
+      let best = -1;
+      let bestDist = Infinity;
+      for (let index = 0; index < current.length; index += 1) {
+        const dx = current[index].x + current[index].width / 2 - (tile.x + tile.width / 2);
+        const dy = current[index].y + current[index].height / 2 - (tile.y + tile.height / 2);
+        const dist = dx * dx + dy * dy;
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = index;
         }
       }
-    } catch (_) {
-      captureViaCanvas = true;
-      for (const workerSlot of freeSlots) {
-        if (highWorkerBusy[workerSlot] && !highWorkerStartedAt[workerSlot]) highWorkerBusy[workerSlot] = false;
-      }
-    } finally {
-      highBitmapLock = false;
-      if (full && typeof full.close === "function") full.close();
+      const radius = Math.max(tile.width, tile.height) * 0.45;
+      if (best >= 0 && bestDist <= radius * radius) current[best] = tile;
+      else if (current.length < 4) current.push(tile);
     }
+    highTrackedTiles = slotTilesByCluster(current);
   }
 
   async function postHighSpeedRegion(slot, source, maxSymbols, retryBinarizer, tile) {
@@ -939,24 +926,7 @@
   function rememberTilesFromHits(codes, origin) {
     const fresh = tilesFromHits(codes, origin);
     if (highMultiLayout) {
-      const current = (highTrackedTiles || []).filter(Boolean);
-      for (const tile of fresh) {
-        let best = -1;
-        let bestDist = Infinity;
-        for (let index = 0; index < current.length; index += 1) {
-          const dx = current[index].x + current[index].width / 2 - (tile.x + tile.width / 2);
-          const dy = current[index].y + current[index].height / 2 - (tile.y + tile.height / 2);
-          const dist = dx * dx + dy * dy;
-          if (dist < bestDist) {
-            bestDist = dist;
-            best = index;
-          }
-        }
-        const radius = Math.max(tile.width, tile.height) * 0.45;
-        if (best >= 0 && bestDist <= radius * radius) current[best] = tile;
-        else if (current.length < 4) current.push(tile);
-      }
-      highTrackedTiles = slotTilesByCluster(current);
+      mergeVideoTiles(fresh);
       return;
     }
     for (const tile of fresh) mergeTrackedTile(tile);
@@ -1069,6 +1039,8 @@
     lastHitBox = 0;
     lastPostedScanSize = 0;
     highBitmapLock = false;
+    highLocateLock = false;
+    highLocateTick = 0;
     highQuadCursor = 0;
     highDecodeMeta.clear();
     highUniqueFrames = 0;
