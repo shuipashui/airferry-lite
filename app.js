@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v44";
+  const RECEIVER_BUILD = "v45";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -60,9 +60,10 @@
   const HIGH_CLOSE_BOX_RATIO = 0.5;
   const HIGH_QUAD_OVERLAP = 0.18;
   const HIGH_LOCATE_EVERY = 5;
-  const HIGH_TILE_PAD = 1.18;
+  const HIGH_TILE_PAD = 1.35;
   const HIGH_QUAD_ACQUIRE_MS = 100;
   const HIGH_QUAD_TILE_MISS_LIMIT = 6;
+  const HIGH_MULTI_FULL_DECODE_EVERY = 3;
 
   let stream = null;
   let scanTimer = 0;
@@ -693,7 +694,7 @@
       const tiles = nativeCodesToTiles(codes);
       if (tiles.length >= 2) {
         highMultiLayout = true;
-        mergeVideoTiles(tiles, true);
+        lockQuadSlots(tiles, true);
       }
     } catch (_) {
     } finally {
@@ -781,6 +782,14 @@
       }
     }
     highTileProven = nextProven;
+  }
+
+  function lockQuadSlots(fresh, sighting) {
+    if (fresh && fresh.length) mergeVideoTiles(fresh, sighting);
+    if ((highTrackedTiles || []).filter(Boolean).length >= 2) {
+      highTrackedTiles = inferMissingQuadTiles(highTrackedTiles);
+      highTileProven = (highTrackedTiles || []).map(tile => !!tile);
+    }
   }
 
   function evenRect(x, y, width, height, maxW, maxH) {
@@ -1129,7 +1138,7 @@
       else if (transferHits.length >= 3) highScanRoi = unionHighScanRoi(highScanRoi || next, next);
       else highScanRoi = next;
     }
-    if (highMultiLayout && transferHits.length >= 2) {
+    if (highMultiLayout && transferHits.length) {
       const tiles = [];
       for (const hit of transferHits) {
         const mapped = mappedCorners(hit, hit.origin || { x: 0, y: 0, srcW: 1, srcH: 1, outW: 1, outH: 1 });
@@ -1151,15 +1160,12 @@
           height: Math.max(64, maxY - minY)
         }, HIGH_TILE_PAD));
       }
-      if (tiles.length >= 3) {
-        highTrackedTiles = slotTilesByCluster(tiles);
-        highTileProven = highTrackedTiles.map(tile => !!tile);
-      } else if (tiles.length >= 2) mergeVideoTiles(tiles, false);
+      if (tiles.length) lockQuadSlots(tiles, false);
     }
   }
 
   function decodeQuadFrame() {
-    if (highGrabInFlight) {
+    if (highGrabInFlight || highWorkerBusy.some(Boolean)) {
       workerBusyDrops += 1;
       return;
     }
@@ -1167,9 +1173,9 @@
     highGrabInFlight = true;
     void (async () => {
       try {
-        const previous = (highTrackedTiles || []).filter(Boolean).map(tile => clampScanRegion(inflateRect(tile, HIGH_TILE_PAD)));
+        const dueRelock = highScanMisses > 0 && highScanMisses % HIGH_MULTI_FULL_DECODE_EVERY === 0;
         const inferred = inferMissingQuadTiles(highTrackedTiles).filter(Boolean).map(tile => clampScanRegion(inflateRect(tile, HIGH_TILE_PAD)));
-        const region = inferred.length >= 3 ? unionScanCrops(inferred) : chooseQuadRegion();
+        const region = !dueRelock && inferred.length >= 3 ? unionScanCrops(inferred) : chooseQuadRegion();
         const packed = await grabPackedRegion(region);
         if (!stream || !packed) return;
         const hits = [];
@@ -1184,20 +1190,8 @@
             hits.push(hit);
           }
         };
-        if (inferred.length >= 3) add(await readCropsFromPacked(packed, inferred, false));
-        else if (previous.length >= 3) add(await readCropsFromPacked(packed, previous, false));
-        if (transferCount(hits) < 4 && inferred.length < 3 && previous.length < 2) {
-          const exclusive = exclusiveQuadrants(region);
-          const overlays = overlappingQuadrants(region);
-          const pending = overlays.filter((crop, index) => !tileCovered(exclusive[index], hits));
-          add(await readCropsFromPacked(packed, pending, false));
-        }
-        if (transferCount(hits) < 4 && inferred.length < 3 && previous.length < 2 && highScanMisses >= 1) {
-          const retries = exclusiveQuadrants(region)
-            .filter(tile => !tileCovered(tile, hits))
-            .map(tile => inflateRect(tile, 1.28));
-          add(await readCropsFromPacked(packed, retries, true));
-        }
+        const crops = !dueRelock && inferred.length >= 3 ? inferred : overlappingQuadrants(region);
+        add(await readCropsFromPacked(packed, crops, false));
         rememberQuadHits(hits);
       } finally {
         highGrabInFlight = false;
