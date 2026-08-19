@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v33";
+  const RECEIVER_BUILD = "v34";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -59,6 +59,9 @@
   const HIGH_CLOSE_BOX_RATIO = 0.5;
   const HIGH_QUAD_OVERLAP = 0.18;
   const HIGH_LOCATE_EVERY = 5;
+  const HIGH_TILE_PAD = 1.35;
+  const HIGH_QUAD_ACQUIRE_MS = 100;
+  const HIGH_QUAD_DEGRADED_MS = 400;
 
   let stream = null;
   let scanTimer = 0;
@@ -144,6 +147,9 @@
   let captureViaCanvas = false;
   let lastUsedLuma = false;
   let lumaUnavailable = false;
+  let highGrabInFlight = false;
+  let lastNativeLocate = 0;
+  let highTileProven = [false, false, false, false];
   let highQuadCursor = 0;
   let highScanRoi = null;
   let highTrackedTiles = null;
@@ -289,8 +295,11 @@
     highDecodeMeta.clear();
     lastScanStartedAt = -Infinity;
     highBitmapLock = false;
+    highGrabInFlight = false;
     highLocateLock = false;
     highLocateTick = 0;
+    lastNativeLocate = 0;
+    highTileProven = [false, false, false, false];
     lastUsedLuma = false;
     lumaUnavailable = false;
     startBtn.disabled = false;
@@ -434,9 +443,10 @@
         for (const code of codes) acceptDecodedBytes(code.bytes);
       } else {
         highScanMisses += 1;
-        if (highScanMisses >= (highMultiLayout ? 8 : HIGH_ROI_MISS_LIMIT)) {
+        if (!highMultiLayout && highScanMisses >= HIGH_ROI_MISS_LIMIT) {
           highScanRoi = null;
           highTrackedTiles = null;
+          highTileProven = [false, false, false, false];
         }
         if (highScanMisses >= 12) captureViaCanvas = true;
       }
@@ -474,21 +484,27 @@
     if (stream) status.textContent = "高速解码器不可用，已切换兼容扫描";
   }
 
-  async function scanWithHighSpeedWorkers() {
+  function scanWithHighSpeedWorkers() {
     if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
-    if (!highWorkerReady.some(Boolean) || highBitmapLock) return;
+    if (!highWorkerReady.some(Boolean)) return;
     const now = performance.now();
     for (let index = 0; index < highWorkers.length; index += 1) {
       if (highWorkerBusy[index] && now - highWorkerStartedAt[index] > HIGH_WORKER_TIMEOUT) restartHighSpeedWorker(index);
     }
     const locked = highTrackedTiles ? highTrackedTiles.filter(Boolean).length : 0;
-    if (barcodeDetector && !highLocateLock && highMultiLayout) {
-      highLocateTick += 1;
-      if (locked < 4 ? highLocateTick % 3 === 1 : highLocateTick % HIGH_LOCATE_EVERY === 0) void locateQuadWithNative();
+    if (barcodeDetector && !highLocateLock && highMultiLayout && locked < 4 && !highGrabInFlight && now - lastNativeLocate > (locked === 0 ? HIGH_QUAD_ACQUIRE_MS : HIGH_QUAD_DEGRADED_MS)) {
+      lastNativeLocate = now;
+      void locateQuadWithNative();
     }
     const probeMulti = !highMultiLayout && lastHitBox < 700 && highScanMisses > 0 && highScanMisses % HIGH_FULL_SCAN_EVERY_MISSES === 0;
     if (highMultiLayout || probeMulti) {
-      await scanQuadFromLuma();
+      scanQuadFromLuma();
+      return;
+    }
+    if (highGrabInFlight) return;
+    const slot = highWorkerBusy.findIndex((busy, index) => !busy && highWorkerReady[index]);
+    if (slot < 0) {
+      workerBusyDrops += 1;
       return;
     }
     let jobs;
@@ -497,24 +513,11 @@
     } catch (_) {
       return;
     }
-    let posted = 0;
-    for (const job of jobs) {
-      const slot = highWorkerBusy.findIndex((busy, index) => !busy && highWorkerReady[index]);
-      if (slot < 0) {
-        if (!posted) workerBusyDrops += 1;
-        break;
-      }
-      posted += 1;
-      highBitmapLock = true;
-      try {
-        await postHighSpeedRegion(slot, job.source, job.maxSymbols, job.retry, job.tile);
-      } catch (_) {
-        highWorkerBusy[slot] = false;
-      } finally {
-        highBitmapLock = false;
-      }
-      break;
-    }
+    const job = jobs[0];
+    highGrabInFlight = true;
+    void postHighSpeedRegion(slot, job.source, job.maxSymbols, job.retry, job.tile).finally(() => {
+      highGrabInFlight = false;
+    });
   }
 
   function nextHighScanJobs() {
@@ -615,7 +618,7 @@
       const codes = await barcodeDetector.detect(video);
       const tiles = nativeCodesToTiles(codes);
       if (tiles.length >= 2) highMultiLayout = true;
-      if (highMultiLayout && tiles.length) mergeVideoTiles(tiles);
+      if (highMultiLayout && tiles.length) mergeVideoTiles(tiles, true);
     } catch (_) {
     } finally {
       highLocateLock = false;
@@ -655,25 +658,30 @@
     return tiles;
   }
 
-  function mergeVideoTiles(fresh) {
-    const current = (highTrackedTiles || []).filter(Boolean);
-    for (const tile of fresh) {
-      let best = -1;
-      let bestDist = Infinity;
-      for (let index = 0; index < current.length; index += 1) {
-        const dx = current[index].x + current[index].width / 2 - (tile.x + tile.width / 2);
-        const dy = current[index].y + current[index].height / 2 - (tile.y + tile.height / 2);
-        const dist = dx * dx + dy * dy;
-        if (dist < bestDist) {
-          bestDist = dist;
-          best = index;
+  function mergeVideoTiles(fresh, sighting) {
+    const slots = (highTrackedTiles && highTrackedTiles.length === 4)
+      ? highTrackedTiles.slice()
+      : slotTilesByCluster(highTrackedTiles || []);
+    for (const tile of fresh || []) {
+      const slot = quadGridSlot(tile.x + tile.width / 2, tile.y + tile.height / 2);
+      if (sighting) {
+        if (!slots[slot]) {
+          slots[slot] = tile;
+          highTileProven[slot] = false;
         }
+        continue;
       }
-      const radius = Math.max(tile.width, tile.height) * 0.45;
-      if (best >= 0 && bestDist <= radius * radius) current[best] = tile;
-      else if (current.length < 4) current.push(tile);
+      if (slots[slot] && highTileProven[slot]) {
+        const current = slots[slot];
+        const dx = current.x + current.width / 2 - (tile.x + tile.width / 2);
+        const dy = current.y + current.height / 2 - (tile.y + tile.height / 2);
+        const radius = Math.max(tile.width, tile.height) * 0.45;
+        if (dx * dx + dy * dy > radius * radius) continue;
+      }
+      slots[slot] = tile;
+      highTileProven[slot] = true;
     }
-    highTrackedTiles = slotTilesByCluster(current);
+    highTrackedTiles = slots;
   }
 
   function evenRect(x, y, width, height, maxW, maxH) {
@@ -682,6 +690,20 @@
     width = Math.max(2, Math.min(maxW - x, width) & ~1);
     height = Math.max(2, Math.min(maxH - y, height) & ~1);
     return { x, y, width, height };
+  }
+
+  function rgbaToLuma(data, width, height, stride) {
+    stride = stride || width * 4;
+    const lum = new Uint8Array(width * height);
+    for (let row = 0; row < height; row += 1) {
+      const off = row * stride;
+      const dest = row * width;
+      for (let col = 0; col < width; col += 1) {
+        const i = off + col * 4;
+        lum[dest + col] = (data[i] * 77 + data[i + 1] * 150 + data[i + 2] * 29) >> 8;
+      }
+    }
+    return lum;
   }
 
   async function grabLumaRegion(source) {
@@ -707,41 +729,48 @@
         vis.x + vis.width,
         vis.y + vis.height
       );
-      const extractY = async (format) => {
-        const opts = { format, rect };
+      const pack = (lum, px, py, pw, ph) => ({
+        lum,
+        width: pw,
+        height: ph,
+        x: (px - vis.x) / scaleX,
+        y: (py - vis.y) / scaleY,
+        regionW: pw / scaleX,
+        regionH: ph / scaleY
+      });
+      const extractPlane = async (format, useRect) => {
+        const opts = useRect ? { format, rect } : { format };
         const buf = new Uint8Array(frame.allocationSize(opts));
         const planes = await frame.copyTo(buf, opts);
         const yPlane = planes && planes[0];
         const offset = yPlane?.offset || 0;
-        const stride = yPlane?.stride || rect.width;
-        if (stride === rect.width) return buf.subarray(offset, offset + rect.width * rect.height);
-        const lum = new Uint8Array(rect.width * rect.height);
-        for (let row = 0; row < rect.height; row += 1) {
-          const start = offset + row * stride;
-          lum.set(buf.subarray(start, start + rect.width), row * rect.width);
+        const w = useRect ? rect.width : Math.max(1, vis.width || frame.displayWidth || vw);
+        const h = useRect ? rect.height : Math.max(1, vis.height || frame.displayHeight || vh);
+        const originX = useRect ? rect.x : vis.x;
+        const originY = useRect ? rect.y : vis.y;
+        if (format === "RGBA" || format === "RGBX") {
+          return pack(rgbaToLuma(buf.subarray(offset), w, h, yPlane?.stride || w * 4), originX, originY, w, h);
         }
-        return lum;
+        const stride = yPlane?.stride || w;
+        if (stride === w) return pack(buf.subarray(offset, offset + w * h), originX, originY, w, h);
+        const lum = new Uint8Array(w * h);
+        for (let row = 0; row < h; row += 1) {
+          lum.set(buf.subarray(offset + row * stride, offset + row * stride + w), row * w);
+        }
+        return pack(lum, originX, originY, w, h);
       };
-      let lum = null;
-      for (const format of ["I420", "NV12"]) {
+      let packed = null;
+      for (const attempt of [["RGBA", true], ["RGBX", true], ["I420", true], ["NV12", true], ["RGBA", false], ["I420", false]]) {
         try {
-          lum = await extractY(format);
-          break;
+          packed = await extractPlane(attempt[0], attempt[1]);
+          if (packed) break;
         } catch (_) {}
       }
       frame.close();
       frame = null;
-      if (!lum) throw new Error("no-y");
+      if (!packed) throw new Error("no-y");
       lastUsedLuma = true;
-      return {
-        lum,
-        width: rect.width,
-        height: rect.height,
-        x: (rect.x - vis.x) / scaleX,
-        y: (rect.y - vis.y) / scaleY,
-        regionW: rect.width / scaleX,
-        regionH: rect.height / scaleY
-      };
+      return packed;
     } catch (_) {
       try { frame?.close(); } catch (ignore) {}
       lumaUnavailable = true;
@@ -774,6 +803,49 @@
         height: height / sy
       }
     };
+  }
+
+  function grabCanvasPacked(source) {
+    const width = Math.max(1, Math.round(source.width));
+    const height = Math.max(1, Math.round(source.height));
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(video, source.x, source.y, source.width, source.height, 0, 0, width, height);
+    const image = ctx.getImageData(0, 0, width, height);
+    lastUsedLuma = true;
+    return {
+      lum: rgbaToLuma(image.data, width, height),
+      width,
+      height,
+      x: source.x,
+      y: source.y,
+      regionW: source.width,
+      regionH: source.height
+    };
+  }
+
+  async function grabPackedCenter() {
+    const src = centerSquareSource();
+    let packed = await grabLumaRegion(src);
+    if (!packed) packed = grabCanvasPacked(src);
+    if (packed && (packed.regionW > src.width * 1.08 || packed.regionH > src.height * 1.08)) {
+      const cropped = cropLuma(packed, src);
+      if (cropped) {
+        return {
+          lum: cropped.lum,
+          width: cropped.width,
+          height: cropped.height,
+          x: cropped.source.x,
+          y: cropped.source.y,
+          regionW: cropped.source.width,
+          regionH: cropped.source.height
+        };
+      }
+    }
+    return packed;
   }
 
   function downscaleLuma(lum, width, height, maxSide) {
@@ -820,7 +892,24 @@
     return true;
   }
 
-  async function scanQuadFromLuma() {
+  function nextQuadCrops(count) {
+    const src = centerSquareSource();
+    const fallback = exclusiveQuadrants(src);
+    const slots = inferMissingQuadTiles(highTrackedTiles);
+    const provenCount = highTrackedTiles ? highTrackedTiles.filter(Boolean).length : 0;
+    const hunt = provenCount < 4;
+    const crops = [];
+    for (let index = 0; index < 4 && crops.length < count; index += 1) {
+      const quad = (highQuadCursor + index) % 4;
+      const known = slots[quad];
+      crops.push(clampScanRegion(hunt || !known ? fallback[quad] : inflateRect(known, HIGH_TILE_PAD)));
+    }
+    highQuadCursor = (highQuadCursor + Math.max(1, crops.length)) % 4;
+    return crops;
+  }
+
+  function scanQuadFromLuma() {
+    if (highGrabInFlight) return;
     const freeSlots = [];
     for (let index = 0; index < highWorkers.length; index += 1) {
       if (!highWorkerBusy[index] && highWorkerReady[index]) freeSlots.push(index);
@@ -829,44 +918,25 @@
       workerBusyDrops += 1;
       return;
     }
-    const src = centerSquareSource();
     const retry = highScanMisses >= 2;
-    highBitmapLock = true;
-    let packed = null;
-    try {
-      packed = await grabLumaRegion(src);
-    } finally {
-      highBitmapLock = false;
-    }
-    if (!packed) {
-      const job = nextHighScanJobs()[0];
-      const slot = freeSlots[0];
-      highBitmapLock = true;
+    const crops = nextQuadCrops(freeSlots.length);
+    highGrabInFlight = true;
+    void grabPackedCenter().then((packed) => {
       try {
-        await postHighSpeedRegion(slot, job.source, job.maxSymbols, job.retry, job.tile);
-      } catch (_) {
-        highWorkerBusy[slot] = false;
+        if (!stream || !packed) return;
+        for (let index = 0; index < freeSlots.length; index += 1) {
+          if (highWorkerBusy[freeSlots[index]] || !highWorkerReady[freeSlots[index]]) continue;
+          const cropped = cropLuma(packed, crops[index]);
+          if (!cropped) continue;
+          const sized = downscaleLuma(cropped.lum, cropped.width, cropped.height, HIGH_TILE_SIZE);
+          postLumaToWorker(freeSlots[index], sized, cropped.source, 1, retry);
+        }
       } finally {
-        highBitmapLock = false;
+        highGrabInFlight = false;
       }
-      return;
-    }
-    const slots = inferMissingQuadTiles(highTrackedTiles);
-    const fallback = exclusiveQuadrants({
-      x: packed.x,
-      y: packed.y,
-      width: packed.regionW || packed.width,
-      height: packed.regionH || packed.height
+    }).catch(() => {
+      highGrabInFlight = false;
     });
-    for (const workerSlot of freeSlots) {
-      const quad = highQuadCursor % 4;
-      highQuadCursor = (highQuadCursor + 1) % 4;
-      const tile = clampScanRegion(slots[quad] || fallback[quad]);
-      const cropped = cropLuma(packed, tile);
-      if (!cropped) continue;
-      const sized = downscaleLuma(cropped.lum, cropped.width, cropped.height, HIGH_TILE_SIZE);
-      postLumaToWorker(workerSlot, sized, cropped.source, 1, retry);
-    }
   }
 
   async function postHighSpeedRegion(slot, source, maxSymbols, retryBinarizer, tile) {
@@ -1138,7 +1208,7 @@
   function rememberTilesFromHits(codes, origin) {
     const fresh = tilesFromHits(codes, origin);
     if (highMultiLayout) {
-      mergeVideoTiles(fresh);
+      mergeVideoTiles(fresh, false);
       return;
     }
     for (const tile of fresh) mergeTrackedTile(tile);
@@ -1251,9 +1321,12 @@
     lastHitBox = 0;
     lastPostedScanSize = 0;
     highBitmapLock = false;
+    highGrabInFlight = false;
     highLocateLock = false;
     highLocateTick = 0;
     highQuadCursor = 0;
+    lastNativeLocate = 0;
+    highTileProven = [false, false, false, false];
     lastUsedLuma = false;
     highDecodeMeta.clear();
     highUniqueFrames = 0;
