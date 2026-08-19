@@ -5,13 +5,14 @@ android { namespace = "com.airferrylite.receiver"; compileSdk = 35
         applicationId = "com.airferrylite.receiver"
         minSdk = 29
         targetSdk = 35
-        versionCode = 17
-        versionName = "0.8.2"
+        versionCode = 27
+        versionName = "0.8.12"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
     buildTypes { release { isMinifyEnabled = false; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro") } }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
+    buildFeatures { buildConfig = true }
 }
 
 dependencies {

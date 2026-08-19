@@ -25,13 +25,14 @@
     <section class="card stats">
       <div><span>状态</span><strong id="status">等待开始</strong></div>
       <div><span>文件</span><strong id="fileName">-</strong></div>
-      <div><span>进度</span><strong id="progressText">0%</strong></div><div><span>速度 / 扫描</span><strong id="speedText">—</strong><strong id="scanRateText">—</strong></div>
+      <div><span>进度</span><strong id="progressText">0%</strong></div><div><span>速度 / 扫描</span><strong id="speedText">实时 — · 平均 —</strong><strong id="scanRateText">—</strong></div>
     </section>
     <div class="progress"><i id="progressBar"></i></div>
     <section class="card"><div class="row"><strong>缺失片段</strong><button id="copyMissing" class="small" disabled>复制编号</button></div><code id="missing">-</code></section>
-    <section class="card diagnostics"><div class="row"><strong>诊断信息</strong><button id="copyDiagnostics" class="small">复制诊断</button></div><pre id="diagnostics">等待开始扫描</pre></section>
+    <section class="card diagnostics"><div class="row"><strong>诊断信息</strong><button id="copyDiagnosticsCard" class="small">复制诊断</button></div><pre id="diagnostics">等待开始扫描</pre></section>
     <section id="result" class="card result" hidden><strong>文件已恢复</strong><span id="resultInfo"></span><a id="download" class="download" download>下载文件</a></section>
-    <p class="note">网页接收端需要 HTTPS 才能访问摄像头。四码请先让电脑发送端全屏，再用 20 FPS 播放。</p>
+    <p class="note">网页接收端需要 HTTPS 才能访问摄像头。四码请先让电脑发送端全屏，再用 60 FPS 播放。</p>
+    <div class="sticky-bar"><button type="button" id="copyDiagnostics" class="small">复制诊断</button></div>
   </main>
   <script src="vendor/jsQR.js"></script>
   <script src="receiver-storage.js"></script>

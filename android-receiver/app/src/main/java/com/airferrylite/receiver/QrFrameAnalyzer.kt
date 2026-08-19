@@ -3,6 +3,9 @@ package com.airferrylite.receiver
 import android.os.SystemClock
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -37,9 +40,13 @@ class QrFrameAnalyzer(
     private val onStats: (ScanStats) -> Unit = {}
 ) : ImageAnalysis.Analyzer {
     private val decoder = NativeQrDecoder()
+    private val tileDecoders = Array(TILE_WORKERS) { NativeQrDecoder() }
+    private val tileExecutor = Executors.newFixedThreadPool(TILE_WORKERS)
+    private val workerBusy = AtomicInteger(0)
     private val multiLayout = AtomicBoolean(false)
     private val singleLayoutConfirmed = AtomicBoolean(false)
     private val trackedRoi = AtomicReference<ScanRegion?>(null)
+    private val trackedTiles = AtomicReference<List<ScanRegion>?>(null)
     private val roiMisses = AtomicInteger(0)
     private val capturedInWindow = AtomicLong(0)
     private val decodedInWindow = AtomicLong(0)
@@ -79,12 +86,18 @@ class QrFrameAnalyzer(
         }
     }
 
-    fun close() = Unit
+    fun close() {
+        tileExecutor.shutdownNow()
+        runCatching { tileExecutor.awaitTermination(200, TimeUnit.MILLISECONDS) }
+    }
 
     fun setMultiLayout(enabled: Boolean) {
         if (multiLayout.getAndSet(enabled) != enabled) {
             roiMisses.set(0)
-            if (enabled) singleLayoutConfirmed.set(false) else trackedRoi.set(null)
+            if (enabled) singleLayoutConfirmed.set(false) else {
+                trackedRoi.set(null)
+                trackedTiles.set(null)
+            }
         }
     }
 
@@ -92,6 +105,7 @@ class QrFrameAnalyzer(
         setMultiLayout(false)
         singleLayoutConfirmed.set(false)
         trackedRoi.set(null)
+        trackedTiles.set(null)
         roiMisses.set(0)
         droppedFrames.set(0)
         submittedFrames.set(0)
@@ -105,7 +119,7 @@ class QrFrameAnalyzer(
     }
 
     private fun chooseRegion(width: Int, height: Int): ScanRegion {
-        return ScanLayout.centerSquare(width, height)
+        return ScanLayout.activeRegion(trackedRoi.get(), roiMisses.get(), width, height)
     }
 
     private fun decodeFrame(image: ImageProxy, region: ScanRegion, maxSymbols: Int): List<NativeHit> {
@@ -118,15 +132,60 @@ class QrFrameAnalyzer(
                 if (seen.add(key)) merged += hit
             }
         }
-        val overlays = ScanLayout.overlappingQuadrants(region)
-        val tiles = ScanLayout.exclusiveQuadrants(region)
-        for (index in overlays.indices) {
-            if (transferCount(merged) >= 4) break
-            if (tileCovered(tiles[index], merged)) continue
-            add(decoder.read(image, overlays[index], 1))
+        val previousTiles = trackedTiles.get().orEmpty().map {
+            ScanLayout.clamp(it, image.width, image.height)
         }
-        if (transferCount(merged) < 4) add(decoder.read(image, region, 4))
+        if (previousTiles.isNotEmpty()) {
+            add(readCropsParallel(image, previousTiles.filter { !tileCovered(it, merged) }, retryBinarizer = false))
+        }
+        if (transferCount(merged) >= 4) return merged
+        val exclusive = ScanLayout.exclusiveQuadrants(region)
+        val overlays = ScanLayout.overlappingQuadrants(region)
+        val pending = overlays.indices.mapNotNull { index ->
+            overlays[index].takeUnless { tileCovered(exclusive[index], merged) }
+        }
+        add(readCropsSerial(image, pending, retryBinarizer = false))
+        if (transferCount(merged) >= 4) return merged
+        val retries = exclusive.mapNotNull { tile ->
+            if (tileCovered(tile, merged)) null
+            else ScanLayout.inflate(tile, 1.28f, image.width, image.height)
+        }
+        add(readCropsSerial(image, retries, retryBinarizer = true))
         return merged
+    }
+
+    private fun readCropsParallel(
+        image: ImageProxy,
+        crops: List<ScanRegion>,
+        retryBinarizer: Boolean
+    ): List<NativeHit> {
+        if (crops.isEmpty()) return emptyList()
+        if (crops.size == 1) return tileDecoders[0].read(image, crops[0], 1, retryBinarizer)
+        val jobs = crops.take(TILE_WORKERS)
+        workerBusy.set(jobs.size)
+        return try {
+            jobs.mapIndexed { index, crop ->
+                tileExecutor.submit(Callable {
+                    tileDecoders[index].read(image, crop, 1, retryBinarizer)
+                })
+            }.flatMap { it.get() }
+        } finally {
+            workerBusy.set(0)
+        }
+    }
+
+    private fun readCropsSerial(
+        image: ImageProxy,
+        crops: List<ScanRegion>,
+        retryBinarizer: Boolean
+    ): List<NativeHit> {
+        if (crops.isEmpty()) return emptyList()
+        val hits = mutableListOf<NativeHit>()
+        for (crop in crops) {
+            hits += decoder.read(image, crop, 1, retryBinarizer)
+            if (transferCount(hits) >= 4) break
+        }
+        return hits
     }
 
     private fun transferCount(hits: List<NativeHit>) =
@@ -146,12 +205,11 @@ class QrFrameAnalyzer(
         val transferHits = hits.filter { QrPayload.isTransfer(QrPayload.bytesFrom(it.bytes, it.text)) }
         if (transferHits.isEmpty()) {
             emptyDecodes.incrementAndGet()
-            roiMisses.incrementAndGet()
+            if (roiMisses.incrementAndGet() >= 2) trackedTiles.set(null)
             return
         }
         roiMisses.set(0)
         validQrInWindow.addAndGet(transferHits.size.toLong())
-        rememberRoi(imageWidth, imageHeight, transferHits)
         val lockedMulti = transferHits.any { QrPayload.isMultiLayout(QrPayload.bytesFrom(it.bytes, it.text)) } ||
             transferHits.size >= 2
         if (lockedMulti) {
@@ -161,6 +219,7 @@ class QrFrameAnalyzer(
             singleLayoutConfirmed.set(true)
             singleHits.addAndGet(transferHits.size.toLong())
         }
+        rememberRoi(imageWidth, imageHeight, transferHits)
         transferHits.forEach { onDecoded(DecodedQr(QrPayload.bytesFrom(it.bytes, it.text), it.text)) }
     }
 
@@ -183,9 +242,28 @@ class QrFrameAnalyzer(
             imageWidth,
             imageHeight,
             hits.size,
-            coverGrid = true
+            coverGrid = multiLayout.get() && hits.size < 4
         )?.let { next ->
-            trackedRoi.set(ScanLayout.union(trackedRoi.get(), next, imageWidth, imageHeight))
+            trackedRoi.set(
+                when {
+                    hits.size >= 4 -> next
+                    hits.size >= 3 -> ScanLayout.union(
+                        trackedRoi.get() ?: ScanLayout.centerSquare(imageWidth, imageHeight),
+                        next,
+                        imageWidth,
+                        imageHeight
+                    )
+                    else -> ScanLayout.centerSquare(imageWidth, imageHeight)
+                }
+            )
+        }
+        if (multiLayout.get() && hits.size >= 3) {
+            val perCode = hits.map { hit ->
+                hit.points.map { (x, y) -> (hit.originLeft + x) to (hit.originTop + y) }
+            }
+            trackedTiles.set(ScanLayout.tilesFromHits(perCode, imageWidth, imageHeight))
+        } else if (hits.size < 2) {
+            trackedTiles.set(null)
         }
     }
 
@@ -210,13 +288,13 @@ class QrFrameAnalyzer(
                 multiHits = multiHits.get(),
                 singleHits = singleHits.get(),
                 averageDecodeMs = decodeNanos.get() / 1_000_000.0 / decodeSamples.get().coerceAtLeast(1),
-                workerCount = 1,
-                workerBusy = 0,
+                workerCount = TILE_WORKERS,
+                workerBusy = workerBusy.get(),
                 emptyDecodes = emptyDecodes.get(),
                 decodeErrors = decodeErrors.get(),
                 bufferAllocations = 0,
                 roiMisses = roiMisses.get(),
-                roiTracked = multiLayout.get() && trackedRoi.get() != null && roiMisses.get() < ScanLayout.ROI_MISS_LIMIT,
+                roiTracked = trackedRoi.get() != null && roiMisses.get() < ScanLayout.ROI_MISS_LIMIT,
                 multiLayout = multiLayout.get()
             )
         )
@@ -224,5 +302,6 @@ class QrFrameAnalyzer(
 
     companion object {
         private const val STATS_INTERVAL_MS = 1000L
+        private const val TILE_WORKERS = 4
     }
 }

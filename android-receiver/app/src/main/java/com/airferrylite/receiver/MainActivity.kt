@@ -60,6 +60,12 @@ class MainActivity : AppCompatActivity() {
     private var speedWindowStartedAt = 0L
     private var speedWindowBytes = 0L
     private var speedBytesPerSecond = 0.0
+    private var sessionStartedAt = 0L
+    private var sessionUniquePayloadBytes = 0L
+    private var sessionAverageBytesPerSecond = 0.0
+    private val rollingRates = DoubleArray(3)
+    private var rollingCount = 0
+    private var rollingIndex = 0
     private var lastStats: ScanStats? = null
     private val decodedQrCount = AtomicLong(0)
     private val invalidFrameCount = AtomicLong(0)
@@ -77,7 +83,7 @@ class MainActivity : AppCompatActivity() {
     private var activeCameraFps: Range<Int>? = null
     private var availableCameraFpsLabel = "未知"
     private var highSpeedCameraFpsLabel = "未开放"
-    @Volatile private var latestSpeedLabel = "实时速度：—"
+    @Volatile private var latestSpeedLabel = "实时 — · 平均 —"
     @Volatile private var highSpeedSessionActive = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -330,17 +336,27 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateSpeed(update: HighSpeedUpdate, payloadBytes: Int, now: Long) {
-        if (update.receivedFrames < lastHighFrameCount) resetSpeed(now)
+        if (update.receivedFrames < lastHighFrameCount) resetSpeed()
         val newFrames = update.receivedFrames - lastHighFrameCount
         lastHighFrameCount = update.receivedFrames
         if (newFrames <= 0) return
+        if (sessionStartedAt == 0L) sessionStartedAt = now
         if (speedWindowStartedAt == 0L) speedWindowStartedAt = now
-        speedWindowBytes += newFrames.toLong() * payloadBytes.coerceAtLeast(0)
+        val added = newFrames.toLong() * payloadBytes.coerceAtLeast(0)
+        sessionUniquePayloadBytes += added
+        speedWindowBytes += added
         val elapsed = now - speedWindowStartedAt
         if (elapsed < SPEED_REFRESH_INTERVAL_MS) return
         val sample = speedWindowBytes * 1000.0 / elapsed.coerceAtLeast(1)
-        speedBytesPerSecond = if (speedBytesPerSecond == 0.0) sample else speedBytesPerSecond * 0.65 + sample * 0.35
-        latestSpeedLabel = "实时速度：${formatRate(speedBytesPerSecond)}"
+        speedBytesPerSecond = sample
+        rollingRates[rollingIndex] = sample
+        rollingIndex = (rollingIndex + 1) % rollingRates.size
+        rollingCount = minOf(rollingRates.size, rollingCount + 1)
+        var rollingSum = 0.0
+        for (index in 0 until rollingCount) rollingSum += rollingRates[index]
+        val rolling = rollingSum / rollingCount
+        sessionAverageBytesPerSecond = sessionUniquePayloadBytes * 1000.0 / (now - sessionStartedAt).coerceAtLeast(1)
+        latestSpeedLabel = "实时 ${formatRate(speedBytesPerSecond)} · 平均 ${formatRate(rolling)}"
         speedWindowStartedAt = now
         speedWindowBytes = 0
     }
@@ -366,7 +382,7 @@ class MainActivity : AppCompatActivity() {
         frameAnalyzer.resetSession()
         lastSavedSession = null
         lastHighUiAt = 0
-        resetSpeed(SystemClock.elapsedRealtime())
+        resetSpeed()
         decodedQrCount.set(0)
         highFrameCount = 0
         highUniqueFrameCount = 0
@@ -382,7 +398,7 @@ class MainActivity : AppCompatActivity() {
         updateUi(TransferUpdate(null, 0, 0))
         fileText.text = "等待文件"
         progress.progress = 0
-        speedText.text = "实时速度：—"
+        speedText.text = "实时 — · 平均 —"
         scanText.text = "扫描性能：等待取帧"
         missingText.text = "缺失片段：—"
         statusText.text = "正在高速扫描"
@@ -395,19 +411,26 @@ class MainActivity : AppCompatActivity() {
         val now = SystemClock.elapsedRealtime()
         val highAge = if (highLastFrameAt == 0L) "—" else "${(now - highLastFrameAt).coerceAtLeast(0)} ms"
         diagnosticsText.text = listOf(
-            "设备：${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} · App 0.8.2",
+            "设备：${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} · App ${BuildConfig.VERSION_NAME}",
             "相机：${stats?.width ?: "?"}×${stats?.height ?: "?"} · 采集 ${stats?.captureFps?.let { "%.1f".format(it) } ?: "?"} FPS · 目标 ${preferredFpsLabel()}",
             "分析流 FPS：$availableCameraFpsLabel",
             "高速录像能力：$highSpeedCameraFpsLabel（CameraX 分析流不可直接使用）",
             "分析：提交 ${stats?.submittedFrames ?: 0} · 完成 ${stats?.analysisFps?.let { "%.1f".format(it) } ?: "0"} FPS · 丢帧 ${stats?.droppedFrames ?: 0}",
-            "解码：zxing-cpp · 平均 ${stats?.averageDecodeMs?.let { "%.1f ms".format(it) } ?: "—"} · 单码命中 ${stats?.singleHits ?: 0} · 多码扫描 ${stats?.multiScans ?: 0}（命中 ${stats?.multiHits ?: 0}）",
+            "解码：zxing-cpp · 平均 ${stats?.averageDecodeMs?.let { "%.1f ms".format(it) } ?: "—"} · 单码命中 ${stats?.singleHits ?: 0} · 多码扫描 ${stats?.multiScans ?: 0}（命中 ${stats?.multiHits ?: 0}${perFrameLabel(stats)}）",
             "分析器：线程 ${stats?.workerCount ?: "?"} · 忙 ${stats?.workerBusy ?: "?"} · 空结果 ${stats?.emptyDecodes ?: 0} · 异常 ${stats?.decodeErrors ?: 0} · 新缓冲 ${stats?.bufferAllocations ?: 0}",
             "ROI：${if (stats?.roiTracked == true) "跟踪中" else "全图"} · 连续未命中 ${stats?.roiMisses ?: 0} · 布局 ${if (stats?.multiLayout == true) "四码" else "单码"}",
             "协议：二维码 ${decodedQrCount.get()} · AFL2 ${highFrameCount} · 唯一 ${highUniqueFrameCount} · 重复 ${highDuplicateCount} · 无效 ${invalidFrameCount.get()} · 错误 ${highProtocolErrors} · 队列 ${pendingProtocolFrames.get()} · 解块 ${lastHighSolved}/${lastHighTotal}",
-            "高速会话：最近帧 ${highAge} · 接收字节 ${formatBytes(highBytesReceived)} · 速度 ${latestSpeedLabel}",
+            "高速会话：最近帧 ${highAge} · 接收字节 ${formatBytes(highBytesReceived)} · 速度 ${latestSpeedLabel} · 会话 ${formatRate(sessionAverageBytesPerSecond)}",
             "无效样本：$invalidFrameSample",
             "设备标识：${Build.FINGERPRINT}"
         ).joinToString("\n")
+    }
+
+    private fun perFrameLabel(stats: ScanStats?): String {
+        val scans = stats?.multiScans ?: 0
+        val hits = stats?.multiHits ?: 0
+        if (scans <= 0 || hits <= 0) return ""
+        return " · 每帧 %.2f".format(hits.toDouble() / scans)
     }
 
     private fun preferredFpsLabel(): String = activeCameraFps?.let { "${it.lower}-${it.upper}" } ?: "未知"
@@ -419,12 +442,18 @@ class MainActivity : AppCompatActivity() {
         statusText.text = "诊断信息已复制"
     }
 
-    private fun resetSpeed(now: Long) {
+    private fun resetSpeed() {
         lastHighFrameCount = 0
-        speedWindowStartedAt = now
+        speedWindowStartedAt = 0
         speedWindowBytes = 0
         speedBytesPerSecond = 0.0
-        latestSpeedLabel = "实时速度：—"
+        sessionStartedAt = 0
+        sessionUniquePayloadBytes = 0
+        sessionAverageBytesPerSecond = 0.0
+        rollingCount = 0
+        rollingIndex = 0
+        rollingRates.fill(0.0)
+        latestSpeedLabel = "实时 — · 平均 —"
     }
 
     private fun saveFile(meta: TransferMeta, bytes: ByteArray) {
@@ -472,6 +501,6 @@ class MainActivity : AppCompatActivity() {
         private const val CAMERA_PERMISSION_REQUEST = 42
         private const val HIGH_SPEED_HEADER_SIZE = 20
         private const val UI_REFRESH_INTERVAL_MS = 100L
-        private const val SPEED_REFRESH_INTERVAL_MS = 400L
+        private const val SPEED_REFRESH_INTERVAL_MS = 1000L
     }
 }

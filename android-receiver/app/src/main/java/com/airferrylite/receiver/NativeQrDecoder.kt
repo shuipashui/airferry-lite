@@ -33,13 +33,13 @@ internal class NativeQrDecoder {
     }
     private var packed: ByteBuffer? = null
 
-    fun read(image: ImageProxy, region: ScanRegion, maxSymbols: Int): List<NativeHit> {
+    fun read(image: ImageProxy, region: ScanRegion, maxSymbols: Int, retryBinarizer: Boolean = true): List<NativeHit> {
         reader.options.maxNumberOfSymbols = maxSymbols.coerceIn(1, 4)
         val plane = image.planes[0]
-        val source = plane.buffer
+        val source = plane.buffer.duplicate().apply { rewind() }
         reader.options.binarizer = BarcodeReader.Binarizer.LOCAL_AVERAGE
         var results = readOnce(plane, source, region)
-        if (results.isEmpty()) {
+        if (results.isEmpty() && retryBinarizer) {
             reader.options.binarizer = BarcodeReader.Binarizer.GLOBAL_HISTOGRAM
             results = readOnce(plane, source, region)
         }
@@ -51,7 +51,7 @@ internal class NativeQrDecoder {
         source: ByteBuffer,
         region: ScanRegion
     ): List<BarcodeReader.Result> {
-        return if (plane.pixelStride == 1 && source.isDirect && source.position() == 0) {
+        return if (plane.pixelStride == 1 && source.isDirect) {
             invokeReadY(source, plane.rowStride, region.left, region.top, region.width, region.height)
         } else {
             val packedBuffer = acquirePacked(region.width * region.height)

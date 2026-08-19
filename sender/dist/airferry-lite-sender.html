@@ -2419,6 +2419,7 @@ var qrcode = function() {
   let vsyncPhase = 0;
   let vsyncsPerQr = 2;
   let lastRafAt = 0;
+  let measuredRefreshHz = 0;
   const rafSamples = [];
 
   function selectFile(next) {
@@ -2537,6 +2538,7 @@ var qrcode = function() {
     lastRafAt = 0;
     vsyncPhase = 0;
     rafSamples.length = 0;
+    measuredRefreshHz = 0;
     vsyncsPerQr = vsyncsForFps(60, Number(fps.value));
     statusText.textContent = codesPerScreen === 4
       ? "正在循环播放 · 四码请全屏"
@@ -2549,12 +2551,22 @@ var qrcode = function() {
     if (!transfer || !animationFrame) return;
     if (lastRafAt) {
       const dt = timestamp - lastRafAt;
-      if (dt > 8 && dt < 50) {
+      // 240 Hz vsync is ~4.2 ms; the old dt > 8 gate treated those panels as 60 Hz.
+      if (dt > 3 && dt < 22) {
         rafSamples.push(dt);
         if (rafSamples.length > 24) rafSamples.shift();
         if (rafSamples.length >= 8) {
           const avg = rafSamples.reduce((sum, value) => sum + value, 0) / rafSamples.length;
-          vsyncsPerQr = vsyncsForFps(snapRefreshHz(1000 / avg), Number(fps.value));
+          const hz = snapRefreshHz(1000 / avg);
+          const next = vsyncsForFps(hz, Number(fps.value));
+          if (hz !== measuredRefreshHz || next !== vsyncsPerQr) {
+            measuredRefreshHz = hz;
+            vsyncsPerQr = next;
+            statusText.textContent = (codesPerScreen === 4 ? "正在循环播放 · 四码请全屏" : "正在循环播放")
+              + " · 屏 " + hz + " Hz · 每 " + next + " vsync 换一屏";
+          } else {
+            vsyncsPerQr = next;
+          }
         }
       }
     }
@@ -2800,7 +2812,9 @@ var qrcode = function() {
     let text = "理论速度：" + formatRate(rate.screen) + "（" + rate.bytes + " B × " + rate.codes + " 码 × " + rate.fps + " FPS）· 载荷约 " + formatRate(rate.payload);
     if (rate.cell) text += " · 屏上约 " + rate.cell + " px/模块";
     if (rate.codes === 4 && rate.cell && rate.cell < 4) text += "。模块偏小，请全屏后再播";
-    if (rate.codes === 4 && rate.fps < 60) text += "。四码 60 FPS 实测约 160 KB/s，30 FPS 会重复扫同一屏";
+    if (rate.codes === 4 && rate.fps < 60) text += "。相机约 60 FPS 时，低于 60 的发送帧率会重复扫同一屏";
+    if (rate.codes === 1 && rate.fps > 30) text += "。单码超过 30 FPS 时相机会拍到换码拖影，通常更慢";
+    if (rate.fps > 60) text += "。分析流约 60 FPS，更高发送帧率不会增加唯一码";
     if (rate.codes === 4 && rate.bytes === QUAD_MAX_FRAME_BYTES && Number(chunkSize.value) > QUAD_MAX_FRAME_BYTES) {
       text += "。四码已限制为每码 " + QUAD_MAX_FRAME_BYTES + " B";
     }
@@ -2816,7 +2830,10 @@ var qrcode = function() {
   }
 
   chunkSize.addEventListener("change", renderRateHint);
-  fps.addEventListener("change", renderRateHint);
+  fps.addEventListener("change", () => {
+    if (qrMode.value !== "quad" && Number(fps.value) > 30) fps.value = "30";
+    renderRateHint();
+  });
   qrMode.addEventListener("change", syncFpsToLayout);
   if (typeof ResizeObserver === "function") {
     new ResizeObserver(() => { if (lastPatterns) drawScreen(lastPatterns); }).observe(canvas.parentElement || canvas);

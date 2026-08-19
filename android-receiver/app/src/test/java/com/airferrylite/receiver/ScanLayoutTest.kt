@@ -38,6 +38,18 @@ class ScanLayoutTest {
     }
 
     @Test
+    fun twoCodeCoverGridDoesNotStayOnOneRow() {
+        val two = listOf(
+            100f to 100f, 300f to 100f, 100f to 300f, 300f to 300f,
+            700f to 100f, 900f to 100f, 700f to 300f, 900f to 300f
+        )
+        val tight = ScanLayout.regionFromPoints(two, 1440, 1440, 2, coverGrid = false)!!
+        val grid = ScanLayout.regionFromPoints(two, 1440, 1440, 2, coverGrid = true)!!
+        assertTrue(grid.width > tight.width)
+        assertTrue(grid.height >= 430)
+    }
+
+    @Test
     fun fourCodesKeepATightBox() {
         val region = ScanLayout.regionFromPoints(
             listOf(100f to 100f, 900f to 100f, 100f to 900f, 900f to 900f),
@@ -45,7 +57,23 @@ class ScanLayoutTest {
             1440,
             4
         )!!
-        assertTrue(region.width in 800..1200)
+        assertTrue(region.width in 950..1300)
+    }
+
+    @Test
+    fun tilesFromHitsOrderAsTwoByTwo() {
+        val hits = listOf(
+            listOf(700f to 100f, 900f to 100f, 700f to 300f, 900f to 300f),
+            listOf(100f to 100f, 300f to 100f, 100f to 300f, 300f to 300f),
+            listOf(100f to 700f, 300f to 700f, 100f to 900f, 300f to 900f),
+            listOf(700f to 700f, 900f to 700f, 700f to 900f, 900f to 900f)
+        )
+        val tiles = ScanLayout.tilesFromHits(hits, 1440, 1440)
+        assertEquals(4, tiles.size)
+        assertTrue(tiles[0].left < tiles[1].left)
+        assertTrue(tiles[0].top < tiles[2].top)
+        assertTrue(tiles[1].top < tiles[3].top)
+        assertTrue(tiles[2].left < tiles[3].left)
     }
 
     @Test
@@ -54,6 +82,16 @@ class ScanLayoutTest {
         val second = ScanRegion(400, 400, 200, 200)
         val merged = ScanLayout.union(first, second, 1440, 1440)
         assertTrue(merged.width >= 800)
+    }
+
+    @Test
+    fun activeRegionInflatesOnMissesThenFallsBack() {
+        val tracked = ScanRegion(100, 120, 800, 800)
+        assertEquals(tracked, ScanLayout.activeRegion(tracked, 0, 1440, 1440))
+        val grown = ScanLayout.activeRegion(tracked, 3, 1440, 1440)
+        assertTrue(grown.width > tracked.width)
+        val fallback = ScanLayout.activeRegion(tracked, ScanLayout.ROI_MISS_LIMIT, 1920, 1440)
+        assertEquals(ScanRegion(240, 0, 1440, 1440), fallback)
     }
 
     @Test

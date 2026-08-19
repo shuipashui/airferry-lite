@@ -5,7 +5,7 @@
     <androidx.camera.view.PreviewView android:id="@+id/previewView" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" />
     <TextView android:id="@+id/fileText" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="等待文件" android:textColor="@color/af_text" android:paddingTop="10dp" />
     <ProgressBar android:id="@+id/progress" style="?android:attr/progressBarStyleHorizontal" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="100" android:progress="0" android:progressTint="@color/af_accent" />
-    <TextView android:id="@+id/speedText" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="实时速度：—" android:textColor="@color/af_text" android:paddingTop="6dp" />
+    <TextView android:id="@+id/speedText" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="实时 — · 平均 —" android:textColor="@color/af_text" android:paddingTop="6dp" />
     <TextView android:id="@+id/scanText" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="扫描性能：等待取帧" android:textColor="@color/af_text" android:textSize="12sp" android:paddingTop="4dp" />
     <TextView android:id="@+id/missingText" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="缺失片段：—" android:textColor="@color/af_text" android:maxLines="2" android:paddingTop="6dp" />
     <TextView android:id="@+id/diagnosticsText" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="诊断信息：等待取帧" android:textColor="@color/af_text" android:textSize="10sp" android:paddingTop="6dp" />

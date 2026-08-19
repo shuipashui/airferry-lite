@@ -13,6 +13,7 @@
   const resetBtn = document.getElementById("resetBtn");
   const copyMissing = document.getElementById("copyMissing");
   const copyDiagnostics = document.getElementById("copyDiagnostics");
+  const copyDiagnosticsCard = document.getElementById("copyDiagnosticsCard");
   const diagnosticsEl = document.getElementById("diagnostics");
   const status = document.getElementById("status");
   const fileName = document.getElementById("fileName");
@@ -38,8 +39,8 @@
   const MAX_CHUNK_SIZE = 4096;
   const HIGH_SPEED_WORKERS = (navigator.hardwareConcurrency || 0) >= 8 ? 3 : 2;
   const HIGH_WORKER_TIMEOUT = 2500;
-  const HIGH_SCAN_SIZE_SINGLE = 960;
-  const HIGH_SCAN_SIZE_MULTI = 1280;
+  const HIGH_SCAN_SIZE_SINGLE = 1440;
+  const HIGH_SCAN_SIZE_MULTI = 1600;
   const HIGH_FULL_SCAN_EVERY_MISSES = 12;
 
   let stream = null;
@@ -66,6 +67,13 @@
   let speedWindowStartedAt = 0;
   let speedWindowBytes = 0;
   let speedBps = 0;
+  let sessionStartedAt = 0;
+  let sessionUniqueBytes = 0;
+  let sessionAverageBps = 0;
+  const rollingRates = [0, 0, 0];
+  let rollingCount = 0;
+  let rollingIndex = 0;
+  let latestSpeedLabel = "实时 — · 平均 —";
   let decodeWorker = null;
   let decodeRequestId = 0;
   let workerDisabled = typeof Worker !== "function";
@@ -92,6 +100,8 @@
   let capturedFrames = 0;
   let decodedFrames = 0;
   let validQrFrames = 0;
+  let sessionDecodedFrames = 0;
+  let sessionValidCodes = 0;
   let cameraFrameRate = 0;
   let cameraRequestedFps = 120;
   let cameraSettings = null;
@@ -124,6 +134,7 @@
   resetBtn.onclick = reset;
   copyMissing.onclick = copyMissingIndexes;
   copyDiagnostics?.addEventListener("click", copyDiagnosticsText);
+  copyDiagnosticsCard?.addEventListener("click", copyDiagnosticsText);
   document.addEventListener("visibilitychange", () => {
     if (document.hidden && stream) stop("页面已切到后台");
   });
@@ -277,16 +288,13 @@
     sessionHeaderText = "";
     scanErrors = 0;
     lastScanStartedAt = -Infinity;
-    speedWindowStartedAt = 0;
-    speedWindowBytes = 0;
-    speedBps = 0;
     finishing = false;
     highDecoder = null;
     highStreamKey = "";
     highHeader = null;
     highStartedAt = 0;
     highSpeedActive = false;
-    speedText.textContent = "—";
+    resetSpeed();
     scanRateText.textContent = "—";
     fileName.textContent = "-";
     progressText.textContent = "0%";
@@ -379,10 +387,12 @@
       }
       const decoded = event.data?.bytes;
       decodedFrames += 1;
+      sessionDecodedFrames += 1;
       const origin = highDecodeMeta.get(event.data?.id);
       if (event.data?.id != null) highDecodeMeta.delete(event.data.id);
       const codes = normalizeDecodedCodes(decoded);
       validQrFrames += codes.length;
+      sessionValidCodes += codes.length;
       if (codes.length) {
         highScanMisses = 0;
         if (origin) updateHighScanRoiFromHits(codes, origin);
@@ -390,6 +400,7 @@
       } else {
         highScanMisses += 1;
         if (highScanMisses >= 8) highScanRoi = null;
+        if (highScanMisses >= 12) captureViaCanvas = true;
       }
     };
     worker.onerror = () => {
@@ -457,7 +468,8 @@
         const bitmap = await createImageBitmap(video, source.x, source.y, source.width, source.height, {
           resizeWidth: width,
           resizeHeight: height,
-          resizeQuality: "low"
+          resizeQuality: "high",
+          colorSpaceConversion: "none"
         });
         highWorkers[slot].postMessage({ id, bitmap, maxSymbols }, [bitmap]);
         return true;
@@ -485,6 +497,7 @@
   }
 
   function getHighSpeedSource() {
+    if (highScanRoi && highScanMisses < 8) return highScanRoi;
     const width = video.videoWidth;
     const height = video.videoHeight;
     const side = Math.max(1, Math.floor(Math.min(width, height) * 0.94));
@@ -525,7 +538,6 @@
   }
 
   function updateHighScanRoiFromHits(codes, origin) {
-    if (!highMultiLayout) return;
     const corners = [];
     for (const code of codes) {
       const position = code.position;
@@ -550,8 +562,9 @@
       maxY = Math.max(maxY, point.y);
     }
     const box = Math.max(maxX - minX, maxY - minY, 64);
-    const pad = codes.length >= 4 ? 1.18 : codes.length >= 2 ? 1.55 : 3.8;
-    const side = Math.min(video.videoWidth, video.videoHeight, Math.round(codes.length < 2 ? box * 3.8 : box * pad));
+    const pad = codes.length >= 4 ? 1.18 : codes.length >= 2 ? 1.55 : highMultiLayout ? 3.8 : 1.45;
+    const minSide = highMultiLayout ? 720 : 960;
+    const side = Math.min(video.videoWidth, video.videoHeight, Math.max(minSide, Math.round(box * pad)));
     const cx = (minX + maxX) / 2;
     const cy = (minY + maxY) / 2;
     const next = {
@@ -583,6 +596,8 @@
     capturedFrames = 0;
     decodedFrames = 0;
     validQrFrames = 0;
+    sessionDecodedFrames = 0;
+    sessionValidCodes = 0;
     cameraFrameRate = 0;
     cameraSettings = null;
     cameraCapabilities = null;
@@ -676,9 +691,7 @@
       fileName.textContent = "高速文件流";
       missingEl.textContent = "喷泉码接收中，无需等待指定片段";
       copyMissing.disabled = true;
-      speedWindowStartedAt = performance.now();
-      speedWindowBytes = 0;
-      speedBps = 0;
+      resetSpeed();
     }
     const before = highDecoder.framesNew;
     highDecoder.addFrame(header.seq, block);
@@ -946,10 +959,7 @@
     for (let index = 0; index < frame.total; index += 1) missing.add(index);
     receivedCount = 0;
     recoveredCount = 0;
-    speedWindowStartedAt = performance.now();
-    speedWindowBytes = 0;
-    speedBps = 0;
-    speedText.textContent = "—";
+    resetSpeed();
     result.hidden = true;
     fileName.textContent = frame.name;
     status.textContent = barcodeDetector ? "已识别文件（快速模式）" : "已识别文件";
@@ -1038,17 +1048,46 @@
     if (!restoring && Storage) scheduleChunkPersist(meta.session, index, bytes, recovered);
   }
 
+  function resetSpeed() {
+    speedWindowStartedAt = 0;
+    speedWindowBytes = 0;
+    speedBps = 0;
+    sessionStartedAt = 0;
+    sessionUniqueBytes = 0;
+    sessionAverageBps = 0;
+    rollingCount = 0;
+    rollingIndex = 0;
+    rollingRates.fill(0);
+    latestSpeedLabel = "实时 — · 平均 —";
+    speedText.textContent = latestSpeedLabel;
+  }
+
   function updateSpeed(byteCount) {
     const now = performance.now();
+    if (!sessionStartedAt) sessionStartedAt = now;
     if (!speedWindowStartedAt) speedWindowStartedAt = now;
+    sessionUniqueBytes += byteCount;
     speedWindowBytes += byteCount;
     const elapsed = now - speedWindowStartedAt;
-    if (elapsed < 350) return;
+    if (elapsed < 1000) return;
     const sample = speedWindowBytes / (elapsed / 1000);
-    speedBps = speedBps ? speedBps * 0.65 + sample * 0.35 : sample;
+    speedBps = sample;
+    rollingRates[rollingIndex] = sample;
+    rollingIndex = (rollingIndex + 1) % rollingRates.length;
+    rollingCount = Math.min(rollingRates.length, rollingCount + 1);
+    let rollingSum = 0;
+    for (let index = 0; index < rollingCount; index += 1) rollingSum += rollingRates[index];
+    const rolling = rollingSum / rollingCount;
+    sessionAverageBps = sessionUniqueBytes / Math.max(0.001, (now - sessionStartedAt) / 1000);
+    latestSpeedLabel = "实时 " + formatRate(speedBps) + " · 平均 " + formatRate(rolling);
+    speedText.textContent = latestSpeedLabel;
     speedWindowStartedAt = now;
     speedWindowBytes = 0;
-    speedText.textContent = formatRate(speedBps);
+  }
+
+  function perFrameLabel() {
+    if (!sessionDecodedFrames || !sessionValidCodes) return "";
+    return " · 每帧 " + (sessionValidCodes / sessionDecodedFrames).toFixed(2);
   }
 
   function expectedChunkLength(index) {
@@ -1104,7 +1143,7 @@
       "实时：采集 " + lastCaptureFps.toFixed(1) + " · 分析 " + lastDecodeFps.toFixed(1) + " · 有效码 " + lastValidFps.toFixed(1) + " FPS",
       "解码：" + backend + " · Worker " + workerCount + " · 平均 " + avgDecode +
         " · 扫描 " + currentHighScanSize() + " · 布局 " + (highMultiLayout ? "四码" : "单码") +
-        (highScanRoi ? " · ROI" : " · 全图"),
+        (highScanRoi ? " · ROI" : " · 全图") + perFrameLabel(),
       "调度：Worker 就绪 " + highWorkerReady.filter(Boolean).length + "/" + workerCount +
         " · 忙时丢弃 " + workerBusyDrops + " · 重启 " + workerRestarts + " · 错误 " + workerErrors +
         " · 连续未识别 " + highScanMisses,
@@ -1112,7 +1151,8 @@
         " · 无效 " + highInvalidFrames + " · 序列跳跃 " + highSequenceGaps +
         " · 解块 " + (highDecoder?.solvedCount || 0) + "/" + (highDecoder?.k || 0),
       "高速会话：最近帧 " + (highLastFrameAt ? Math.max(0, Math.round(performance.now() - highLastFrameAt)) + " ms" : "—") +
-        " · 有效载荷 " + formatBytes(highProtocolBytes) + " · 会话 " + (highHeader ? H.streamIdentity(highHeader) : "—"),
+        " · 有效载荷 " + formatBytes(highProtocolBytes) + " · 速度 " + latestSpeedLabel +
+        " · 会话 " + formatRate(sessionAverageBps) + " · 流 " + (highHeader ? H.streamIdentity(highHeader) : "—"),
       "环境：" + (navigator.userAgent || "未知")
     ].join("\n");
   }

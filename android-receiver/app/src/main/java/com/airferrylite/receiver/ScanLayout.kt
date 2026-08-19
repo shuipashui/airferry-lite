@@ -7,7 +7,7 @@ internal data class ScanRegion(val left: Int, val top: Int, val width: Int, val 
 
 /** Geometric crops for 2×2 sender tiles that rarely line up with the camera midline. */
 internal object ScanLayout {
-    const val QUAD_OVERLAP = 0.12f
+    const val QUAD_OVERLAP = 0.18f
     const val ROI_MISS_LIMIT = 8
     private const val MIN_SIDE = 64
 
@@ -65,9 +65,10 @@ internal object ScanLayout {
         val cx = (minX + maxX) / 2f
         val cy = (minY + maxY) / 2f
         val side = when {
-            codeCount >= 4 -> max(boxW, boxH) * 1.18f
-            codeCount >= 2 -> max(boxW, boxH) * 1.55f
+            codeCount >= 4 -> max(boxW, boxH) * 1.40f
+            coverGrid && codeCount >= 2 -> max(boxW, boxH) * 2.15f
             coverGrid -> max(boxW, boxH) * 3.8f
+            codeCount >= 2 -> max(boxW, boxH) * 1.70f
             else -> max(boxW, boxH) * 1.35f
         }
         val half = side / 2f
@@ -95,5 +96,38 @@ internal object ScanLayout {
         val side = min(cropW, cropH)
         if (side < MIN_SIDE) return centerSquare(width, height)
         return ScanRegion(left, top, side, side)
+    }
+
+    fun tilesFromHits(
+        hits: List<List<Pair<Float, Float>>>,
+        imageWidth: Int,
+        imageHeight: Int
+    ): List<ScanRegion> {
+        val tiles = hits.mapNotNull { points ->
+            regionFromPoints(points, imageWidth, imageHeight, 1)?.let {
+                inflate(it, 1.18f, imageWidth, imageHeight)
+            }
+        }
+        if (tiles.size <= 1) return tiles
+        val midX = tiles.map { it.left + it.width / 2.0 }.average()
+        val midY = tiles.map { it.top + it.height / 2.0 }.average()
+        return tiles.sortedWith(
+            compareBy<ScanRegion> { if (it.top + it.height / 2.0 < midY) 0 else 1 }
+                .thenBy { if (it.left + it.width / 2.0 < midX) 0 else 1 }
+        )
+    }
+
+    fun inflate(region: ScanRegion, factor: Float, width: Int, height: Int): ScanRegion {
+        val side = (max(region.width, region.height) * factor.coerceAtLeast(1f)).toInt().coerceAtLeast(MIN_SIDE)
+        val cx = region.left + region.width / 2
+        val cy = region.top + region.height / 2
+        return clamp(ScanRegion(cx - side / 2, cy - side / 2, side, side), width, height)
+    }
+
+    fun activeRegion(tracked: ScanRegion?, misses: Int, width: Int, height: Int): ScanRegion {
+        if (tracked == null || misses >= ROI_MISS_LIMIT) return centerSquare(width, height)
+        val clamped = clamp(tracked, width, height)
+        if (misses <= 0) return clamped
+        return inflate(clamped, 1f + misses * 0.22f, width, height)
     }
 }
