@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v39";
+  const RECEIVER_BUILD = "v40";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -562,7 +562,7 @@
       lastNativeLocate = now;
       void locateQuadWithNative();
     }
-    if (highMultiLayout || !highSingleConfirmed) {
+    if (highMultiLayout) {
       decodeQuadFrame();
       return;
     }
@@ -1020,7 +1020,7 @@
   }
 
   function acquireQuadRegion() {
-    return video.videoHeight >= video.videoWidth ? fullFrameSource() : centerSquareSource();
+    return centerSquareSource();
   }
 
   function chooseQuadRegion() {
