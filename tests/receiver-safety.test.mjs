@@ -55,7 +55,7 @@ for (const needle of [
   ,"const HIGH_QUAD_PACKED_SIZE = 720;"
   ,">= 4 ? 4 : 2"
   ,"!/Android/i.test(navigator.userAgent || \"\")"
-  ,"const RECEIVER_BUILD = \"v49\";"
+  ,"const RECEIVER_BUILD = \"v50\";"
   ,"function grabLumaRegion"
   ,"function cropLuma"
   ,"function downscaleLuma"
@@ -74,8 +74,10 @@ for (const needle of [
   ,"highJobWaiters"
   ,"highSingleConfirmed"
   ,"function lockQuadSlots"
+  ,"function nudgeFrozenTiles"
+  ,"HIGH_TILE_PAD_LOCK"
   ,"let highQuadFrozen = false;"
-  ,"if (highMultiLayout && transferHits.length && !highQuadFrozen)"
+  ,"if (highMultiLayout && transferHits.length)"
   ,"if (highGrabInFlight || highWorkerBusy.some(Boolean))"
   ,"highGrabInFlight = false;"
   ,"highScanRoi = null;"
@@ -130,7 +132,8 @@ assert.ok(source.includes("locked < 4 && now - lastNativeLocate > HIGH_QUAD_ACQU
 assert.ok(!source.includes("HIGH_QUAD_TRACK_MS"), "locked quad must not keep running full-frame BarcodeDetector");
 assert.ok(!source.includes("}, HIGH_TILE_PAD));"), "tracked quad boxes must not be stored already padded");
 assert.ok(source.includes("if (highMultiLayout) return grabBitmapPacked(source);"), "quad packed grabs must use a single resized ImageBitmap");
-assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v49";'), "service worker cache version was not bumped");
+assert.ok(source.includes("nudgeFrozenTiles(boxes)"), "frozen quad tiles must nudge from hits instead of relocking the grid");
+assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v50";'), "service worker cache version was not bumped");
 assert.ok(serviceWorker.includes('path.endsWith(".wasm")'), "service worker must cache WASM/worker files instead of no-store");
 assert.ok(serviceWorker.includes('"./highspeed-protocol.js"') && serviceWorker.includes('"./vendor/decimen/highspeed-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/multi-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/zxing_reader-EOacYbLr.wasm"'), "high-speed receiver assets are not cached");
 assert.equal(mirrorSource, source, "web-receiver app.js drifted from the published root receiver");
