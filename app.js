@@ -38,7 +38,8 @@
   const MAX_CHUNK_SIZE = 4096;
   const HIGH_SPEED_WORKERS = (navigator.hardwareConcurrency || 0) >= 8 ? 3 : 2;
   const HIGH_WORKER_TIMEOUT = 2500;
-  const HIGH_SCAN_SIZE = 1280;
+  const HIGH_SCAN_SIZE_SINGLE = 800;
+  const HIGH_SCAN_SIZE_MULTI = 1200;
   const HIGH_FULL_SCAN_EVERY_MISSES = 12;
 
   let stream = null;
@@ -86,6 +87,7 @@
   let highWorkerStartedAt = [];
   let highWorkersDisabled = typeof Worker !== "function" || !H;
   let highScanMisses = 0;
+  let highMultiLayout = false;
   let scanStatsStartedAt = 0;
   let capturedFrames = 0;
   let decodedFrames = 0;
@@ -238,6 +240,7 @@
     scanSequence = 0;
     roiMisses = 0;
     highScanMisses = 0;
+    highMultiLayout = false;
     lastScanStartedAt = -Infinity;
     startBtn.disabled = false;
     stopBtn.disabled = true;
@@ -427,7 +430,8 @@
     highWorkerStartedAt[slot] = now;
     if (highScanMisses >= HIGH_FULL_SCAN_EVERY_MISSES) captureViaCanvas = true;
     const source = getHighSpeedSource();
-    const scale = Math.min(1, HIGH_SCAN_SIZE / Math.max(source.width, source.height));
+    const scanSize = currentHighScanSize();
+    const scale = Math.min(1, scanSize / Math.max(source.width, source.height));
     const width = Math.max(1, Math.round(source.width * scale));
     const height = Math.max(1, Math.round(source.height * scale));
     try {
@@ -453,6 +457,12 @@
       captureViaCanvas = true;
       restartHighSpeedWorker(slot);
     }
+  }
+
+  function currentHighScanSize() {
+    if (highMultiLayout) return HIGH_SCAN_SIZE_MULTI;
+    if (highScanMisses > 0 && highScanMisses % HIGH_FULL_SCAN_EVERY_MISSES === 0) return HIGH_SCAN_SIZE_MULTI;
+    return HIGH_SCAN_SIZE_SINGLE;
   }
 
   function getHighSpeedSource() {
@@ -484,6 +494,7 @@
     decodeTimeMs = 0;
     decodeSamples = 0;
     highFramesSeen = 0;
+    highMultiLayout = false;
     highUniqueFrames = 0;
     highInvalidFrames = 0;
     highDuplicateFrames = 0;
@@ -521,6 +532,7 @@
     highFramesSeen += 1;
     const parsed = H?.parseFrame(bytes);
     if (parsed) {
+      if (parsed.header.layoutCodes === 4) highMultiLayout = true;
       const before = highDecoder?.framesNew || 0;
       acceptHighSpeedFrame(parsed);
       const after = highDecoder?.framesNew || 0;
@@ -989,7 +1001,7 @@
         " · 实际/报告 " + (cameraFrameRate || settings.frameRate || "?") + " FPS · 请求上限 " + cameraRequestedFps,
       "相机能力：FPS " + fpsRange + " · facingMode " + (settings.facingMode || "未知"),
       "实时：采集 " + lastCaptureFps.toFixed(1) + " · 分析 " + lastDecodeFps.toFixed(1) + " · 有效码 " + lastValidFps.toFixed(1) + " FPS",
-      "解码：" + backend + " · Worker " + workerCount + " · 平均 " + avgDecode,
+      "解码：" + backend + " · Worker " + workerCount + " · 平均 " + avgDecode + " · 扫描 " + currentHighScanSize(),
       "调度：Worker 就绪 " + highWorkerReady.filter(Boolean).length + "/" + workerCount +
         " · 忙时丢弃 " + workerBusyDrops + " · 重启 " + workerRestarts + " · 错误 " + workerErrors +
         " · 连续未识别 " + highScanMisses,

@@ -42,9 +42,11 @@ for (const needle of [
   ,"highWorkerReady[index]"
   ,"highWorkerBusy.findIndex"
   ,'new Worker("vendor/decimen/highspeed-decoder-worker.js")'
-  ,"const HIGH_SCAN_SIZE = 1280;"
+  ,"const HIGH_SCAN_SIZE_SINGLE = 800;"
+  ,"const HIGH_SCAN_SIZE_MULTI = 1200;"
+  ,"function currentHighScanSize"
 ]) assert.ok(source.includes(needle), "missing receiver guard: " + needle);
-assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v12";'), "service worker cache version was not bumped");
+assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v13";'), "service worker cache version was not bumped");
 assert.ok(serviceWorker.includes('"./highspeed-protocol.js"') && serviceWorker.includes('"./vendor/decimen/highspeed-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/multi-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/zxing_reader-EOacYbLr.wasm"'), "high-speed receiver assets are not cached");
 assert.equal(mirrorSource, source, "web-receiver app.js drifted from the published root receiver");
 assert.equal(mirrorServiceWorker, serviceWorker, "web-receiver sw.js drifted from the published root receiver");

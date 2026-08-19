@@ -125,8 +125,8 @@
     if (!transfer || animationFrame) return;
     intervalMs = 1000 / Math.max(1, Number(fps.value));
     lastTickAt = 0;
-    statusText.textContent = Number(fps.value) >= 60
-      ? "正在循环播放 · 高帧率仅适合高刷屏"
+    statusText.textContent = Number(fps.value) > 30
+      ? "正在循环播放 · 60Hz 屏幕请改用 30 FPS"
       : "正在循环播放";
     playBtn.textContent = "暂停";
     animationFrame = requestAnimationFrame(playLoop);
