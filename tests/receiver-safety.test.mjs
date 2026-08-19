@@ -54,7 +54,7 @@ for (const needle of [
   ,"const HIGH_QUAD_TILE_SIZE = 720;"
   ,">= 4 ? 4 : 2"
   ,"!/Android/i.test(navigator.userAgent || \"\")"
-  ,"const RECEIVER_BUILD = \"v46\";"
+  ,"const RECEIVER_BUILD = \"v47\";"
   ,"function grabLumaRegion"
   ,"function cropLuma"
   ,"function downscaleLuma"
@@ -73,7 +73,7 @@ for (const needle of [
   ,"highJobWaiters"
   ,"highSingleConfirmed"
   ,"function lockQuadSlots"
-  ,"HIGH_QUAD_TRACK_MS"
+  ,"if (highGrabInFlight || highWorkerBusy.some(Boolean))"
   ,"highGrabInFlight = false;"
   ,"highScanRoi = null;"
   ,"if (!androidCam)"
@@ -123,8 +123,9 @@ for (const needle of [
 assert.ok(!source.includes("highMultiLayout || !highSingleConfirmed"), "single-code acquire must not be replaced by quadrant crops");
 assert.ok(!source.includes("dueRelock"), "quad must not fall back to overlapping quadrants after empty misses");
 assert.ok(!source.includes("HIGH_MULTI_FULL_DECODE_EVERY"), "quad must not periodic-relock the whole ROI");
-assert.ok(source.includes("locked < 4 ? HIGH_QUAD_ACQUIRE_MS : HIGH_QUAD_TRACK_MS"), "native locate must keep tracking after 4 tiles lock");
-assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v46";'), "service worker cache version was not bumped");
+assert.ok(source.includes("locked < 4 && now - lastNativeLocate > HIGH_QUAD_ACQUIRE_MS"), "native locate must stop once four tiles are locked");
+assert.ok(!source.includes("HIGH_QUAD_TRACK_MS"), "locked quad must not keep running full-frame BarcodeDetector");
+assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v47";'), "service worker cache version was not bumped");
 assert.ok(serviceWorker.includes('path.endsWith(".wasm")'), "service worker must cache WASM/worker files instead of no-store");
 assert.ok(serviceWorker.includes('"./highspeed-protocol.js"') && serviceWorker.includes('"./vendor/decimen/highspeed-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/multi-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/zxing_reader-EOacYbLr.wasm"'), "high-speed receiver assets are not cached");
 assert.equal(mirrorSource, source, "web-receiver app.js drifted from the published root receiver");
