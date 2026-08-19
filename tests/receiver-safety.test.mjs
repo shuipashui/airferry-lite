@@ -52,10 +52,10 @@ for (const needle of [
   ,"const HIGH_TRACK_SIZE = 960;"
   ,"const HIGH_TILE_SIZE = 720;"
   ,"const HIGH_QUAD_TILE_SIZE = 720;"
-  ,"const HIGH_QUAD_PACKED_SIZE = 960;"
+  ,"const HIGH_QUAD_PACKED_SIZE = 720;"
   ,">= 4 ? 4 : 2"
   ,"!/Android/i.test(navigator.userAgent || \"\")"
-  ,"const RECEIVER_BUILD = \"v48\";"
+  ,"const RECEIVER_BUILD = \"v49\";"
   ,"function grabLumaRegion"
   ,"function cropLuma"
   ,"function downscaleLuma"
@@ -63,7 +63,7 @@ for (const needle of [
   ,"function scanQuadFromLuma"
   ,"function grabCanvasPacked"
   ,"function rgbaToLuma"
-  ,"function grabPackedCenter"
+  ,"function grabBitmapPacked"
   ,"function grabPackedRegion"
   ,"function unionScanCrops"
   ,"function decodeQuadFrame"
@@ -74,6 +74,8 @@ for (const needle of [
   ,"highJobWaiters"
   ,"highSingleConfirmed"
   ,"function lockQuadSlots"
+  ,"let highQuadFrozen = false;"
+  ,"if (highMultiLayout && transferHits.length && !highQuadFrozen)"
   ,"if (highGrabInFlight || highWorkerBusy.some(Boolean))"
   ,"highGrabInFlight = false;"
   ,"highScanRoi = null;"
@@ -127,8 +129,8 @@ assert.ok(!source.includes("HIGH_MULTI_FULL_DECODE_EVERY"), "quad must not perio
 assert.ok(source.includes("locked < 4 && now - lastNativeLocate > HIGH_QUAD_ACQUIRE_MS"), "native locate must stop once four tiles are locked");
 assert.ok(!source.includes("HIGH_QUAD_TRACK_MS"), "locked quad must not keep running full-frame BarcodeDetector");
 assert.ok(!source.includes("}, HIGH_TILE_PAD));"), "tracked quad boxes must not be stored already padded");
-assert.ok(source.includes("highMultiLayout && Math.max(source.width, source.height) > HIGH_QUAD_PACKED_SIZE"), "large quad unions must be downscaled before RGBA copy");
-assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v48";'), "service worker cache version was not bumped");
+assert.ok(source.includes("if (highMultiLayout) return grabBitmapPacked(source);"), "quad packed grabs must use a single resized ImageBitmap");
+assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v49";'), "service worker cache version was not bumped");
 assert.ok(serviceWorker.includes('path.endsWith(".wasm")'), "service worker must cache WASM/worker files instead of no-store");
 assert.ok(serviceWorker.includes('"./highspeed-protocol.js"') && serviceWorker.includes('"./vendor/decimen/highspeed-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/multi-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/zxing_reader-EOacYbLr.wasm"'), "high-speed receiver assets are not cached");
 assert.equal(mirrorSource, source, "web-receiver app.js drifted from the published root receiver");

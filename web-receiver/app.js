@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v48";
+  const RECEIVER_BUILD = "v49";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -55,7 +55,7 @@
   const HIGH_TRACK_SIZE = 960;
   const HIGH_TILE_SIZE = 720;
   const HIGH_QUAD_TILE_SIZE = 720;
-  const HIGH_QUAD_PACKED_SIZE = 960;
+  const HIGH_QUAD_PACKED_SIZE = 720;
   const HIGH_FULL_SCAN_EVERY_MISSES = 12;
   const HIGH_ROI_MISS_LIMIT = 8;
   const HIGH_CLOSE_BOX_RATIO = 0.5;
@@ -152,6 +152,7 @@
   let highGrabInFlight = false;
   let lastNativeLocate = 0;
   let highTileProven = [false, false, false, false];
+  let highQuadFrozen = false;
   let highQuadCursor = 0;
   let highSingleConfirmed = false;
   let startInFlight = false;
@@ -349,6 +350,7 @@
     highLocateTick = 0;
     lastNativeLocate = 0;
     highTileProven = [false, false, false, false];
+    highQuadFrozen = false;
     lastUsedLuma = false;
     lumaUnavailable = false;
     startBtn.disabled = false;
@@ -503,6 +505,7 @@
           highScanRoi = null;
           highTrackedTiles = null;
           highTileProven = [false, false, false, false];
+          highQuadFrozen = false;
         }
         if (highScanMisses >= 12) captureViaCanvas = true;
       }
@@ -937,10 +940,51 @@
     };
   }
 
-  async function grabPackedRegion(source) {
-    if (highMultiLayout && Math.max(source.width, source.height) > HIGH_QUAD_PACKED_SIZE) {
-      return grabCanvasPacked(source, HIGH_QUAD_PACKED_SIZE);
+  async function grabBitmapPacked(source) {
+    const vw = video.videoWidth || 0;
+    const vh = video.videoHeight || 0;
+    const x = Math.max(0, Math.min(vw - 1, Math.round(source.x)));
+    const y = Math.max(0, Math.min(vh - 1, Math.round(source.y)));
+    const widthIn = Math.max(1, Math.round(source.width));
+    const heightIn = Math.max(1, Math.round(source.height));
+    const widthSrc = Math.max(1, Math.min(widthIn, vw - x));
+    const heightSrc = Math.max(1, Math.min(heightIn, vh - y));
+    const scale = Math.min(1, HIGH_QUAD_PACKED_SIZE / Math.max(widthSrc, heightSrc, 1));
+    const width = Math.max(1, Math.round(widthSrc * scale));
+    const height = Math.max(1, Math.round(heightSrc * scale));
+    if (typeof createImageBitmap === "function") {
+      try {
+        const bitmap = await createImageBitmap(video, x, y, widthSrc, heightSrc, {
+          resizeWidth: width,
+          resizeHeight: height,
+          resizeQuality: "pixelated",
+          colorSpaceConversion: "none"
+        });
+        if (canvas.width !== width || canvas.height !== height) {
+          canvas.width = width;
+          canvas.height = height;
+        }
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(bitmap, 0, 0);
+        bitmap.close();
+        const image = ctx.getImageData(0, 0, width, height);
+        lastUsedLuma = true;
+        return {
+          lum: rgbaToLuma(image.data, width, height),
+          width,
+          height,
+          x,
+          y,
+          regionW: widthSrc,
+          regionH: heightSrc
+        };
+      } catch (_) {}
     }
+    return grabCanvasPacked({ x, y, width: widthSrc, height: heightSrc }, HIGH_QUAD_PACKED_SIZE);
+  }
+
+  async function grabPackedRegion(source) {
+    if (highMultiLayout) return grabBitmapPacked(source);
     let packed = await grabLumaRegion(source);
     if (!packed) packed = grabCanvasPacked(source);
     if (packed && (packed.regionW > source.width * 1.08 || packed.regionH > source.height * 1.08)) {
@@ -1104,6 +1148,7 @@
       if (highScanMisses + 1 >= HIGH_QUAD_TILE_MISS_LIMIT) {
         highTrackedTiles = null;
         highTileProven = [false, false, false, false];
+        highQuadFrozen = false;
       }
       highScanMisses += 1;
       return;
@@ -1118,7 +1163,7 @@
     }
     const corners = [];
     for (const hit of transferHits) corners.push(...mappedCorners(hit, hit.origin || { x: 0, y: 0, srcW: 1, srcH: 1, outW: 1, outH: 1 }));
-    if (corners.length) {
+    if (corners.length && !highQuadFrozen) {
       let minX = Infinity;
       let minY = Infinity;
       let maxX = -Infinity;
@@ -1143,7 +1188,7 @@
       else if (transferHits.length >= 3) highScanRoi = unionHighScanRoi(highScanRoi || next, next);
       else highScanRoi = next;
     }
-    if (highMultiLayout && transferHits.length) {
+    if (highMultiLayout && transferHits.length && !highQuadFrozen) {
       const tiles = [];
       for (const hit of transferHits) {
         const mapped = mappedCorners(hit, hit.origin || { x: 0, y: 0, srcW: 1, srcH: 1, outW: 1, outH: 1 });
@@ -1166,6 +1211,7 @@
         });
       }
       if (tiles.length) lockQuadSlots(tiles, false);
+      if (transferHits.length >= 4 && (highTrackedTiles || []).filter(Boolean).length >= 4) highQuadFrozen = true;
     }
   }
 
@@ -1579,6 +1625,7 @@
     highSingleConfirmed = false;
     lastNativeLocate = 0;
     highTileProven = [false, false, false, false];
+    highQuadFrozen = false;
     lastUsedLuma = false;
     highDecodeMeta.clear();
     highUniqueFrames = 0;
