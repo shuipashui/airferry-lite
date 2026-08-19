@@ -2,7 +2,7 @@
 
 本文给后续接手的人：当前能跑什么、什么不能动、哪些路已经烧死、网页怎么发到 GitHub Pages。用户向文档见 [README.md](README.md)。
 
-**交接时点：** 2026-08-20。网页接收端当前 **v60**。单码从整幅 video 取帧（开头 70 KB/s 那条快路径），再从 bitmap 裁到码、扫描 720。不要对 HTMLVideoElement 裁 ROI——靠近时那块几乎等于整幅，采集会掉到约 10。四码仍裁四个窗口。Android APK 冻结 **0.8.12**。
+**交接时点：** 2026-08-20。网页接收端停在 **v60**，单码**没有修好**。锁码后采集仍约 12 FPS、实时约 11 KB/s；开头瞄准仍能到约 70 KB/s。用户已要求先停手，只把现状写进文档。四码仍是 v53 冻结格子。Android APK 冻结 **0.8.12**。
 
 ## 1. 项目一句话
 
@@ -26,17 +26,25 @@
 
 | 部件 | 版本 | 状态 |
 |---|---|---|
-| 网页接收端 | **v60** | 单码整幅取帧，再从 bitmap 裁 ROI 720。四码仍是 v53 冻结格子。SW `client.navigate` 强制换版 |
+| 网页接收端 | **v60（单码未修好）** | 锁码后采集约 12 FPS。四码仍是 v53 冻结格子。不要再改 ImageBitmap 裁切策略，除非有新证据 |
 | Android APK | **0.8.12**（versionCode 27） | 未经明确要求不要改。峰值是 **0.8.8：60 Hz 四码约 193 KB/s** |
 | 发送端 | AFL2，单文件 HTML | 60 Hz 上单码超过 30 FPS 会拉回 30；四码每码上限 **1273 B** |
 
 v54（2026-08-20）尝试「≥3 命中重排 2×2 + 格子内跟随」以提高四码每帧命中，已按要求整版回退。不要在没新证据时再合回去。
 
-**v58** 去掉裁切、始终全图 1440：采集仍约 12、解码 65 ms、有效 8、实时 15 KB/s。忙时丢弃 0，说明 `createImageBitmap` 把 rVFC 卡住了，Worker 闲着。
+单码从 v53 往后越改越差，共同特征是：**锁码后采集掉到约 10–12 FPS、忙时丢弃 0**（`createImageBitmap` / 二次裁图把 `requestVideoFrameCallback` 卡住，4 个 Worker 闲着）。开头瞄准全图仍能到约 70 KB/s。
 
-**v59** 锁码后对 video 裁 ROI 再缩到 720：识别每帧 0.97，但采集 10.5、忙时丢弃 0、解码 65 ms、实时 24 KB/s。靠近时 ROI 几乎等于整幅竖屏，`createImageBitmap(video, x, y, w, h)` 走慢拷贝，把 rVFC 卡住。开头 70 KB/s 是 `createImageBitmap(video, 0, 0, vw, vh)` 整幅缩放，很快。
+| 版 | 锁码后做法 | 实测（2331 B · 30 FPS · 单码 · 60 Hz） |
+|---|---|---|
+| v26 | video 裁小块 ROI，扫描 720 | 采集 49、有效 48、解码 34 ms、实时 **69 KB/s**（当时码还没贴满竖屏） |
+| v53 靠近 | 整幅压到 720 | 采集 12.6、扫描 720 全图、实时 15 KB/s |
+| v55 | 整幅 1440 | 一组采集 10 / 21 KB/s；另一组采集 58 / **64.6 KB/s**（同一版，不稳定） |
+| v57 | video 裁 ROI，扫描 960 | 采集 12.1、每帧 0.98、实时 27 KB/s |
+| v58 | 整幅 1440，不带源矩形 | 采集 12.0、有效 8、实时 15 KB/s |
+| v59 | video 裁 ROI，扫描 720 | 采集 10.5、每帧 0.97、实时 24 KB/s |
+| **v60** | 整幅取帧再从 bitmap 裁 720 | 采集 **12.4**、有效 **4.8**、每帧 **0.45**、实时 **10.9 KB/s**。比 v59 更差 |
 
-**v60** 锁码后仍走整幅 video 快路径，再 `createImageBitmap(fullBitmap, …)` 裁到码、扫描 720。不要对 HTMLVideoElement 裁切。v26 的 ROI 720 在码比较小时也快，是因为裁的是小块；贴近所裁的是整幅，就会慢。
+v60 已烧：二次 `createImageBitmap` 没有保住开头那条快路径，还把命中率打到 0.45。用户要求先停，不要再围着 ROI / 1440 / 720 打转。
 
 ## 4. 实测基线（请当回归标准）
 
@@ -50,7 +58,7 @@ v54（2026-08-20）尝试「≥3 命中重排 2×2 + 格子内跟随」以提高
 - 识别 1212 · 唯一 1207 · 重复 5 · 序列跳跃 3592 · 解块 657/1695
 - 实时 **56.1** · 平均 **48.7** · 会话 **38.0 KB/s** · 流 `…:1253:…:4:1`
 
-单码回归标准：锁码后仍 **整幅取帧**、WASM 看 **ROI 720**、采集约 50、实时约 **60 KB/s**。对 video 裁 ROI（v57/v59）会把采集打到约 10，不是回归标准。
+单码**当前没有回归标准**。历史上好过的是 v26（ROI 720、约 69 KB/s）和 v55 其中一组全图 1440（约 64 KB/s），都复现不稳。v60 不是回归标准。四码仍以 v53 那组为准（格 4、实时约 50–56 KB/s）。
 
 ### 网页诊断里的「每帧」
 
@@ -82,14 +90,13 @@ tests/                          npm test 串起来的协议/安全/运行时针
 
 ## 6. 硬约束（违反过就会立刻掉速或黑屏）
 
-### 单码（整幅取帧，bitmap 上裁 720）
+### 单码（v53–v60 都没稳住锁码后的采集）
 
-- 单码 video 抓帧必须是 `createImageBitmap(video, 0, 0, vw, vh, { resize... })`。不要 `createImageBitmap(video, { resize })` 不带矩形，也不要对 video 传 ROI。
-- 锁码后从 **bitmap** 裁到码，扫描 **720**。`getHighSpeedSource()` 仍返回 ROI，只是不再用它去裁 HTMLVideoElement。
+- 锁码后采集掉到约 12、忙时丢弃 0 = 取帧把主线程 / rVFC 卡住。不要只改扫描边长或 ROI 文案。
+- 已烧：整幅压到 720（v53）、video 裁 ROI（v56/v57/v59）、不带源矩形的 `createImageBitmap(video, { resize })`（v58）、整幅取帧再从 bitmap 裁 720（v60）。
 - `useLuma = highMultiLayout && size <= HIGH_TILE_SIZE+16`。单码不要走四码的 VideoFrame/Y。
-- **不要** `if (lastHitBox >= 700) return 720` 去压**整幅**竖屏。
-- 不要切竖屏中心方块。
-- 不要 `probeMulti`，不要把一张单码切成四象限。
+- 不要切竖屏中心方块。不要 `probeMulti`。不要 `if (lastHitBox >= 700) return 720`。
+- 没有新的相机/取帧证据前，不要再发单码实验版。
 - 诊断第一行必须是 `网页：vN`。index.html 的 `app.js?v=` 必须一起升。
 
 ### 四码
@@ -121,16 +128,16 @@ tests/                          npm test 串起来的协议/安全/运行时针
 - 不要改 git config，不要 `--force` 推 `main`。
 - 不要 commit `.env`、密钥、`.tools/`。
 
-## 7. 网页 v60 四码 / 单码实际在做什么
+## 7. 网页 v60 实际在做什么（单码未修好）
 
 - 采集：`grabBitmapPacked`，一张 `createImageBitmap`，最大 `HIGH_QUAD_PACKED_SIZE` 720，画在 **`quadPackCanvas`** 上（不是 `#scanCanvas`）。
 - 调度：`highGrabInFlight || highWorkerBusy.some(Boolean)` 就丢帧。不和 WASM 重叠抓帧。
 - 锁定：`BarcodeDetector` 仅在 `locked < 4` 且间隔 `HIGH_QUAD_ACQUIRE_MS`（100 ms）。格 4 后停止。
 - 冻结：4 个槽填满后 `highQuadFrozen`，之后**不再**用命中去 merge 格子。空窗 miss：冻结 24，未冻结 6。
 - 扫描 pad：`HIGH_TILE_PAD = 1.35`，只在 decode 时 inflate。
-- 单码：`grabFullVideoBitmap` 整幅缩到 1440；有 ROI 时 `cropBitmapToSource` 再裁到 720。四码不走这条。
+- 单码（失败现状）：`grabFullVideoBitmap` 整幅缩到 1440，有 ROI 时再 `cropBitmapToSource` 裁到 720。实测锁码后采集 12.4、有效 4.8、实时 10.9 KB/s。四码不走这条。
 
-四码剩余缺口：冻结窗口不跟手抖，每帧约 0.31。下一步若还做四码，优先「只加大冻结后扫描边距、存的框不动」；不要再 nearest-neighbor。v54 那套重建网格已经回退。单码不要对 HTMLVideoElement 裁 ROI，也不要把整幅竖屏压到 720 再送进 WASM。
+四码剩余缺口：冻结窗口不跟手抖，每帧约 0.31。不要再 nearest-neighbor；v54 已回退。单码下一步若还做，需要先解释「为什么整幅取帧在瞄准时快、锁码后又慢」，不要再换 ROI 边长。
 
 ## 8. 发送端要点
 
@@ -159,15 +166,16 @@ tests/                          npm test 串起来的协议/安全/运行时针
 
 ## 11. 已知缺口（按优先级）
 
-1. **网页四码每帧命中**（0.31 vs APK ~2.7）。这是网页吞吐离 APK 最远的地方。单码保持整幅取帧 + bitmap 裁 720。
-2. 会话平均被瞄准段拉低；锁格 4 之前偏慢。
-3. AFL2 进度只在内存，刷新即丢。IndexedDB 只服务 AFL1。
-4. 文件上限 64 MiB。
-5. 本地 `origin/main` 和 GitHub `main` 的 SHA 经常对不齐（API 推送），但 tree 应一致。以 GitHub API 的 ref 为准。
+1. **网页单码锁码后掉速**（开头约 70 KB/s → 采集约 12、实时约 11 KB/s）。v53–v60 都没稳住。先停。
+2. **网页四码每帧命中**（0.31 vs APK ~2.7）。v53 格 4 峰值约 50–56 KB/s，不要在单码没想清楚时去改四码。
+3. 会话平均被瞄准段拉低；锁格 4 之前偏慢。
+4. AFL2 进度只在内存，刷新即丢。IndexedDB 只服务 AFL1。
+5. 文件上限 64 MiB。
+6. 本地 `origin/main` 和 GitHub `main` 的 SHA 经常对不齐（API 推送），但 tree 应一致。以 GitHub API 的 ref 为准。
 
 ## 12. 不要做的「优化」清单（摘要）
 
-`dueRelock`、全图 BarcodeDetector 跟踪、YUV `copyTo` 当快路径、四次 `createImageBitmap`、双倍 pad、nudge、probeMulti、删 `tileCenter`、1 个命中锁格、Android 连续对焦、Android 120 FPS 请求、visibility 停相机、120 FPS 发送（60 Hz 屏）、单码全图因 `lastHitBox >= 700` 压到 720、单码对 HTMLVideoElement 裁 ROI、`createImageBitmap(video, { resize })` 不带源矩形。
+`dueRelock`、全图 BarcodeDetector 跟踪、YUV `copyTo` 当快路径、四次 `createImageBitmap`、双倍 pad、nudge、probeMulti、删 `tileCenter`、1 个命中锁格、Android 连续对焦、Android 120 FPS 请求、visibility 停相机、120 FPS 发送（60 Hz 屏）、单码全图因 `lastHitBox >= 700` 压到 720、单码对 HTMLVideoElement 裁 ROI、`createImageBitmap(video, { resize })` 不带源矩形、整幅取帧再从 bitmap 裁 720（v60）。
 
 ## 13. 许可证
 
@@ -175,4 +183,4 @@ MIT。第三方见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。只使用 
 
 ---
 
-交接时网页应为 **v60**，APK **0.8.12**。单码锁码后应看到 **ROI**、扫描 **720**、采集 **40+**、实时约 **60 KB/s**。诊断必须是 `网页：v60`。四码先保住格 4 的峰值，再谈每帧。
+交接时网页停在 **v60**，APK **0.8.12**。单码锁码后当前是采集约 **12**、实时约 **11 KB/s**，不是 60 KB/s。四码仍看 v53 格 4。没有新证据不要再发单码实验版。

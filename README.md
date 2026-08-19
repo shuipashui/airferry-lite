@@ -3,7 +3,7 @@
 AirFerry Lite 是一个无需服务器的离线光学文件传输项目：电脑浏览器将文件编码为连续二维码，手机网页或 Android 接收端通过摄像头恢复文件。
 
 - 发送端：单文件 HTML，可直接双击打开，无运行时 CDN 依赖，并展示手机接收端网址二维码
-- 网页接收端：GitHub Pages HTTPS 页面（当前 **v60**），支持 Android Chrome 等现代移动浏览器；旧 AFL1 流可 IndexedDB 断点
+- 网页接收端：GitHub Pages HTTPS 页面（当前 **v60**）。单码锁码后会掉速，四码仍可用；细节见 [HANDOVER.md](HANDOVER.md)
 - Android 接收端：原生 APK（Android 10+，**冻结在 0.8.12**），CameraX 采集、zxing-cpp 原生解码、最新帧策略
 - 传输协议：`AFL1` 描述帧、数据帧、GF(256) 线性修复帧、择优 gzip、分片 CRC-32 和原文件 CRC-32
 - 高速协议：`AFL2` 二进制帧、LT 喷泉码、固定掩码 4
@@ -32,7 +32,8 @@ AirFerry Lite 是一个无需服务器的离线光学文件传输项目：电脑
 
 | 场景 | 参数 | 说明 |
 |---|---|---|
-| 单码推荐 | **2331 B · 30 FPS** | QR 约 V34。瞄准和锁码都从整幅 video 取帧（开头那下 70 KB/s 的路径）；再从 bitmap 裁到码、扫描 720。不要对 HTMLVideoElement 裁 ROI |
+| 单码推荐 | **2331 B · 30 FPS** | QR 约 V34。网页单码锁码后会从约 70 KB/s 掉到约 12 FPS / 11 KB/s（v60 未修好）。近距离大文件请用 APK |
+| 四码推荐 | **全屏 · 2331 B · 30 FPS** | 发送端会把四码每码限制到 1273 B（QR V22–V25）。网页 v53 实测实时约 50–56 KB/s |
 | 四码推荐 | **全屏 · 2331 B · 30 FPS** | 发送端会把四码每码限制到 1273 B（QR V22–V25）。网页 v53 实测实时约 50–56 KB/s，四码策略未改 |
 | 单码高吞吐 | 2953 B · 30 FPS | QR V40，只适合单码、近距离、画面清晰 |
 | 更远 / 摩尔纹 | 1465 B 或四码 1003 B · 24/30 FPS | 对焦不稳时更稳 |
@@ -45,7 +46,7 @@ AirFerry Lite 是一个无需服务器的离线光学文件传输项目：电脑
 
 ## 接收端现状
 
-网页接收端在 Worker 中运行 Decimen v0.3 的 ZXing WASM（通常 4 个 Worker）。单码从整幅画面取 `ImageBitmap`，命中后再从这张图裁到码并缩到 720；四码由 Chrome `BarcodeDetector` 找框，再按四个窗口从一张打包图解码。WASM/Worker 走 Service Worker 缓存优先。旧 `AFL1` 文本流会回退到 jsQR。
+网页接收端在 Worker 中运行 Decimen v0.3 的 ZXing WASM（通常 4 个 Worker）。**单码锁码后采集会掉到约 12 FPS**（v53–v60 都没稳住）；四码由 Chrome `BarcodeDetector` 找框，再按四个窗口从一张打包图解码，v53 格 4 实时约 50–56 KB/s。WASM/Worker 走 Service Worker 缓存优先。旧 `AFL1` 文本流会回退到 jsQR。
 
 Android APK **0.8.12 冻结，未经要求不要改**。峰值是 0.8.8：60 Hz 四码约 **193 KB/s**。0.8.12 用 CameraX 分析流（目标 1920×1440）和 `zxing-cpp` 2.3.0 读 Y 平面。单码一次最多 1 个符号；四码并行扫上一帧四个码的位置。采集走最新帧。完成后文件写到系统下载目录下的 `AirFerry Lite` 文件夹。
 
