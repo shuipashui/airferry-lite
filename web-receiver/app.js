@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v28";
+  const RECEIVER_BUILD = "v29";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -503,11 +503,80 @@
   }
 
   function nextQuadSource() {
-    const quads = overlappingQuadrants(centerSquareSource());
+    const slots = inferMissingQuadTiles(highTrackedTiles);
     const slot = highQuadCursor % 4;
     highQuadCursor = (highQuadCursor + 1) % 4;
-    const tracked = highTrackedTiles && highTrackedTiles[slot];
-    return tracked ? clampScanRegion(tracked) : quads[slot];
+    if (slots[slot]) return clampScanRegion(slots[slot]);
+    return exclusiveQuadrants(centerSquareSource())[slot];
+  }
+
+  function exclusiveQuadrants(source) {
+    const halfW = Math.max(1, Math.round(source.width / 2));
+    const halfH = Math.max(1, Math.round(source.height / 2));
+    return [
+      { x: source.x, y: source.y, width: halfW, height: halfH },
+      { x: source.x + source.width - halfW, y: source.y, width: halfW, height: halfH },
+      { x: source.x, y: source.y + source.height - halfH, width: halfW, height: halfH },
+      { x: source.x + source.width - halfW, y: source.y + source.height - halfH, width: halfW, height: halfH }
+    ].map(clampScanRegion);
+  }
+
+  function tileCenter(tile) {
+    return { x: tile.x + tile.width / 2, y: tile.y + tile.height / 2 };
+  }
+
+  function copyTileAt(template, cx, cy) {
+    return clampScanRegion({
+      x: cx - template.width / 2,
+      y: cy - template.height / 2,
+      width: template.width,
+      height: template.height
+    });
+  }
+
+  function inferMissingQuadTiles(tiles) {
+    const slots = tiles && tiles.length === 4 ? tiles.slice() : [null, null, null, null];
+    const known = [];
+    for (let index = 0; index < 4; index += 1) if (slots[index]) known.push(index);
+    if (known.length === 0 || known.length === 4) return slots;
+    if (known.length === 3) {
+      const missing = [0, 1, 2, 3].find(index => !slots[index]);
+      const c = [0, 1, 2, 3].map(index => slots[index] && tileCenter(slots[index]));
+      const cx = missing === 0 || missing === 3
+        ? c[1].x + c[2].x - c[missing === 0 ? 3 : 0].x
+        : c[0].x + c[3].x - c[missing === 1 ? 2 : 1].x;
+      const cy = missing === 0 || missing === 3
+        ? c[1].y + c[2].y - c[missing === 0 ? 3 : 0].y
+        : c[0].y + c[3].y - c[missing === 1 ? 2 : 1].y;
+      slots[missing] = copyTileAt(slots[known[0]], cx, cy);
+      return slots;
+    }
+    const [i, j] = known;
+    const a = tileCenter(slots[i]);
+    const b = tileCenter(slots[j]);
+    const pitchX = Math.max(Math.abs(b.x - a.x), Math.max(slots[i].width, slots[j].width) * 1.08);
+    const pitchY = Math.max(Math.abs(b.y - a.y), Math.max(slots[i].height, slots[j].height) * 1.08);
+    const key = i < j ? i + "," + j : j + "," + i;
+    if (key === "0,1") {
+      slots[2] = copyTileAt(slots[0], a.x, a.y + pitchY);
+      slots[3] = copyTileAt(slots[1], b.x, b.y + pitchY);
+    } else if (key === "2,3") {
+      slots[0] = copyTileAt(slots[2], a.x, a.y - pitchY);
+      slots[1] = copyTileAt(slots[3], b.x, b.y - pitchY);
+    } else if (key === "0,2") {
+      slots[1] = copyTileAt(slots[0], a.x + pitchX, a.y);
+      slots[3] = copyTileAt(slots[2], b.x + pitchX, b.y);
+    } else if (key === "1,3") {
+      slots[0] = copyTileAt(slots[1], a.x - pitchX, a.y);
+      slots[2] = copyTileAt(slots[3], b.x - pitchX, b.y);
+    } else if (key === "0,3") {
+      slots[1] = copyTileAt(slots[0], b.x, a.y);
+      slots[2] = copyTileAt(slots[0], a.x, b.y);
+    } else if (key === "1,2") {
+      slots[0] = copyTileAt(slots[1], b.x, a.y);
+      slots[3] = copyTileAt(slots[1], a.x, b.y);
+    }
+    return slots;
   }
 
   async function postHighSpeedRegion(slot, source, maxSymbols, retryBinarizer, tile) {
@@ -771,14 +840,73 @@
   function rememberTilesFromHits(codes, origin) {
     const fresh = tilesFromHits(codes, origin);
     if (highMultiLayout) {
-      if (!highTrackedTiles || highTrackedTiles.length !== 4) highTrackedTiles = [null, null, null, null];
+      const current = (highTrackedTiles || []).filter(Boolean);
       for (const tile of fresh) {
-        highTrackedTiles[quadGridSlot(tile.x + tile.width / 2, tile.y + tile.height / 2)] = tile;
+        let best = -1;
+        let bestDist = Infinity;
+        for (let index = 0; index < current.length; index += 1) {
+          const dx = current[index].x + current[index].width / 2 - (tile.x + tile.width / 2);
+          const dy = current[index].y + current[index].height / 2 - (tile.y + tile.height / 2);
+          const dist = dx * dx + dy * dy;
+          if (dist < bestDist) {
+            bestDist = dist;
+            best = index;
+          }
+        }
+        const radius = Math.max(tile.width, tile.height) * 0.45;
+        if (best >= 0 && bestDist <= radius * radius) current[best] = tile;
+        else if (current.length < 4) current.push(tile);
       }
+      highTrackedTiles = slotTilesByCluster(current);
       return;
     }
     for (const tile of fresh) mergeTrackedTile(tile);
     if (highTrackedTiles && highTrackedTiles.length < 2) highTrackedTiles = null;
+  }
+
+  function slotTilesByCluster(tiles) {
+    const filled = (tiles || []).filter(Boolean);
+    const slots = [null, null, null, null];
+    if (!filled.length) return slots;
+    if (filled.length === 1) {
+      slots[quadGridSlot(filled[0].x + filled[0].width / 2, filled[0].y + filled[0].height / 2)] = filled[0];
+      return slots;
+    }
+    if (filled.length === 2) {
+      const a = filled[0];
+      const b = filled[1];
+      const dx = b.x + b.width / 2 - (a.x + a.width / 2);
+      const dy = b.y + b.height / 2 - (a.y + a.height / 2);
+      const grid = centerSquareSource();
+      if (Math.abs(dx) >= Math.abs(dy)) {
+        const left = a.x + a.width / 2 < b.x + b.width / 2 ? a : b;
+        const right = left === a ? b : a;
+        if (left.y + left.height / 2 < grid.y + grid.height / 2) {
+          slots[0] = left;
+          slots[1] = right;
+        } else {
+          slots[2] = left;
+          slots[3] = right;
+        }
+      } else {
+        const top = a.y + a.height / 2 < b.y + b.height / 2 ? a : b;
+        const bottom = top === a ? b : a;
+        if (top.x + top.width / 2 < grid.x + grid.width / 2) {
+          slots[0] = top;
+          slots[2] = bottom;
+        } else {
+          slots[1] = top;
+          slots[3] = bottom;
+        }
+      }
+      return slots;
+    }
+    const midX = filled.reduce((sum, tile) => sum + tile.x + tile.width / 2, 0) / filled.length;
+    const midY = filled.reduce((sum, tile) => sum + tile.y + tile.height / 2, 0) / filled.length;
+    for (const tile of filled) {
+      slots[(tile.y + tile.height / 2 < midY ? 0 : 2) + (tile.x + tile.width / 2 < midX ? 0 : 1)] = tile;
+    }
+    return slots;
   }
 
   function mergeTrackedTile(tile) {
