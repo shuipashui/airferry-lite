@@ -55,7 +55,7 @@ for (const needle of [
   ,"const HIGH_QUAD_PACKED_SIZE = 720;"
   ,">= 4 ? 4 : 2"
   ,"!/Android/i.test(navigator.userAgent || \"\")"
-  ,"const RECEIVER_BUILD = \"v59\";"
+  ,"const RECEIVER_BUILD = \"v60\";"
   ,"function grabLumaRegion"
   ,"function cropLuma"
   ,"function downscaleLuma"
@@ -108,6 +108,9 @@ for (const needle of [
   ,"function tilesFromHits"
   ,"function clampScanRegion"
   ,"function scanSizeForSource"
+  ,"function grabFullVideoBitmap"
+  ,"function cropBitmapToSource"
+  ,"function clampBitmapRect"
   ,"function postHighSpeedRegion"
   ,"let captureViaCanvas = false;"
   ,"maxSymbols"
@@ -128,7 +131,7 @@ for (const needle of [
   ,"elapsed < 1000"
   ," · 每帧 "
 ]) assert.ok(source.includes(needle), "missing receiver guard: " + needle);
-assert.ok(indexHtml.includes("app.js?v=59"), "index.html must cache-bust app.js with the current receiver build");
+assert.ok(indexHtml.includes("app.js?v=60"), "index.html must cache-bust app.js with the current receiver build");
 assert.ok(!source.includes("highMultiLayout || !highSingleConfirmed"), "single-code acquire must not be replaced by quadrant crops");
 assert.ok(!source.includes("dueRelock"), "quad must not fall back to overlapping quadrants after empty misses");
 assert.ok(!source.includes("HIGH_MULTI_FULL_DECODE_EVERY"), "quad must not periodic-relock the whole ROI");
@@ -142,13 +145,14 @@ assert.ok(source.includes("highQuadFrozen ? HIGH_QUAD_FROZEN_MISS_LIMIT : HIGH_Q
 assert.ok(source.includes("const useLuma = highMultiLayout &&"), "single-code scans must not use the quad luma grab");
 assert.ok(!source.includes("probeMulti"), "single-code scans must not be shredded into quad quadrants");
 assert.ok(!source.includes("if (lastHitBox >= 700) return Math.min(HIGH_TILE_SIZE, longest);"), "close single-code full frames must not be capped at 720");
-assert.ok(source.includes("if (highScanMisses > 0) return inflateRect(highScanRoi, 1.2 + highScanMisses * 0.2);"), "single-code tracking must crop to the QR instead of decoding the full portrait frame");
+assert.ok(source.includes("if (highScanMisses > 0) return inflateRect(highScanRoi, 1.2 + highScanMisses * 0.2);"), "single-code tracking must keep an ROI so WASM does not search the whole portrait");
 assert.ok(source.includes("if (tile || highMultiLayout || highScanRoi) return Math.min(HIGH_TILE_SIZE, longest);"), "locked single-code ROI must scan at 720 like v26, not 960/1440");
-assert.ok(!source.includes("createImageBitmap(video, {"), "single-code ImageBitmap grabs must pass a source rectangle so Chrome can GPU-scale");
+assert.ok(source.includes("createImageBitmap(video, 0, 0, vw, vh,"), "single-code video grabs must snapshot the full frame, not crop the HTMLVideoElement");
+assert.ok(!source.includes("createImageBitmap(video, {"), "ImageBitmap grabs must pass a source rectangle so Chrome can GPU-scale");
 assert.ok(!source.includes("if (!highMultiLayout && !highScanRoi) return;"), "single-code speed must not wait for an ROI crop before counting bytes");
 assert.ok(source.includes("let swRefreshing = false;"), "service worker updates must reload even when the previous build already recorded a refresh");
 assert.ok(serviceWorker.includes("client.navigate(client.url)"), "new service worker must navigate open pages off a stuck old build");
-assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v59";'), "service worker cache version was not bumped");
+assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v60";'), "service worker cache version was not bumped");
 assert.ok(serviceWorker.includes('path.endsWith(".wasm")'), "service worker must cache WASM/worker files instead of no-store");
 assert.ok(serviceWorker.includes('"./highspeed-protocol.js"') && serviceWorker.includes('"./vendor/decimen/highspeed-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/multi-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/zxing_reader-EOacYbLr.wasm"'), "high-speed receiver assets are not cached");
 assert.equal(mirrorSource, source, "web-receiver app.js drifted from the published root receiver");

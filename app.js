@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v59";
+  const RECEIVER_BUILD = "v60";
   if ("serviceWorker" in navigator) {
     let swRefreshing = false;
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
@@ -1259,6 +1259,58 @@
     decodeQuadFrame();
   }
 
+  function clampBitmapRect(x, y, w, h, maxW, maxH) {
+    x = Math.max(0, Math.floor(x));
+    y = Math.max(0, Math.floor(y));
+    w = Math.max(1, Math.floor(w));
+    h = Math.max(1, Math.floor(h));
+    if (x + w > maxW) w = Math.max(1, maxW - x);
+    if (y + h > maxH) h = Math.max(1, maxH - y);
+    return { x, y, w, h };
+  }
+
+  async function grabFullVideoBitmap(maxSide) {
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    const scale = Math.min(1, maxSide / Math.max(vw, vh, 1));
+    const width = Math.max(1, Math.round(vw * scale));
+    const height = Math.max(1, Math.round(vh * scale));
+    const bitmap = await createImageBitmap(video, 0, 0, vw, vh, {
+      resizeWidth: width,
+      resizeHeight: height,
+      resizeQuality: "pixelated",
+      colorSpaceConversion: "none"
+    });
+    return { bitmap, width, height, vw, vh };
+  }
+
+  async function cropBitmapToSource(full, source, scanSize) {
+    const rect = clampBitmapRect(
+      source.x * full.width / full.vw,
+      source.y * full.height / full.vh,
+      source.width * full.width / full.vw,
+      source.height * full.height / full.vh,
+      full.width,
+      full.height
+    );
+    const outScale = Math.min(1, scanSize / Math.max(rect.w, rect.h, 1));
+    const width = Math.max(1, Math.round(rect.w * outScale));
+    const height = Math.max(1, Math.round(rect.h * outScale));
+    try {
+      const bitmap = await createImageBitmap(full.bitmap, rect.x, rect.y, rect.w, rect.h, {
+        resizeWidth: width,
+        resizeHeight: height,
+        resizeQuality: "pixelated",
+        colorSpaceConversion: "none"
+      });
+      full.bitmap.close();
+      return { bitmap, width, height };
+    } catch (error) {
+      try { full.bitmap.close(); } catch (_) {}
+      throw error;
+    }
+  }
+
   async function postHighSpeedRegion(slot, source, maxSymbols, retryBinarizer, tile) {
     const cap = scanSizeForSource(source, tile);
     const useLuma = highMultiLayout && Math.max(source.width, source.height) <= HIGH_TILE_SIZE + 16;
@@ -1272,22 +1324,43 @@
     highWorkerStartedAt[slot] = performance.now();
     const scanSize = scanSizeForSource(source, tile);
     const scale = Math.min(1, scanSize / Math.max(source.width, source.height));
-    const width = Math.max(1, Math.round(source.width * scale));
-    const height = Math.max(1, Math.round(source.height * scale));
+    let width = Math.max(1, Math.round(source.width * scale));
+    let height = Math.max(1, Math.round(source.height * scale));
     lastPostedScanSize = Math.max(width, height);
     try {
       const id = ++highFrameId;
       highDecodeMeta.set(id, { x: source.x, y: source.y, srcW: source.width, srcH: source.height, outW: width, outH: height });
       const useBitmap = !captureViaCanvas && typeof createImageBitmap === "function" && typeof OffscreenCanvas === "function";
       if (useBitmap) {
-        const bitmap = await createImageBitmap(video, source.x, source.y, source.width, source.height, {
-          resizeWidth: width,
-          resizeHeight: height,
-          resizeQuality: "pixelated",
-          colorSpaceConversion: "none"
-        });
+        let bitmap;
+        if (!tile && !highMultiLayout) {
+          const full = await grabFullVideoBitmap(HIGH_ACQUIRE_SIZE);
+          const cropped = source.x > 1 || source.y > 1 || source.x + source.width < full.vw - 1 || source.y + source.height < full.vh - 1;
+          if (cropped) {
+            const next = await cropBitmapToSource(full, source, scanSize);
+            bitmap = next.bitmap;
+            width = next.width;
+            height = next.height;
+          } else {
+            bitmap = full.bitmap;
+            width = full.width;
+            height = full.height;
+          }
+        } else {
+          bitmap = await createImageBitmap(video, source.x, source.y, source.width, source.height, {
+            resizeWidth: width,
+            resizeHeight: height,
+            resizeQuality: "pixelated",
+            colorSpaceConversion: "none"
+          });
+        }
+        lastPostedScanSize = Math.max(width, height);
         const meta = highDecodeMeta.get(id);
-        if (meta) meta.postedAt = performance.now();
+        if (meta) {
+          meta.outW = width;
+          meta.outH = height;
+          meta.postedAt = performance.now();
+        }
         highWorkers[slot].postMessage({ id, bitmap, maxSymbols, retryBinarizer }, [bitmap]);
         return true;
       }
