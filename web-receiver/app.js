@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v47";
+  const RECEIVER_BUILD = "v48";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -55,6 +55,7 @@
   const HIGH_TRACK_SIZE = 960;
   const HIGH_TILE_SIZE = 720;
   const HIGH_QUAD_TILE_SIZE = 720;
+  const HIGH_QUAD_PACKED_SIZE = 960;
   const HIGH_FULL_SCAN_EVERY_MISSES = 12;
   const HIGH_ROI_MISS_LIMIT = 8;
   const HIGH_CLOSE_BOX_RATIO = 0.5;
@@ -610,8 +611,7 @@
     if (filled >= 2) {
       const inferred = inferMissingQuadTiles(highTrackedTiles);
       const known = inferred[slot];
-      if (known && highTileProven[slot]) return clampScanRegion(inflateRect(known, HIGH_TILE_PAD));
-      if (known) return clampScanRegion(known);
+      if (known) return clampScanRegion(inflateRect(known, HIGH_TILE_PAD));
     }
     return overlappingQuadrants(chooseQuadRegion())[slot];
   }
@@ -632,12 +632,12 @@
   }
 
   function copyTileAt(template, cx, cy) {
-    return inflateRect({
+    return clampScanRegion({
       x: cx - template.width / 2,
       y: cy - template.height / 2,
       width: template.width,
       height: template.height
-    }, 1.16);
+    });
   }
 
   function inferMissingQuadTiles(tiles) {
@@ -724,12 +724,12 @@
         maxY = box.y + box.height;
       }
       if (!Number.isFinite(minX)) continue;
-      tiles.push(inflateRect({
+      tiles.push({
         x: minX,
         y: minY,
         width: Math.max(64, maxX - minX),
         height: Math.max(64, maxY - minY)
-      }, 1.22));
+      });
     }
     return tiles;
   }
@@ -912,9 +912,12 @@
     };
   }
 
-  function grabCanvasPacked(source) {
-    const width = Math.max(1, Math.round(source.width));
-    const height = Math.max(1, Math.round(source.height));
+  function grabCanvasPacked(source, maxSide) {
+    const srcW = Math.max(1, source.width);
+    const srcH = Math.max(1, source.height);
+    const scale = maxSide ? Math.min(1, maxSide / Math.max(srcW, srcH, 1)) : 1;
+    const width = Math.max(1, Math.round(srcW * scale));
+    const height = Math.max(1, Math.round(srcH * scale));
     if (canvas.width !== width || canvas.height !== height) {
       canvas.width = width;
       canvas.height = height;
@@ -935,6 +938,9 @@
   }
 
   async function grabPackedRegion(source) {
+    if (highMultiLayout && Math.max(source.width, source.height) > HIGH_QUAD_PACKED_SIZE) {
+      return grabCanvasPacked(source, HIGH_QUAD_PACKED_SIZE);
+    }
     let packed = await grabLumaRegion(source);
     if (!packed) packed = grabCanvasPacked(source);
     if (packed && (packed.regionW > source.width * 1.08 || packed.regionH > source.height * 1.08)) {
@@ -1152,12 +1158,12 @@
           maxX = Math.max(maxX, point.x);
           maxY = Math.max(maxY, point.y);
         }
-        tiles.push(inflateRegion({
+        tiles.push({
           x: minX,
           y: minY,
           width: Math.max(64, maxX - minX),
           height: Math.max(64, maxY - minY)
-        }, HIGH_TILE_PAD));
+        });
       }
       if (tiles.length) lockQuadSlots(tiles, false);
     }
