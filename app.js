@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v30";
+  const RECEIVER_BUILD = "v31";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -472,6 +472,11 @@
     }
     let jobs;
     try {
+      const probeMulti = !highMultiLayout && lastHitBox < 700 && highScanMisses > 0 && highScanMisses % HIGH_FULL_SCAN_EVERY_MISSES === 0;
+      if (highMultiLayout || probeMulti) {
+        await scanQuadFromSingleCapture();
+        return;
+      }
       jobs = nextHighScanJobs();
     } catch (_) {
       return;
@@ -533,12 +538,12 @@
   }
 
   function copyTileAt(template, cx, cy) {
-    return clampScanRegion({
+    return inflateRect({
       x: cx - template.width / 2,
       y: cy - template.height / 2,
       width: template.width,
       height: template.height
-    });
+    }, 1.28);
   }
 
   function inferMissingQuadTiles(tiles) {
@@ -584,6 +589,93 @@
       slots[3] = copyTileAt(slots[1], a.x, b.y);
     }
     return slots;
+  }
+
+  function mapTileToBitmap(tile, src, size) {
+    const scaleX = size / Math.max(src.width, 1);
+    const scaleY = size / Math.max(src.height, 1);
+    let x = Math.round((tile.x - src.x) * scaleX);
+    let y = Math.round((tile.y - src.y) * scaleY);
+    let width = Math.max(8, Math.round(tile.width * scaleX));
+    let height = Math.max(8, Math.round(tile.height * scaleY));
+    if (x < 0) {
+      width += x;
+      x = 0;
+    }
+    if (y < 0) {
+      height += y;
+      y = 0;
+    }
+    if (x + width > size) width = size - x;
+    if (y + height > size) height = size - y;
+    if (width < 8 || height < 8) return null;
+    return { x, y, width, height };
+  }
+
+  function postReadyBitmap(slot, bitmap, source, maxSymbols, retryBinarizer) {
+    highWorkerBusy[slot] = true;
+    highWorkerStartedAt[slot] = performance.now();
+    lastPostedScanSize = Math.max(bitmap.width, bitmap.height);
+    const id = ++highFrameId;
+    highDecodeMeta.set(id, {
+      x: source.x,
+      y: source.y,
+      srcW: source.width,
+      srcH: source.height,
+      outW: bitmap.width,
+      outH: bitmap.height,
+      postedAt: performance.now()
+    });
+    highWorkers[slot].postMessage({ id, bitmap, maxSymbols, retryBinarizer }, [bitmap]);
+  }
+
+  async function scanQuadFromSingleCapture() {
+    const freeSlots = [];
+    for (let index = 0; index < highWorkers.length; index += 1) {
+      if (!highWorkerBusy[index] && highWorkerReady[index]) freeSlots.push(index);
+    }
+    if (!freeSlots.length) {
+      workerBusyDrops += 1;
+      return;
+    }
+    const src = centerSquareSource();
+    const size = HIGH_TILE_SIZE;
+    const retry = highScanMisses >= 2;
+    const slots = inferMissingQuadTiles(highTrackedTiles);
+    const fallback = exclusiveQuadrants(src);
+    highBitmapLock = true;
+    let full = null;
+    try {
+      if (!captureViaCanvas && typeof createImageBitmap === "function") {
+        full = await createImageBitmap(video, src.x, src.y, src.width, src.height, {
+          resizeWidth: size,
+          resizeHeight: size,
+          resizeQuality: "pixelated",
+          colorSpaceConversion: "none"
+        });
+      }
+      for (const workerSlot of freeSlots) {
+        const quad = highQuadCursor % 4;
+        highQuadCursor = (highQuadCursor + 1) % 4;
+        const tile = clampScanRegion(slots[quad] || fallback[quad]);
+        if (full) {
+          const mapped = mapTileToBitmap(tile, src, size);
+          if (!mapped) continue;
+          const piece = await createImageBitmap(full, mapped.x, mapped.y, mapped.width, mapped.height);
+          postReadyBitmap(workerSlot, piece, tile, 1, retry);
+        } else {
+          await postHighSpeedRegion(workerSlot, tile, 1, retry, true);
+        }
+      }
+    } catch (_) {
+      captureViaCanvas = true;
+      for (const workerSlot of freeSlots) {
+        if (highWorkerBusy[workerSlot] && !highWorkerStartedAt[workerSlot]) highWorkerBusy[workerSlot] = false;
+      }
+    } finally {
+      highBitmapLock = false;
+      if (full && typeof full.close === "function") full.close();
+    }
   }
 
   async function postHighSpeedRegion(slot, source, maxSymbols, retryBinarizer, tile) {

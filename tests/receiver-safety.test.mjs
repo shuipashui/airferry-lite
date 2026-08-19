@@ -51,13 +51,15 @@ for (const needle of [
   ,"const HIGH_ACQUIRE_SIZE = 1440;"
   ,"const HIGH_TRACK_SIZE = 960;"
   ,"const HIGH_TILE_SIZE = 720;"
-  ,"const RECEIVER_BUILD = \"v30\";"
-  ,"known.length < 2"
+  ,"const RECEIVER_BUILD = \"v31\";"
+  ,"function scanQuadFromSingleCapture"
+  ,"function mapTileToBitmap"
+  ,"function postReadyBitmap"
   ,"function quadGridSlot"
   ,"function nextQuadSource"
   ,"function inferMissingQuadTiles"
   ,"function exclusiveQuadrants"
-  ,"function slotTilesByCluster"
+  ,"known.length < 2"
   ,"function currentHighScanSize"
   ,"function nextHighScanJobs"
   ,"function overlappingQuadrants"
@@ -84,7 +86,7 @@ for (const needle of [
   ,"elapsed < 1000"
   ," · 每帧 "
 ]) assert.ok(source.includes(needle), "missing receiver guard: " + needle);
-assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v30";'), "service worker cache version was not bumped");
+assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v31";'), "service worker cache version was not bumped");
 assert.ok(serviceWorker.includes('path.endsWith(".wasm")'), "service worker must cache WASM/worker files instead of no-store");
 assert.ok(serviceWorker.includes('"./highspeed-protocol.js"') && serviceWorker.includes('"./vendor/decimen/highspeed-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/multi-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/zxing_reader-EOacYbLr.wasm"'), "high-speed receiver assets are not cached");
 assert.equal(mirrorSource, source, "web-receiver app.js drifted from the published root receiver");
