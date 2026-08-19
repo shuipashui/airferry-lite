@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v23";
+  const RECEIVER_BUILD = "v24";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -49,9 +49,12 @@
   const MAX_FILE_SIZE = 64 * 1024 * 1024;
   const MAX_CHUNKS = 200000;
   const MAX_CHUNK_SIZE = 4096;
-  const HIGH_SPEED_WORKERS = 2;
+  const HIGH_SPEED_WORKERS = (navigator.hardwareConcurrency || 0) >= 8 ? 3 : 2;
   const HIGH_WORKER_TIMEOUT = 2500;
-  const HIGH_MAX_SCAN = 720;
+  const HIGH_ACQUIRE_SIZE = 1440;
+  const HIGH_TRACK_SIZE = 960;
+  const HIGH_TILE_SIZE = 960;
+  const HIGH_FULL_SCAN_EVERY_MISSES = 12;
   const HIGH_ROI_MISS_LIMIT = 3;
   const HIGH_CLOSE_BOX_RATIO = 0.62;
   const HIGH_QUAD_OVERLAP = 0.18;
@@ -143,9 +146,6 @@
   let highTrackedTiles = null;
   let lastHitBox = 0;
   let lastPostedScanSize = 0;
-  let nativeBoxes = [];
-  let nativeBoxesAt = 0;
-  let nativeLocateBusy = false;
   const highDecodeMeta = new Map();
 
   startBtn.onclick = start;
@@ -277,8 +277,6 @@
     highScanRoi = null;
     highTrackedTiles = null;
     lastHitBox = 0;
-    nativeBoxes = [];
-    nativeBoxesAt = 0;
     highQuadCursor = 0;
     highDecodeMeta.clear();
     lastScanStartedAt = -Infinity;
@@ -426,7 +424,6 @@
           highScanRoi = null;
           highTrackedTiles = null;
           lastHitBox = 0;
-          nativeBoxes = [];
         }
         if (highScanMisses >= 12) captureViaCanvas = true;
       }
@@ -466,11 +463,11 @@
 
   async function scanWithHighSpeedWorkers() {
     if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
+    if (!highWorkerReady.some(Boolean)) return;
     const now = performance.now();
     for (let index = 0; index < highWorkers.length; index += 1) {
       if (highWorkerBusy[index] && now - highWorkerStartedAt[index] > HIGH_WORKER_TIMEOUT) restartHighSpeedWorker(index);
     }
-    void refreshNativeBoxes();
     const jobs = nextHighScanJobs();
     let posted = 0;
     for (const job of jobs) {
@@ -484,71 +481,26 @@
     }
   }
 
-  async function refreshNativeBoxes() {
-    if (!barcodeDetector || nativeLocateBusy) return;
-    const now = performance.now();
-    if (now - nativeBoxesAt < 90) return;
-    nativeLocateBusy = true;
-    nativeBoxesAt = now;
-    try {
-      const detected = await barcodeDetector.detect(video);
-      nativeBoxes = detected.map(regionFromDetector).filter(Boolean);
-    } catch (_) {
-      nativeBoxes = [];
-      detectorErrors += 1;
-      if (detectorErrors >= 3) barcodeDetector = null;
-    } finally {
-      nativeLocateBusy = false;
-    }
-  }
-
-  function regionFromDetector(item) {
-    const points = item?.cornerPoints;
-    if (Array.isArray(points) && points.length >= 3) {
-      let minX = Infinity;
-      let minY = Infinity;
-      let maxX = -Infinity;
-      let maxY = -Infinity;
-      for (const point of points) {
-        if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
-        minX = Math.min(minX, point.x);
-        minY = Math.min(minY, point.y);
-        maxX = Math.max(maxX, point.x);
-        maxY = Math.max(maxY, point.y);
-      }
-      if (maxX > minX && maxY > minY) {
-        return inflateRegion({ x: minX, y: minY, width: maxX - minX, height: maxY - minY }, 1.28);
-      }
-    }
-    const box = item?.boundingBox;
-    if (box && box.width > 24 && box.height > 24) {
-      return inflateRegion({ x: box.x, y: box.y, width: box.width, height: box.height }, 1.28);
-    }
-    return null;
-  }
-
   function nextHighScanJobs() {
-    const retry = highScanMisses >= 2;
-    if (nativeBoxes.length && performance.now() - nativeBoxesAt < 280) {
-      return nativeBoxes.slice(0, 4).map(source => ({ source, maxSymbols: 1, retry, tile: true }));
-    }
+    const retry = highScanMisses > 0;
     const base = getHighSpeedSource();
-    const view = Math.min(video.videoWidth || 1, video.videoHeight || 1);
-    const tightSingle = highScanRoi && !highMultiLayout && lastHitBox >= 280 && lastHitBox < view * HIGH_CLOSE_BOX_RATIO;
-    if (tightSingle) return [{ source: base, maxSymbols: 1, retry, tile: false }];
-    const tiles = highTrackedTiles && highTrackedTiles.length >= 3
-      ? highTrackedTiles.map(clampScanRegion)
-      : overlappingQuadrants(base);
-    const start = tiles.length ? highQuadCursor % tiles.length : 0;
-    if (tiles.length) highQuadCursor = (start + 1) % tiles.length;
-    const rotated = tiles.slice(start).concat(tiles.slice(0, start));
-    return rotated.map(source => ({ source, maxSymbols: 1, retry, tile: true }));
+    const probeMulti = !highMultiLayout && highScanMisses > 0 && highScanMisses % HIGH_FULL_SCAN_EVERY_MISSES === 0;
+    if (highMultiLayout || probeMulti || (highTrackedTiles && highTrackedTiles.length >= 3)) {
+      const tiles = highTrackedTiles && highTrackedTiles.length >= 3
+        ? highTrackedTiles.map(clampScanRegion)
+        : overlappingQuadrants(base);
+      const start = tiles.length ? highQuadCursor % tiles.length : 0;
+      if (tiles.length) highQuadCursor = (start + 1) % tiles.length;
+      const rotated = tiles.slice(start).concat(tiles.slice(0, start));
+      return rotated.map(source => ({ source, maxSymbols: 1, retry, tile: true }));
+    }
+    return [{ source: base, maxSymbols: 1, retry, tile: false }];
   }
 
   async function postHighSpeedRegion(slot, source, maxSymbols, retryBinarizer, tile) {
     highWorkerBusy[slot] = true;
     highWorkerStartedAt[slot] = performance.now();
-    const scanSize = scanSizeForSource(source);
+    const scanSize = scanSizeForSource(source, tile);
     const scale = Math.min(1, scanSize / Math.max(source.width, source.height));
     const width = Math.max(1, Math.round(source.width * scale));
     const height = Math.max(1, Math.round(source.height * scale));
@@ -591,12 +543,13 @@
     }
   }
 
-  function scanSizeForSource(source) {
-    return Math.min(HIGH_MAX_SCAN, Math.max(source.width, source.height, 64));
+  function scanSizeForSource(source, tile) {
+    const cap = tile || highMultiLayout ? HIGH_TILE_SIZE : highScanRoi ? HIGH_TRACK_SIZE : HIGH_ACQUIRE_SIZE;
+    return Math.min(cap, Math.max(source.width, source.height, 64));
   }
 
   function currentHighScanSize() {
-    return lastPostedScanSize || HIGH_MAX_SCAN;
+    return lastPostedScanSize || (highMultiLayout ? HIGH_TILE_SIZE : highScanRoi ? HIGH_TRACK_SIZE : HIGH_ACQUIRE_SIZE);
   }
 
   function centerSquareSource() {
@@ -822,8 +775,6 @@
     highTrackedTiles = null;
     lastHitBox = 0;
     lastPostedScanSize = 0;
-    nativeBoxes = [];
-    nativeBoxesAt = 0;
     highQuadCursor = 0;
     highDecodeMeta.clear();
     highUniqueFrames = 0;
@@ -1352,7 +1303,7 @@
     const workerCount = highWorkers.length || lastWorkerCount;
     const avgDecode = decodeSamples ? (decodeTimeMs / decodeSamples).toFixed(1) + " ms" : "—";
     diagnosticsEl.textContent = [
-      "网页：" + RECEIVER_BUILD + " · Worker " + (highWorkers.length || lastWorkerCount) + " · 原生定位 " + (barcodeDetector ? nativeBoxes.length : "关"),
+      "网页：" + RECEIVER_BUILD + " · Worker " + (highWorkers.length || lastWorkerCount) + " · 原生定位 " + (barcodeDetector ? "开" : "关"),
       "相机：" + (settings.width || video.videoWidth || "?") + "×" + (settings.height || video.videoHeight || "?") +
         " · 实际/报告 " + (cameraFrameRate || settings.frameRate || "?") + " FPS · 请求上限 " + cameraRequestedFps,
       "相机能力：FPS " + fpsRange + " · facingMode " + (settings.facingMode || "未知"),
