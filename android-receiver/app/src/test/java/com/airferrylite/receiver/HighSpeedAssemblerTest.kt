@@ -9,6 +9,13 @@ import org.junit.Test
 
 class HighSpeedAssemblerTest {
     @Test
+    fun rejectsShortAsciiFalsePositives() {
+        val fake = "06097436".toByteArray(Charsets.ISO_8859_1)
+        assertTrue(!HighSpeedAssembler.looksLikeFrame(fake))
+        assertTrue(!HighSpeedAssembler.isMultiLayoutFrame(fake))
+    }
+
+    @Test
     fun recognizesSingleAndQuadLayoutMarkers() {
         val frame = Base64.getDecoder().decode("0QwxSgAAAAAHABAAbgAAACLGYlvjOimgt5OYL00SrR+Mlm92")
         assertTrue(HighSpeedAssembler.looksLikeFrame(frame))

@@ -178,7 +178,7 @@ class HighSpeedAssembler {
                 val container = activeDecoder.assemble() ?: throw IllegalStateException("高速数据尚未完整")
                 if (fnv1a(container) != frame.payloadFnv) throw IllegalStateException("高速流校验失败")
                 unpackFile(container)
-            } catch (error: Exception) {
+            } catch (error: Throwable) {
                 return snapshot(error = error.message ?: "高速文件恢复失败")
             }
         }
@@ -319,6 +319,14 @@ class HighSpeedAssembler {
             val startAt = blockCount + max(2, blockCount / 25)
             if (framesNew < startAt || framesNew - lastDenseAttemptAt < DENSE_ATTEMPT_EVERY) return
             lastDenseAttemptAt = framesNew
+            try {
+                runDenseComplete()
+            } catch (_: Throwable) {
+                // A failed dense attempt must not abort the fountain peel.
+            }
+        }
+
+        private fun runDenseComplete() {
             val wordCount = (blockCount + 63) / 64
             data class DenseRow(val bits: LongArray, val bytes: ByteArray)
             val pivots = arrayOfNulls<DenseRow>(blockCount)

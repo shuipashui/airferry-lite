@@ -111,11 +111,13 @@ class MainActivity : AppCompatActivity() {
                 val bytes = decoded.bytes
                 if (bytes != null && HighSpeedAssembler.looksLikeFrame(bytes)) {
                     highSpeedSessionActive = true
-                    frameAnalyzer.setMultiLayout(HighSpeedAssembler.isMultiLayoutFrame(bytes))
+                    if (HighSpeedAssembler.isMultiLayoutFrame(bytes)) frameAnalyzer.setMultiLayout(true)
                     pendingProtocolFrames.incrementAndGet()
                     protocolExecutor.execute {
                         try {
                             handleHighSpeedFrame(bytes)
+                        } catch (_: Throwable) {
+                            highProtocolErrors += 1
                         } finally {
                             pendingProtocolFrames.decrementAndGet()
                         }
@@ -317,7 +319,13 @@ class MainActivity : AppCompatActivity() {
         }
         if (file != null && update.session != null && lastSavedSession != "high:${update.session}") {
             lastSavedSession = "high:${update.session}"
-            saveFile(file.name, file.mime, file.bytes)
+            val savedName = file.name
+            val savedMime = file.mime
+            val savedBytes = file.bytes
+            val saved = saveFile(savedName, savedMime, savedBytes)
+            ContextCompat.getMainExecutor(this).execute {
+                statusText.text = saved?.let { "已保存到 Download/AirFerry Lite/$it" } ?: "保存失败"
+            }
         }
     }
 
@@ -355,7 +363,7 @@ class MainActivity : AppCompatActivity() {
         assembler.reset()
         protocolExecutor.execute { highSpeedAssembler.reset() }
         highSpeedSessionActive = false
-        frameAnalyzer.setMultiLayout(false)
+        frameAnalyzer.resetSession()
         lastSavedSession = null
         lastHighUiAt = 0
         resetSpeed(SystemClock.elapsedRealtime())
@@ -387,7 +395,7 @@ class MainActivity : AppCompatActivity() {
         val now = SystemClock.elapsedRealtime()
         val highAge = if (highLastFrameAt == 0L) "—" else "${(now - highLastFrameAt).coerceAtLeast(0)} ms"
         diagnosticsText.text = listOf(
-            "设备：${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} · App 0.7.1",
+            "设备：${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} · App 0.7.3",
             "相机：${stats?.width ?: "?"}×${stats?.height ?: "?"} · 采集 ${stats?.captureFps?.let { "%.1f".format(it) } ?: "?"} FPS · 目标 ${preferredFpsLabel()}",
             "分析流 FPS：$availableCameraFpsLabel",
             "高速录像能力：$highSpeedCameraFpsLabel（CameraX 分析流不可直接使用）",
@@ -419,22 +427,25 @@ class MainActivity : AppCompatActivity() {
         latestSpeedLabel = "实时速度：—"
     }
 
-    private fun saveFile(meta: TransferMeta, bytes: ByteArray) = saveFile(meta.name, meta.mime, bytes)
+    private fun saveFile(meta: TransferMeta, bytes: ByteArray) {
+        val saved = saveFile(meta.name, meta.mime, bytes)
+        statusText.text = saved?.let { "已保存到 Download/AirFerry Lite/$it" } ?: "保存失败"
+    }
 
-    private fun saveFile(name: String, mime: String, bytes: ByteArray) {
+    private fun saveFile(name: String, mime: String, bytes: ByteArray): String? {
         val safeName = name.substringAfterLast('/').substringAfterLast('\\').ifBlank { "received.bin" }
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, safeName)
-            put(MediaStore.MediaColumns.MIME_TYPE, mime)
+            put(MediaStore.MediaColumns.MIME_TYPE, mime.ifBlank { "application/octet-stream" })
             put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/AirFerry Lite")
         }
-        val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-        if (uri == null) {
-            statusText.text = "保存失败"
-            return
+        return try {
+            val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return null
+            contentResolver.openOutputStream(uri)?.use { it.write(bytes) } ?: return null
+            safeName
+        } catch (_: Exception) {
+            null
         }
-        contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
-        statusText.text = "已保存到 Download/AirFerry Lite/$safeName"
     }
 
     private fun formatRate(value: Double) = when {
