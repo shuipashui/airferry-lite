@@ -55,7 +55,7 @@ for (const needle of [
   ,"const HIGH_QUAD_PACKED_SIZE = 720;"
   ,">= 4 ? 4 : 2"
   ,"!/Android/i.test(navigator.userAgent || \"\")"
-  ,"const RECEIVER_BUILD = \"v55\";"
+  ,"const RECEIVER_BUILD = \"v56\";"
   ,"function grabLumaRegion"
   ,"function cropLuma"
   ,"function downscaleLuma"
@@ -140,7 +140,9 @@ assert.ok(source.includes("highQuadFrozen ? HIGH_QUAD_FROZEN_MISS_LIMIT : HIGH_Q
 assert.ok(source.includes("const useLuma = highMultiLayout &&"), "single-code scans must not use the quad luma grab");
 assert.ok(!source.includes("probeMulti"), "single-code scans must not be shredded into quad quadrants");
 assert.ok(!source.includes("if (lastHitBox >= 700) return Math.min(HIGH_TILE_SIZE, longest);"), "close single-code full frames must not be capped at 720");
-assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v55";'), "service worker cache version was not bumped");
+assert.ok(source.includes("const close = !highMultiLayout && box >= view * HIGH_CLOSE_BOX_RATIO"), "close single codes must keep a padded QR crop instead of scanning the whole portrait frame");
+assert.ok(!source.includes("box >= view * HIGH_CLOSE_BOX_RATIO && !highMultiLayout"), "close single codes must not drop ROI and decode the full 1440x1920 frame");
+assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v56";'), "service worker cache version was not bumped");
 assert.ok(serviceWorker.includes('path.endsWith(".wasm")'), "service worker must cache WASM/worker files instead of no-store");
 assert.ok(serviceWorker.includes('"./highspeed-protocol.js"') && serviceWorker.includes('"./vendor/decimen/highspeed-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/multi-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/zxing_reader-EOacYbLr.wasm"'), "high-speed receiver assets are not cached");
 assert.equal(mirrorSource, source, "web-receiver app.js drifted from the published root receiver");

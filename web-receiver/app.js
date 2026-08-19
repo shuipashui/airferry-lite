@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v55";
+  const RECEIVER_BUILD = "v56";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -1455,17 +1455,14 @@
     const view = Math.min(video.videoWidth, video.videoHeight);
     const box = Math.max(maxX - minX, maxY - minY, 64);
     lastHitBox = box;
-    if (box >= view * HIGH_CLOSE_BOX_RATIO && !highMultiLayout) {
-      highScanRoi = null;
-    } else {
-      const pad = codes.length >= 4 ? 1.35 : codes.length >= 2 ? 2.15 : highMultiLayout ? 3.8 : 1.4;
-      highScanRoi = clampScanRegion({
-        x: minX - (maxX - minX) * (pad - 1) / 2,
-        y: minY - (maxY - minY) * (pad - 1) / 2,
-        width: (maxX - minX) * pad,
-        height: (maxY - minY) * pad
-      });
-    }
+    const close = !highMultiLayout && box >= view * HIGH_CLOSE_BOX_RATIO;
+    const pad = close ? 1.18 : codes.length >= 4 ? 1.35 : codes.length >= 2 ? 2.15 : highMultiLayout ? 3.8 : 1.4;
+    highScanRoi = clampScanRegion({
+      x: minX - (maxX - minX) * (pad - 1) / 2,
+      y: minY - (maxY - minY) * (pad - 1) / 2,
+      width: (maxX - minX) * pad,
+      height: (maxY - minY) * pad
+    });
     if (highMultiLayout || codes.length >= 2) rememberTilesFromHits(codes, origin);
     else if (!highMultiLayout) highTrackedTiles = null;
   }
