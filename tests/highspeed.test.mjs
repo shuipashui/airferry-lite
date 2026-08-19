@@ -120,7 +120,9 @@ assert.ok(sender.includes("function renderRateHint"));
 assert.ok(sender.includes("formatRate(rate.screen)"));
 assert.ok(sender.includes("function syncFpsToLayout"));
 assert.ok(sender.includes('fps.value = "60"'));
-assert.ok(sender.includes("四码请全屏"));
+assert.ok(template.includes("四码请全屏"));
+assert.ok(template.includes('id="openReceiver"'), "sender must link to the receiver");
+assert.ok(sender.includes("openReceiver.href = RECEIVER_URL"));
 
 const rootBundle = fs.readFileSync(new URL("../highspeed-protocol.js", import.meta.url));
 const mirrorBundle = fs.readFileSync(new URL("../web-receiver/highspeed-protocol.js", import.meta.url));

@@ -18,6 +18,7 @@
   const frameText = el("frameText");
   const progressBar = el("progressBar");
   const receiverUrl = el("receiverUrl");
+  const openReceiver = el("openReceiver");
   const receiverQrCanvas = el("receiverQrCanvas");
   const rateHint = el("rateHint");
   const HEADER_LEN = 20;
@@ -462,6 +463,7 @@
   }
   receiverUrl.href = RECEIVER_URL;
   receiverUrl.textContent = RECEIVER_URL;
+  if (openReceiver) openReceiver.href = RECEIVER_URL;
   drawLinkQr(RECEIVER_URL);
   clearCanvas();
   renderRateHint();

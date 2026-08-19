@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import vm from "node:vm";
 
 const source = await fs.readFile(new URL("../app.js", import.meta.url), "utf8");
+const indexHtml = await fs.readFile(new URL("../index.html", import.meta.url), "utf8");
+assert.ok(indexHtml.includes('id="openSender"') && indexHtml.includes("sender/dist/airferry-lite-sender.html"), "receiver must link to the sender");
 const serviceWorker = await fs.readFile(new URL("../sw.js", import.meta.url), "utf8");
 const mirrorSource = await fs.readFile(new URL("../web-receiver/app.js", import.meta.url), "utf8");
 const mirrorServiceWorker = await fs.readFile(new URL("../web-receiver/sw.js", import.meta.url), "utf8");
@@ -75,7 +77,7 @@ for (const needle of [
   ,"elapsed < 1000"
   ," · 每帧 "
 ]) assert.ok(source.includes(needle), "missing receiver guard: " + needle);
-assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v24";'), "service worker cache version was not bumped");
+assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v25";'), "service worker cache version was not bumped");
 assert.ok(serviceWorker.includes('path.endsWith(".wasm")'), "service worker must cache WASM/worker files instead of no-store");
 assert.ok(serviceWorker.includes('"./highspeed-protocol.js"') && serviceWorker.includes('"./vendor/decimen/highspeed-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/multi-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/zxing_reader-EOacYbLr.wasm"'), "high-speed receiver assets are not cached");
 assert.equal(mirrorSource, source, "web-receiver app.js drifted from the published root receiver");
