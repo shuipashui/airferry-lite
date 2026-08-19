@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v42";
+  const RECEIVER_BUILD = "v43";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -1186,13 +1186,13 @@
         const inferred = inferMissingQuadTiles(highTrackedTiles).filter(Boolean).map(tile => clampScanRegion(inflateRect(tile, HIGH_TILE_PAD)));
         if (inferred.length >= 3) add(await readCropsFromPacked(packed, inferred, false));
         else if (previous.length >= 3) add(await readCropsFromPacked(packed, previous, false));
-        if (transferCount(hits) < 4) {
+        if (transferCount(hits) < 4 && previous.length < 4) {
           const exclusive = exclusiveQuadrants(region);
           const overlays = overlappingQuadrants(region);
           const pending = overlays.filter((crop, index) => !tileCovered(exclusive[index], hits));
           add(await readCropsFromPacked(packed, pending, false));
         }
-        if (transferCount(hits) < 4 && highScanMisses >= 1) {
+        if (transferCount(hits) < 4 && previous.length < 4 && highScanMisses >= 1) {
           const retries = exclusiveQuadrants(region)
             .filter(tile => !tileCovered(tile, hits))
             .map(tile => inflateRect(tile, 1.28));
@@ -1211,8 +1211,8 @@
 
   async function postHighSpeedRegion(slot, source, maxSymbols, retryBinarizer, tile) {
     const cap = scanSizeForSource(source, tile);
-    const smallEnough = Math.max(source.width, source.height) <= cap + 1 || source.width * source.height <= HIGH_TILE_SIZE * HIGH_TILE_SIZE * 2;
-    const luma = smallEnough ? await grabLumaRegion(source) : null;
+    const useLuma = !!(tile || highMultiLayout) && Math.max(source.width, source.height) <= HIGH_TILE_SIZE + 16;
+    const luma = useLuma ? await grabLumaRegion(source) : null;
     if (luma && (Math.max(luma.width, luma.height) <= cap + 1 || luma.width * luma.height <= HIGH_TILE_SIZE * HIGH_TILE_SIZE * 2)) {
       const sized = downscaleLuma(luma.lum, luma.width, luma.height, cap);
       return postLumaToWorker(slot, sized, { x: luma.x, y: luma.y, width: luma.regionW || luma.width, height: luma.regionH || luma.height }, maxSymbols, retryBinarizer);
@@ -1270,12 +1270,13 @@
   function scanSizeForSource(source, tile) {
     const longest = Math.max(source.width, source.height, 64);
     if (tile || highMultiLayout) return Math.min(HIGH_TILE_SIZE, longest);
-    if (highScanRoi) return Math.min(lastHitBox >= 700 ? HIGH_TILE_SIZE : HIGH_TRACK_SIZE, longest);
+    if (lastHitBox >= 700) return Math.min(HIGH_TILE_SIZE, longest);
+    if (highScanRoi) return Math.min(HIGH_TRACK_SIZE, longest);
     return Math.min(HIGH_ACQUIRE_SIZE, longest);
   }
 
   function currentHighScanSize() {
-    return lastPostedScanSize || (highMultiLayout ? HIGH_QUAD_TILE_SIZE : highScanRoi ? (lastHitBox >= 700 ? HIGH_TILE_SIZE : HIGH_TRACK_SIZE) : HIGH_ACQUIRE_SIZE);
+    return lastPostedScanSize || (highMultiLayout ? HIGH_QUAD_TILE_SIZE : lastHitBox >= 700 ? HIGH_TILE_SIZE : highScanRoi ? HIGH_TRACK_SIZE : HIGH_ACQUIRE_SIZE);
   }
 
   function centerSquareSource() {
@@ -1405,12 +1406,7 @@
     const box = Math.max(maxX - minX, maxY - minY, 64);
     lastHitBox = box;
     if (box >= view * HIGH_CLOSE_BOX_RATIO && !highMultiLayout) {
-      highScanRoi = inflateRect({
-        x: minX,
-        y: minY,
-        width: Math.max(64, maxX - minX),
-        height: Math.max(64, maxY - minY)
-      }, 1.4);
+      highScanRoi = null;
     } else {
       const pad = codes.length >= 4 ? 1.35 : codes.length >= 2 ? 2.15 : highMultiLayout ? 3.8 : 1.4;
       highScanRoi = clampScanRegion({
