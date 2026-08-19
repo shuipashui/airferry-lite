@@ -1,11 +1,13 @@
-const CACHE_NAME = "airferry-lite-v56";
+const CACHE_NAME = "airferry-lite-v57";
 const ASSETS = ["./","./index.html","./styles.css","./app.js","./manifest.webmanifest","./vendor/jsQR.js","./receiver-storage.js","./decoder-worker.js","./highspeed-decoder-worker.js","./protocol.js","./highspeed-protocol.js","./vendor/decimen/decoder-worker.js","./vendor/decimen/multi-decoder-worker.js","./vendor/decimen/highspeed-decoder-worker.js","./vendor/decimen/zxing_reader-EOacYbLr.wasm"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
 });
 self.addEventListener("activate", (event) => {
-  event.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)))).then(() => self.clients.claim()));
+  event.waitUntil(
+    caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)))).then(() => self.clients.claim()).then(() => self.clients.matchAll({ type: "window", includeUncontrolled: true })).then((windows) => Promise.all(windows.map((client) => client.navigate(client.url))))
+  );
 });
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;

@@ -2,7 +2,7 @@
 
 本文给后续接手的人：当前能跑什么、什么不能动、哪些路已经烧死、网页怎么发到 GitHub Pages。用户向文档见 [README.md](README.md)。
 
-**交接时点：** 2026-08-20。网页接收端当前 **v56**。v55 把靠近单码改成全图 1440 后采集掉到约 10 FPS；现改为命中后裁码周围。Android APK 冻结 **0.8.12**。
+**交接时点：** 2026-08-20。网页接收端当前 **v57**。v55/v56 版本号常卡着不更新（`index.html` 曾写死 `app.js?v=53`，且 `sessionStorage === RECEIVER_BUILD` 会挡住刷新）。平均速度会把瞄准段算进去。Android APK 冻结 **0.8.12**。
 
 ## 1. 项目一句话
 
@@ -26,7 +26,7 @@
 
 | 部件 | 版本 | 状态 |
 |---|---|---|
-| 网页接收端 | **v56** | 单码 ImageBitmap，命中后 ROI 裁码（靠近 pad 1.18）。不要全图 1440×1920 进 WASM。四码仍是 v53 冻结格子 |
+| 网页接收端 | **v57** | 单码 ImageBitmap + 命中后 ROI。SW 激活时 `client.navigate` 强制换版。速度计时等 ROI/四码布局锁定后才开始 |
 | Android APK | **0.8.12**（versionCode 27） | 未经明确要求不要改。峰值是 **0.8.8：60 Hz 四码约 193 KB/s** |
 | 发送端 | AFL2，单文件 HTML | 60 Hz 上单码超过 30 FPS 会拉回 30；四码每码上限 **1273 B** |
 
@@ -117,7 +117,7 @@ tests/                          npm test 串起来的协议/安全/运行时针
 - 不要改 git config，不要 `--force` 推 `main`。
 - 不要 commit `.env`、密钥、`.tools/`。
 
-## 7. 网页 v56 四码 / 单码实际在做什么
+## 7. 网页 v57 四码 / 单码实际在做什么
 
 - 采集：`grabBitmapPacked`，一张 `createImageBitmap`，最大 `HIGH_QUAD_PACKED_SIZE` 720，画在 **`quadPackCanvas`** 上（不是 `#scanCanvas`）。
 - 调度：`highGrabInFlight || highWorkerBusy.some(Boolean)` 就丢帧。不和 WASM 重叠抓帧。
@@ -138,7 +138,7 @@ tests/                          npm test 串起来的协议/安全/运行时针
 ## 9. 怎么改网页、怎么上线
 
 1. 改根目录 `app.js` / `index.html` / `sw.js`。
-2. 升 `RECEIVER_BUILD`、标题、`CACHE_NAME`、`tests/receiver-safety.test.mjs` 里的版本针。
+2. 升 `RECEIVER_BUILD`、标题、`CACHE_NAME`、**`index.html` 里 `app.js?v=`**、`tests/receiver-safety.test.mjs` 里的版本针。不要再用 `sessionStorage === RECEIVER_BUILD` 跳过刷新。
 3. `node sync-receiver.mjs`（或 `npm run build:receiver`）。
 4. `$env:Path = "C:\Users\UU\airferry-lite\.tools\node;" + $env:Path; npm test`
 5. 用户要求发布时再 commit。推送：对 GitHub 当前 `main` 做 tree 补丁（见历史 `.git/push-via-api.mjs` 写法），**不要**假设本地 `origin/main` 等于 GitHub。
@@ -155,7 +155,7 @@ tests/                          npm test 串起来的协议/安全/运行时针
 
 ## 11. 已知缺口（按优先级）
 
-1. **网页四码每帧命中**（0.31 vs APK ~2.7）。这是网页吞吐离 APK 最远的地方。单码 v56 命中后应走 ROI，不再全图 1440。
+1. **网页四码每帧命中**（0.31 vs APK ~2.7）。这是网页吞吐离 APK 最远的地方。单码命中后应走 ROI，不再全图 1440。
 2. 会话平均被瞄准段拉低；锁格 4 之前偏慢。
 3. AFL2 进度只在内存，刷新即丢。IndexedDB 只服务 AFL1。
 4. 文件上限 64 MiB。
@@ -171,4 +171,4 @@ MIT。第三方见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。只使用 
 
 ---
 
-交接时网页应为 **v56**，APK **0.8.12**。单码命中后应看到 **ROI**（不是全图）、扫描约 **960**、采集 **50+**；四码先保住格 4 的峰值，再谈每帧。
+交接时网页应为 **v57**，APK **0.8.12**。单码命中后应看到 **ROI**（不是全图）、扫描约 **960**、采集 **50+**；诊断必须是 `网页：v57`。四码先保住格 4 的峰值，再谈每帧。

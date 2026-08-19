@@ -1,14 +1,13 @@
 (() => {
-  const RECEIVER_BUILD = "v56";
+  const RECEIVER_BUILD = "v57";
   if ("serviceWorker" in navigator) {
+    let swRefreshing = false;
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
     }).catch(() => {});
     navigator.serviceWorker.addEventListener?.("controllerchange", () => {
-      try {
-        if (sessionStorage.getItem("airferry-sw-reloaded") === RECEIVER_BUILD) return;
-        sessionStorage.setItem("airferry-sw-reloaded", RECEIVER_BUILD);
-      } catch (_) {}
+      if (swRefreshing) return;
+      swRefreshing = true;
       location.reload();
     });
   }
@@ -2083,6 +2082,7 @@
   }
 
   function updateSpeed(byteCount) {
+    if (!highMultiLayout && !highScanRoi) return;
     const now = performance.now();
     if (!sessionStartedAt) sessionStartedAt = now;
     if (!speedWindowStartedAt) speedWindowStartedAt = now;

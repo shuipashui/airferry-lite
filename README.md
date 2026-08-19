@@ -3,7 +3,7 @@
 AirFerry Lite 是一个无需服务器的离线光学文件传输项目：电脑浏览器将文件编码为连续二维码，手机网页或 Android 接收端通过摄像头恢复文件。
 
 - 发送端：单文件 HTML，可直接双击打开，无运行时 CDN 依赖，并展示手机接收端网址二维码
-- 网页接收端：GitHub Pages HTTPS 页面（当前 **v56**），支持 Android Chrome 等现代移动浏览器；旧 AFL1 流可 IndexedDB 断点
+- 网页接收端：GitHub Pages HTTPS 页面（当前 **v57**），支持 Android Chrome 等现代移动浏览器；旧 AFL1 流可 IndexedDB 断点
 - Android 接收端：原生 APK（Android 10+，**冻结在 0.8.12**），CameraX 采集、zxing-cpp 原生解码、最新帧策略
 - 传输协议：`AFL1` 描述帧、数据帧、GF(256) 线性修复帧、择优 gzip、分片 CRC-32 和原文件 CRC-32
 - 高速协议：`AFL2` 二进制帧、LT 喷泉码、固定掩码 4
@@ -24,7 +24,7 @@ AirFerry Lite 是一个无需服务器的离线光学文件传输项目：电脑
 3. 手机打开网页接收端或安装 APK，允许摄像头权限并开始扫描。
 4. 保持手机稳定对准二维码（四码请让发送端全屏），接收完成后保存或下载文件。
 
-诊断第一行必须是 `网页：v56`。若仍是旧版本，强制刷新或清掉该站数据后再开。
+诊断第一行必须是 `网页：v57`。Chrome 若一直停在旧版，是旧 Service Worker 不刷新；v57 会在新 SW 激活时强制打开页面。仍不对就清掉该站数据。
 
 ## 推荐参数
 
@@ -62,7 +62,7 @@ IndexedDB 断点只用于旧的 AFL1 文本流。当前 AFL2 传输保存在内�
 ```text
 index.html                                  # GitHub Pages 网页接收端入口
 app.js / protocol.js / highspeed-protocol.js
-sw.js                                       # 网页接收端缓存（airferry-lite-v56）
+sw.js                                       # 网页接收端缓存（airferry-lite-v57）
 android-receiver/                           # Android APK 源码（0.8.12）
 sender/dist/airferry-lite-sender.html       # 可直接使用的单文件发送端
 sender/                                     # 发送端源码和构建脚本
