@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v27";
+  const RECEIVER_BUILD = "v28";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -146,6 +146,7 @@
   let highTrackedTiles = null;
   let lastHitBox = 0;
   let lastPostedScanSize = 0;
+  let highBitmapLock = false;
   const highDecodeMeta = new Map();
 
   startBtn.onclick = start;
@@ -280,6 +281,7 @@
     highQuadCursor = 0;
     highDecodeMeta.clear();
     lastScanStartedAt = -Infinity;
+    highBitmapLock = false;
     startBtn.disabled = false;
     stopBtn.disabled = true;
   }
@@ -402,15 +404,16 @@
       const startedAt = highWorkerStartedAt[index];
       highWorkerBusy[index] = false;
       highWorkerStartedAt[index] = 0;
-      if (startedAt) {
-        decodeTimeMs += Math.max(0, performance.now() - startedAt);
-        decodeSamples += 1;
-      }
       const decoded = event.data?.bytes;
       decodedFrames += 1;
       sessionDecodedFrames += 1;
       const origin = highDecodeMeta.get(event.data?.id);
       if (event.data?.id != null) highDecodeMeta.delete(event.data.id);
+      const decodeStarted = origin?.postedAt || startedAt;
+      if (decodeStarted) {
+        decodeTimeMs += Math.max(0, performance.now() - decodeStarted);
+        decodeSamples += 1;
+      }
       const codes = normalizeDecodedCodes(decoded);
       validQrFrames += codes.length;
       sessionValidCodes += codes.length;
@@ -462,7 +465,7 @@
 
   async function scanWithHighSpeedWorkers() {
     if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
-    if (!highWorkerReady.some(Boolean)) return;
+    if (!highWorkerReady.some(Boolean) || highBitmapLock) return;
     const now = performance.now();
     for (let index = 0; index < highWorkers.length; index += 1) {
       if (highWorkerBusy[index] && now - highWorkerStartedAt[index] > HIGH_WORKER_TIMEOUT) restartHighSpeedWorker(index);
@@ -476,7 +479,12 @@
         break;
       }
       posted += 1;
-      void postHighSpeedRegion(slot, job.source, job.maxSymbols, job.retry, job.tile);
+      highBitmapLock = true;
+      try {
+        await postHighSpeedRegion(slot, job.source, job.maxSymbols, job.retry, job.tile);
+      } finally {
+        highBitmapLock = false;
+      }
     }
   }
 
@@ -484,14 +492,22 @@
     const retry = highMultiLayout ? highScanMisses >= 2 : highScanMisses > 0;
     const probeMulti = !highMultiLayout && lastHitBox < 700 && highScanMisses > 0 && highScanMisses % HIGH_FULL_SCAN_EVERY_MISSES === 0;
     if (highMultiLayout || probeMulti) {
-      const tiles = highTrackedTiles && highTrackedTiles.length >= 4
-        ? highTrackedTiles.map(clampScanRegion)
-        : overlappingQuadrants(centerSquareSource());
-      const source = tiles[highQuadCursor % tiles.length];
-      highQuadCursor = (highQuadCursor + 1) % Math.max(tiles.length, 1);
-      return [{ source, maxSymbols: 1, retry, tile: true }];
+      return [{ source: nextQuadSource(), maxSymbols: 1, retry, tile: true }];
     }
     return [{ source: getHighSpeedSource(), maxSymbols: 1, retry, tile: false }];
+  }
+
+  function quadGridSlot(x, y) {
+    const grid = centerSquareSource();
+    return (y < grid.y + grid.height / 2 ? 0 : 2) + (x < grid.x + grid.width / 2 ? 0 : 1);
+  }
+
+  function nextQuadSource() {
+    const quads = overlappingQuadrants(centerSquareSource());
+    const slot = highQuadCursor % 4;
+    highQuadCursor = (highQuadCursor + 1) % 4;
+    const tracked = highTrackedTiles && highTrackedTiles[slot];
+    return tracked ? clampScanRegion(tracked) : quads[slot];
   }
 
   async function postHighSpeedRegion(slot, source, maxSymbols, retryBinarizer, tile) {
@@ -513,6 +529,8 @@
           resizeQuality: "pixelated",
           colorSpaceConversion: "none"
         });
+        const meta = highDecodeMeta.get(id);
+        if (meta) meta.postedAt = performance.now();
         highWorkers[slot].postMessage({ id, bitmap, maxSymbols, retryBinarizer }, [bitmap]);
         return true;
       }
@@ -523,6 +541,8 @@
       ctx.imageSmoothingEnabled = false;
       ctx.drawImage(video, source.x, source.y, source.width, source.height, 0, 0, width, height);
       const image = ctx.getImageData(0, 0, width, height);
+      const meta = highDecodeMeta.get(id);
+      if (meta) meta.postedAt = performance.now();
       highWorkers[slot].postMessage({
         id,
         buf: image.data.buffer,
@@ -750,8 +770,15 @@
 
   function rememberTilesFromHits(codes, origin) {
     const fresh = tilesFromHits(codes, origin);
+    if (highMultiLayout) {
+      if (!highTrackedTiles || highTrackedTiles.length !== 4) highTrackedTiles = [null, null, null, null];
+      for (const tile of fresh) {
+        highTrackedTiles[quadGridSlot(tile.x + tile.width / 2, tile.y + tile.height / 2)] = tile;
+      }
+      return;
+    }
     for (const tile of fresh) mergeTrackedTile(tile);
-    if (!highMultiLayout && highTrackedTiles && highTrackedTiles.length < 2) highTrackedTiles = null;
+    if (highTrackedTiles && highTrackedTiles.length < 2) highTrackedTiles = null;
   }
 
   function mergeTrackedTile(tile) {
@@ -814,6 +841,7 @@
     highTrackedTiles = null;
     lastHitBox = 0;
     lastPostedScanSize = 0;
+    highBitmapLock = false;
     highQuadCursor = 0;
     highDecodeMeta.clear();
     highUniqueFrames = 0;
@@ -1350,7 +1378,7 @@
       "解码：" + backend + " · Worker " + workerCount + " · 平均 " + avgDecode +
         " · 扫描 " + currentHighScanSize() + " · 布局 " + (highMultiLayout ? "四码" : "单码") +
         (highScanRoi ? " · ROI" : " · 全图") +
-        (highTrackedTiles ? " · 格 " + highTrackedTiles.length : "") + perFrameLabel(),
+        (highTrackedTiles ? " · 格 " + highTrackedTiles.filter(Boolean).length : "") + perFrameLabel(),
       "调度：Worker 就绪 " + highWorkerReady.filter(Boolean).length + "/" + workerCount +
         " · 忙时丢弃 " + workerBusyDrops + " · 重启 " + workerRestarts + " · 错误 " + workerErrors +
         " · 连续未识别 " + highScanMisses,
