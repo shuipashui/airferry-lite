@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v40";
+  const RECEIVER_BUILD = "v41";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -54,7 +54,7 @@
   const HIGH_ACQUIRE_SIZE = 1440;
   const HIGH_TRACK_SIZE = 960;
   const HIGH_TILE_SIZE = 720;
-  const HIGH_QUAD_TILE_SIZE = 480;
+  const HIGH_QUAD_TILE_SIZE = 720;
   const HIGH_FULL_SCAN_EVERY_MISSES = 12;
   const HIGH_ROI_MISS_LIMIT = 8;
   const HIGH_CLOSE_BOX_RATIO = 0.5;
@@ -172,18 +172,10 @@
   copyDiagnostics?.addEventListener("click", copyDiagnosticsText);
   copyDiagnosticsCard?.addEventListener("click", copyDiagnosticsText);
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) {
-      if (hideStopTimer) {
-        clearTimeout(hideStopTimer);
-        hideStopTimer = 0;
-      }
-      return;
-    }
-    if (!stream) return;
-    hideStopTimer = setTimeout(() => {
+    if (!document.hidden && hideStopTimer) {
+      clearTimeout(hideStopTimer);
       hideStopTimer = 0;
-      if (document.hidden && stream) stop("页面已切到后台");
-    }, 1200);
+    }
   });
   restoreSavedSession();
 
@@ -252,14 +244,20 @@
     startBtn.disabled = true;
     try {
       await setupDetector();
+      const androidCam = /Android/i.test(navigator.userAgent || "");
       const camera = { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1440 } };
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { ...camera, frameRate: { ideal: 120 } },
-          audio: false
-        });
-        cameraRequestedFps = 120;
-      } catch (_) {
+      if (!androidCam) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { ...camera, frameRate: { ideal: 120 } },
+            audio: false
+          });
+          cameraRequestedFps = 120;
+        } catch (_) {
+          stream = null;
+        }
+      }
+      if (!stream) {
         cameraRequestedFps = 60;
         stream = await navigator.mediaDevices.getUserMedia({ video: camera, audio: false });
       }
@@ -562,7 +560,7 @@
       lastNativeLocate = now;
       void locateQuadWithNative();
     }
-    if (highMultiLayout) {
+    if (highMultiLayout && locked >= 3) {
       decodeQuadFrame();
       return;
     }
@@ -1266,13 +1264,12 @@
 
   function scanSizeForSource(source, tile) {
     const longest = Math.max(source.width, source.height, 64);
-    if (tile || highMultiLayout) return Math.min(highMultiLayout ? HIGH_QUAD_TILE_SIZE : HIGH_TILE_SIZE, longest);
-    if (highScanRoi) return Math.min(lastHitBox >= 700 ? HIGH_TILE_SIZE : HIGH_TRACK_SIZE, longest);
+    if (tile || highMultiLayout) return Math.min(HIGH_TILE_SIZE, longest);
     return Math.min(HIGH_ACQUIRE_SIZE, longest);
   }
 
   function currentHighScanSize() {
-    return lastPostedScanSize || (highMultiLayout ? HIGH_QUAD_TILE_SIZE : highScanRoi ? HIGH_TRACK_SIZE : HIGH_ACQUIRE_SIZE);
+    return lastPostedScanSize || (highMultiLayout ? HIGH_QUAD_TILE_SIZE : HIGH_ACQUIRE_SIZE);
   }
 
   function centerSquareSource() {
@@ -1407,7 +1404,7 @@
         y: minY,
         width: Math.max(64, maxX - minX),
         height: Math.max(64, maxY - minY)
-      }, 1.22);
+      }, 1.4);
     } else {
       const pad = codes.length >= 4 ? 1.35 : codes.length >= 2 ? 2.15 : highMultiLayout ? 3.8 : 1.4;
       highScanRoi = clampScanRegion({
@@ -1473,11 +1470,7 @@
   function rememberTilesFromHits(codes, origin) {
     const fresh = tilesFromHits(codes, origin);
     if (highMultiLayout) {
-      if (fresh.length >= 3) mergeVideoTiles(fresh, false);
-      else if (fresh.length < 2) {
-        highTrackedTiles = null;
-        highTileProven = [false, false, false, false];
-      }
+      if (fresh.length) mergeVideoTiles(fresh, false);
       return;
     }
     for (const tile of fresh) mergeTrackedTile(tile);
