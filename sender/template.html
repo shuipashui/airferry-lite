@@ -17,22 +17,23 @@
       </label>
       <div class="grid">
         <label>每帧数据
-          <select id="chunkSize"><option value="1465">1465 B（低密度）</option><option value="2331" selected>2331 B（推荐）</option><option value="2953">2953 B（高吞吐）</option></select>
+          <select id="chunkSize"><option value="1465">1465 B（低密度）</option><option value="2331" selected>2331 B（单码推荐）</option><option value="2953">2953 B（单码高吞吐）</option></select>
         </label>
         <label>播放帧率
-          <select id="fps"><option value="24">24 FPS（稳定）</option><option value="30" selected>30 FPS（推荐）</option><option value="45">45 FPS（AirFerry 稳定档）</option><option value="60">60 FPS（实验）</option><option value="90">90 FPS（高刷屏）</option><option value="120">120 FPS（高刷屏）</option></select>
+          <select id="fps"><option value="20">20 FPS</option><option value="24">24 FPS</option><option value="30" selected>30 FPS（单码推荐）</option><option value="45">45 FPS（60 Hz 会落到 30）</option><option value="60">60 FPS（四码推荐）</option><option value="90">90 FPS（高刷屏）</option><option value="120">120 FPS（高刷屏）</option></select>
         </label>
         <label>二维码布局
           <select id="qrMode"><option value="single" selected>单码（兼容）</option><option value="quad">四码（多码吞吐）</option></select>
         </label>
       </div>
-      <div class="actions"><button id="prepareBtn" class="primary" disabled>生成二维码流</button><button id="playBtn" disabled>开始播放</button><button id="resetBtn" disabled>重置</button></div>
+      <p class="tip" id="rateHint">理论速度：—</p>
+      <div class="actions"><button id="prepareBtn" class="primary" disabled>生成二维码流</button><button id="playBtn" disabled>开始播放</button><button id="fullscreenBtn" disabled>全屏</button><button id="resetBtn" disabled>重置</button></div>
       <div class="status"><div><span>状态</span><strong id="statusText">等待文件</strong></div><div><span>会话</span><strong id="sessionText">—</strong></div><div><span>片段</span><strong id="frameText">—</strong></div></div>
       <div class="progress"><i id="progressBar"></i></div>
-      <p class="tip">四码模式每次同时显示 4 个不同喷泉帧，接收端需使用最新版网页或 APK。普通 60 Hz 屏幕请用 30 FPS；45/60 FPS 容易叠帧，手机解不出来。</p>
+      <p class="tip">四码请全屏并用 60 FPS（每刷新一帧，避免重复扫描）。30 FPS 四码会在同一屏上扫两遍，速度上不去。单码用 2331 B / 30 FPS；2953 B 只适合单码。四码每码固定上限 1003 B，选更大的每帧数据不会变快。理论速度是屏幕吞吐上限，喷泉码大约再加 15% 帧。</p>
     </section>
     <section class="panel viewer">
-      <canvas id="qrCanvas" width="900" height="900"></canvas>
+      <canvas id="qrCanvas" width="1080" height="1080"></canvas>
       <div class="overlay" id="overlay">
         <section class="receiver-link" aria-label="手机网页接收端">
           <div class="receiver-link-copy"><strong>手机网页接收端</strong><span>扫码后直接打开接收页面</span><a id="receiverUrl" target="_blank" rel="noopener"></a><small>选择文件并生成二维码流后，此入口会自动隐藏</small></div>

@@ -12,7 +12,8 @@ const multiWorker = await fs.readFile(new URL("../vendor/decimen/multi-decoder-w
 new vm.Script(source);
 new vm.Script(storage);
 new vm.Script(worker);
-assert.ok(multiWorker.includes("maxNumberOfSymbols:4"), "multi-code worker was not generated");
+assert.ok(multiWorker.includes("f.data.maxSymbols"), "multi-code worker was not generated");
+assert.ok(multiWorker.includes("tryHarder:false") && multiWorker.includes("tryRotate:false"), "WASM decoder must skip extra screen-search passes");
 for (const needle of [
   "const MAX_FILE_SIZE = 64 * 1024 * 1024;",
   "const MAX_CHUNKS = 200000;",
@@ -42,11 +43,18 @@ for (const needle of [
   ,"highWorkerReady[index]"
   ,"highWorkerBusy.findIndex"
   ,'new Worker("vendor/decimen/highspeed-decoder-worker.js")'
-  ,"const HIGH_SCAN_SIZE_SINGLE = 800;"
-  ,"const HIGH_SCAN_SIZE_MULTI = 1200;"
+  ,"const HIGH_SCAN_SIZE_SINGLE = 960;"
+  ,"const HIGH_SCAN_SIZE_MULTI = 1280;"
   ,"function currentHighScanSize"
+  ,"function overlappingQuadrants"
+  ,"function postHighSpeedRegion"
+  ,"let captureViaCanvas = false;"
+  ,"maxSymbols"
+  ,"highMultiLayout"
+  ,"box * 3.8"
+  ,"updateHighScanRoiFromHits"
 ]) assert.ok(source.includes(needle), "missing receiver guard: " + needle);
-assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v13";'), "service worker cache version was not bumped");
+assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v18";'), "service worker cache version was not bumped");
 assert.ok(serviceWorker.includes('"./highspeed-protocol.js"') && serviceWorker.includes('"./vendor/decimen/highspeed-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/multi-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/zxing_reader-EOacYbLr.wasm"'), "high-speed receiver assets are not cached");
 assert.equal(mirrorSource, source, "web-receiver app.js drifted from the published root receiver");
 assert.equal(mirrorServiceWorker, serviceWorker, "web-receiver sw.js drifted from the published root receiver");

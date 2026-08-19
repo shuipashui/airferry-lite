@@ -67,10 +67,11 @@ assert.equal(qr.getModuleCount(), 177, "2953-byte frame must fit QR V40-L");
   assert.ok(worker.includes("zxing_reader-EOacYbLr.wasm"));
   assert.ok(worker.includes("SPDX-License-Identifier: MIT"));
   assert.ok(workerBridge.includes('importScripts("./multi-decoder-worker.js")'));
+  assert.ok(workerBridge.includes("maxSymbols"), "bitmap bridge must forward maxSymbols to the WASM decoder");
   const publishedApp = fs.readFileSync(new URL("../app.js", import.meta.url), "utf8");
   assert.ok(publishedApp.includes('new Worker("vendor/decimen/highspeed-decoder-worker.js")'), "WASM worker must start from vendor/decimen so locateFile finds the wasm");
   const multiWorker = fs.readFileSync(new URL("../vendor/decimen/multi-decoder-worker.js", import.meta.url), "utf8");
-  assert.ok(multiWorker.includes("maxNumberOfSymbols:4"), "multi-code worker must request up to four symbols");
+  assert.ok(multiWorker.includes("f.data.maxSymbols"), "multi-code worker must accept a per-frame symbol limit");
   let bridgedMessage = null;
   const bridgeSelf = {
     onmessage: null,
@@ -89,6 +90,9 @@ assert.ok(!template.includes('id="mode"'), "legacy compatibility modes must not 
 assert.ok(!template.includes("兼容稳定") && !template.includes("兼容均衡") && !template.includes("兼容快速"));
 assert.ok(template.includes('<option value="2331" selected>'));
 assert.ok(template.includes('<option value="30" selected>'));
+assert.ok(template.includes("30 FPS（单码推荐）"));
+assert.ok(template.includes("60 FPS（四码推荐）"));
+assert.ok(template.includes('id="fullscreenBtn"'));
 assert.ok(template.includes('<option value="60">60 FPS'));
 assert.ok(template.includes('<option value="45">45 FPS'));
 assert.ok(template.includes('<option value="90">90 FPS') && template.includes('<option value="120">120 FPS'));
@@ -98,10 +102,21 @@ assert.ok(sender.includes('qrcode(frameBytes === 2953 ? 40 : 0, "L")'));
   assert.ok(sender.includes("qr.make(4)"));
   assert.ok(sender.includes("requestAnimationFrame(playLoop)"));
   assert.ok(sender.includes("codesPerScreen = qrMode.value === \"quad\" ? 4 : 1"));
-  assert.ok(sender.includes("Math.min(frameBytes, 1005)"));
+  assert.ok(sender.includes("QUAD_MAX_FRAME_BYTES = 1003"));
+  assert.ok(sender.includes("Math.min(frameBytes, QUAD_MAX_FRAME_BYTES)"));
+  assert.ok(sender.includes("function vsyncsForFps"));
+  assert.ok(sender.includes("hz / rounded > fps * 1.12"));
+  assert.ok(sender.includes("imageSmoothingEnabled = false"));
   assert.ok(sender.includes("drawPatternTile"));
-  assert.ok(sender.includes("drawScreen(next.patterns)"));
-  assert.ok(!sender.includes("setTimeout"), "sender playback must stay synchronized with display refresh");
+assert.ok(sender.includes("drawScreen(next.patterns)"));
+assert.ok(!sender.includes("setTimeout"), "sender playback must stay synchronized with display refresh");
+assert.ok(template.includes('id="rateHint"'), "sender must show theoretical rate for the selected parameters");
+assert.ok(sender.includes("function currentLayout"));
+assert.ok(sender.includes("function renderRateHint"));
+assert.ok(sender.includes("formatRate(rate.screen)"));
+assert.ok(sender.includes("function syncFpsToLayout"));
+assert.ok(sender.includes('fps.value = "60"'));
+assert.ok(sender.includes("四码请全屏"));
 
 const rootBundle = fs.readFileSync(new URL("../highspeed-protocol.js", import.meta.url));
 const mirrorBundle = fs.readFileSync(new URL("../web-receiver/highspeed-protocol.js", import.meta.url));

@@ -7,7 +7,7 @@ let captureCanvas = null;
 let captureContext = null;
 
 async function bridgeMessage(event) {
-  const { bitmap, id } = event.data || {};
+  const { bitmap, id, maxSymbols } = event.data || {};
   if (!bitmap) {
     decodeMessage(event);
     return;
@@ -23,7 +23,7 @@ async function bridgeMessage(event) {
     captureContext.drawImage(bitmap, 0, 0);
     bitmap.close();
     const image = captureContext.getImageData(0, 0, width, height);
-    decodeMessage({ data: { id, buf: image.data.buffer, w: width, h: height } });
+    decodeMessage({ data: { id, buf: image.data.buffer, w: width, h: height, maxSymbols } });
   } catch (_) {
     try { bitmap.close(); } catch (_) {}
     self.postMessage({ id, bytes: null });

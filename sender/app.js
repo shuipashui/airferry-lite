@@ -10,6 +10,7 @@
   const prepareBtn = el("prepareBtn");
   const playBtn = el("playBtn");
   const resetBtn = el("resetBtn");
+  const fullscreenBtn = el("fullscreenBtn");
   const canvas = el("qrCanvas");
   const overlay = el("overlay");
   const statusText = el("statusText");
@@ -18,8 +19,14 @@
   const progressBar = el("progressBar");
   const receiverUrl = el("receiverUrl");
   const receiverQrCanvas = el("receiverQrCanvas");
+  const rateHint = el("rateHint");
+  const HEADER_LEN = 20;
   const RECEIVER_URL = "https://shuipashui.github.io/airferry-lite/";
   const QR_CACHE_LIMIT = 64;
+  const QUAD_MAX_FRAME_BYTES = 1003;
+  const HIGH_QUEUE_LIMIT = 8;
+  const QUIET_MODULES = 4;
+  const COMMON_HZ = [60, 75, 90, 120, 144, 165, 240];
   let file = null;
   let transfer = null;
   let animationFrame = 0;
@@ -30,6 +37,11 @@
   const highQueue = [];
   let highNextSeq = 0;
   let codesPerScreen = 1;
+  let lastPatterns = null;
+  let vsyncPhase = 0;
+  let vsyncsPerQr = 2;
+  let lastRafAt = 0;
+  const rafSamples = [];
 
   function selectFile(next) {
     file = next || null;
@@ -63,7 +75,7 @@
       const packed = await H.packFile(file.name, file.type || "application/octet-stream", sourceBytes);
       codesPerScreen = qrMode.value === "quad" ? 4 : 1;
       const frameBytes = Number(chunkSize.value);
-      const effectiveFrameBytes = codesPerScreen === 4 ? Math.min(frameBytes, 1005) : frameBytes;
+      const effectiveFrameBytes = codesPerScreen === 4 ? Math.min(frameBytes, QUAD_MAX_FRAME_BYTES) : frameBytes;
       const blockLen = effectiveFrameBytes - H.HEADER_LEN;
       const sessionId = (Math.floor(Math.random() * 0xffff) + 1) & 0xffff;
       const encoder = new H.LTEncoder(packed.container, blockLen, sessionId);
@@ -87,18 +99,21 @@
       const prepared = { encoding: packed.compression, originalSize: sourceBytes.length, savedBytes: sourceBytes.length - packed.transmittedSize };
       highQueue.length = 0;
       highNextSeq = 0;
-      fillHighQueue(3);
       emitted = 0;
       qrCache.clear();
+      fillHighQueue(4);
       sessionText.textContent = transfer.session;
       frameText.textContent = "0 / " + transfer.total;
       progressBar.style.width = "0%";
       drawScreen(highQueue[0].patterns);
       overlay.classList.add("hidden");
-      statusText.textContent = "高速流已生成 · " + (codesPerScreen === 4 ? "四码，每码 " + effectiveFrameBytes + " B " : "单码 ") + (prepared.encoding === "gzip" ? "已压缩 " + Math.max(0, Math.round(prepared.savedBytes / prepared.originalSize * 100)) + "%" : "未压缩");
+      renderRateHint();
+      const rate = currentLayout();
+      statusText.textContent = "高速流已生成 · " + (codesPerScreen === 4 ? "四码，每码 " + effectiveFrameBytes + " B " : "单码 ") + (prepared.encoding === "gzip" ? "已压缩 " + Math.max(0, Math.round(prepared.savedBytes / prepared.originalSize * 100)) + "% · " : "未压缩 · ") + "理论 " + formatRate(rate.screen);
       playBtn.disabled = false;
       playBtn.textContent = "开始播放";
       resetBtn.disabled = false;
+      if (fullscreenBtn) fullscreenBtn.disabled = false;
     } catch (error) {
       statusText.textContent = "生成失败：" + error.message;
       prepareBtn.disabled = false;
@@ -114,19 +129,39 @@
     selectFile(null);
     playBtn.disabled = true;
     resetBtn.disabled = true;
+    if (fullscreenBtn) fullscreenBtn.disabled = true;
     sessionText.textContent = "—";
     frameText.textContent = "—";
     progressBar.style.width = "0%";
     overlay.classList.remove("hidden");
+    lastPatterns = null;
     clearCanvas();
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
   });
+
+  if (fullscreenBtn) {
+    fullscreenBtn.addEventListener("click", () => {
+      const viewer = canvas.closest(".viewer");
+      if (!viewer) return;
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+      else viewer.requestFullscreen().catch(() => {});
+    });
+    document.addEventListener("fullscreenchange", () => {
+      fullscreenBtn.textContent = document.fullscreenElement ? "退出全屏" : "全屏";
+      if (lastPatterns) drawScreen(lastPatterns);
+    });
+  }
 
   function start() {
     if (!transfer || animationFrame) return;
     intervalMs = 1000 / Math.max(1, Number(fps.value));
     lastTickAt = 0;
-    statusText.textContent = Number(fps.value) > 30
-      ? "正在循环播放 · 60Hz 屏幕请改用 30 FPS"
+    lastRafAt = 0;
+    vsyncPhase = 0;
+    rafSamples.length = 0;
+    vsyncsPerQr = vsyncsForFps(60, Number(fps.value));
+    statusText.textContent = codesPerScreen === 4
+      ? "正在循环播放 · 四码请全屏"
       : "正在循环播放";
     playBtn.textContent = "暂停";
     animationFrame = requestAnimationFrame(playLoop);
@@ -134,11 +169,21 @@
 
   function playLoop(timestamp) {
     if (!transfer || !animationFrame) return;
-    const elapsed = timestamp - lastTickAt;
-    if (!lastTickAt || elapsed >= intervalMs) {
-      lastTickAt = !lastTickAt || elapsed > intervalMs * 3
-        ? timestamp
-        : timestamp - (elapsed % intervalMs);
+    if (lastRafAt) {
+      const dt = timestamp - lastRafAt;
+      if (dt > 8 && dt < 50) {
+        rafSamples.push(dt);
+        if (rafSamples.length > 24) rafSamples.shift();
+        if (rafSamples.length >= 8) {
+          const avg = rafSamples.reduce((sum, value) => sum + value, 0) / rafSamples.length;
+          vsyncsPerQr = vsyncsForFps(snapRefreshHz(1000 / avg), Number(fps.value));
+        }
+      }
+    }
+    lastRafAt = timestamp;
+    vsyncPhase += 1;
+    if (vsyncPhase >= vsyncsPerQr) {
+      vsyncPhase = 0;
       tick();
     }
     animationFrame = requestAnimationFrame(playLoop);
@@ -165,12 +210,12 @@
     emitted += 1;
     frameText.textContent = (codesPerScreen === 4 ? "四码帧 " : "喷泉帧 ") + next.seqs.join(",") + " · K=" + transfer.total;
     progressBar.style.width = Math.min(100, emitted / Math.ceil(transfer.total * 1.15) * 100) + "%";
-    fillHighQueue(1);
+    fillHighQueue(2);
   }
 
   function fillHighQueue(max) {
     if (!transfer) return;
-    for (let count = 0; count < max && highQueue.length < 3; count += 1) {
+    for (let count = 0; count < max && highQueue.length < HIGH_QUEUE_LIMIT; count += 1) {
       const seqs = [];
       const patterns = [];
       for (let code = 0; code < codesPerScreen; code += 1) {
@@ -180,18 +225,24 @@
           : ordinal - transfer.total;
         const bytes = H.packFrame({ ...transfer.header, seq }, transfer.encoder.encode(seq));
         seqs.push(seq);
-        patterns.push(getHighSpeedQrPattern(bytes));
+        patterns.push(getHighSpeedQrPattern(bytes, seq));
       }
       highQueue.push({ seqs, patterns });
     }
   }
 
-  function getHighSpeedQrPattern(bytes) {
+  function getHighSpeedQrPattern(bytes, seq) {
+    const key = "h:" + seq;
+    const hit = qrCache.get(key);
+    if (hit) return hit;
     const frameBytes = bytes.length;
     const qr = qrcode(frameBytes === 2953 ? 40 : 0, "L");
     qr.addBytes(bytes);
     qr.make(4);
-    return extractPattern(qr);
+    const pattern = extractPattern(qr);
+    if (qrCache.size >= QR_CACHE_LIMIT) qrCache.delete(qrCache.keys().next().value);
+    qrCache.set(key, pattern);
+    return pattern;
   }
 
   function getQrPattern(text) {
@@ -217,6 +268,28 @@
     return { count, dark };
   }
 
+  function rasterize(pattern) {
+    if (pattern.tile) return pattern.tile;
+    const size = pattern.count + QUIET_MODULES * 2;
+    const tile = document.createElement("canvas");
+    tile.width = size;
+    tile.height = size;
+    const context = tile.getContext("2d", { alpha: false });
+    const image = context.createImageData(size, size);
+    const data = image.data;
+    data.fill(255);
+    for (let row = 0; row < pattern.count; row += 1) {
+      for (let col = 0; col < pattern.count; col += 1) {
+        if (!pattern.dark[row * pattern.count + col]) continue;
+        const pixel = ((row + QUIET_MODULES) * size + (col + QUIET_MODULES)) * 4;
+        data[pixel] = data[pixel + 1] = data[pixel + 2] = 0;
+      }
+    }
+    context.putImageData(image, 0, 0);
+    pattern.tile = tile;
+    return tile;
+  }
+
   function drawFrame(text) {
     try {
       drawPattern(getQrPattern(text));
@@ -231,10 +304,22 @@
     drawScreen([pattern]);
   }
 
+  function syncCanvasSize() {
+    const rect = canvas.getBoundingClientRect();
+    const side = Math.max(256, Math.floor(Math.min(rect.width, rect.height)));
+    if (canvas.width !== side || canvas.height !== side) {
+      canvas.width = side;
+      canvas.height = side;
+    }
+  }
+
   function drawScreen(patterns) {
     try {
+      lastPatterns = patterns;
+      syncCanvasSize();
       const size = canvas.width;
       const context = canvas.getContext("2d", { alpha: false });
+      context.imageSmoothingEnabled = false;
       context.fillStyle = "#fff";
       context.fillRect(0, 0, size, size);
       const columns = patterns.length === 4 ? 2 : 1;
@@ -250,22 +335,22 @@
   }
 
   function drawPatternTile(context, pattern, x, y, width, height) {
-    const quiet = 4;
-    const cell = Math.floor(Math.min(width, height) / (pattern.count + quiet * 2));
-    const used = cell * (pattern.count + quiet * 2);
+    const tile = rasterize(pattern);
+    const cell = Math.floor(Math.min(width, height) / tile.width);
+    if (cell < 1) return;
+    const used = cell * tile.width;
     const offsetX = Math.floor(x + (width - used) / 2);
     const offsetY = Math.floor(y + (height - used) / 2);
-    context.fillStyle = "#000";
-    for (let row = 0; row < pattern.count; row += 1) for (let col = 0; col < pattern.count; col += 1) {
-      if (pattern.dark[row * pattern.count + col]) context.fillRect(offsetX + (col + quiet) * cell, offsetY + (row + quiet) * cell, cell, cell);
-    }
+    context.imageSmoothingEnabled = false;
+    context.drawImage(tile, 0, 0, tile.width, tile.height, offsetX, offsetY, used, used);
   }
 
   function drawLinkQr(text) {
     try {
       const pattern = getQrPattern(text);
       const context = receiverQrCanvas.getContext("2d", { alpha: false });
-      const quiet = 4;
+      context.imageSmoothingEnabled = false;
+      const quiet = QUIET_MODULES;
       const cell = Math.floor(receiverQrCanvas.width / (pattern.count + quiet * 2));
       const used = cell * (pattern.count + quiet * 2);
       const offset = Math.floor((receiverQrCanvas.width - used) / 2);
@@ -292,8 +377,75 @@
     return (n / 1048576).toFixed(1) + " MB";
   }
 
+  function formatRate(n) {
+    return formatBytes(n) + "/s";
+  }
+
+  function snapRefreshHz(hz) {
+    return COMMON_HZ.reduce((best, value) => Math.abs(value - hz) < Math.abs(best - hz) ? value : best, 60);
+  }
+
+  function vsyncsForFps(hz, frameRate) {
+    const fps = Math.max(1, frameRate);
+    const rounded = Math.max(1, Math.round(hz / fps));
+    if (hz / rounded > fps * 1.12) return rounded + 1;
+    return rounded;
+  }
+
+  function qrModules(bytes) {
+    if (bytes <= QUAD_MAX_FRAME_BYTES) return 105;
+    if (bytes <= 1955) return 145;
+    if (bytes <= 2306) return 157;
+    return 177;
+  }
+
+  function currentLayout() {
+    const codes = qrMode.value === "quad" ? 4 : 1;
+    const frameBytes = Number(chunkSize.value);
+    const bytes = codes === 4 ? Math.min(frameBytes, QUAD_MAX_FRAME_BYTES) : frameBytes;
+    const frameRate = Number(fps.value);
+    const header = H?.HEADER_LEN || HEADER_LEN;
+    const cell = Math.floor((canvas.width / (codes === 4 ? 2 : 1)) / (qrModules(bytes) + QUIET_MODULES * 2));
+    return {
+      codes,
+      bytes,
+      fps: frameRate,
+      screen: bytes * codes * frameRate,
+      payload: Math.max(0, bytes - header) * codes * frameRate,
+      cell
+    };
+  }
+
+  function renderRateHint() {
+    if (!rateHint) return;
+    const rate = currentLayout();
+    let text = "理论速度：" + formatRate(rate.screen) + "（" + rate.bytes + " B × " + rate.codes + " 码 × " + rate.fps + " FPS）· 载荷约 " + formatRate(rate.payload);
+    if (rate.cell) text += " · 屏上约 " + rate.cell + " px/模块";
+    if (rate.codes === 4 && rate.cell && rate.cell < 4) text += "。模块偏小，请全屏后再播";
+    if (rate.codes === 4 && rate.fps < 60) text += "。四码 60 FPS 实测约 160 KB/s，30 FPS 会重复扫同一屏";
+    if (rate.codes === 4 && rate.bytes === QUAD_MAX_FRAME_BYTES && Number(chunkSize.value) > QUAD_MAX_FRAME_BYTES) {
+      text += "。四码已限制为每码 " + QUAD_MAX_FRAME_BYTES + " B";
+    }
+    if (rate.fps === 45) text += "。60 Hz 屏上 45 FPS 会对齐成 30 FPS 播放";
+    rateHint.textContent = text;
+  }
+
+  function syncFpsToLayout() {
+    if (qrMode.value === "quad") {
+      if (Number(fps.value) < 60) fps.value = "60";
+    } else if (Number(fps.value) > 30) fps.value = "30";
+    renderRateHint();
+  }
+
+  chunkSize.addEventListener("change", renderRateHint);
+  fps.addEventListener("change", renderRateHint);
+  qrMode.addEventListener("change", syncFpsToLayout);
+  if (typeof ResizeObserver === "function") {
+    new ResizeObserver(() => { if (lastPatterns) drawScreen(lastPatterns); }).observe(canvas.parentElement || canvas);
+  }
   receiverUrl.href = RECEIVER_URL;
   receiverUrl.textContent = RECEIVER_URL;
   drawLinkQr(RECEIVER_URL);
   clearCanvas();
+  renderRateHint();
 })();

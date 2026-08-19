@@ -38,8 +38,8 @@
   const MAX_CHUNK_SIZE = 4096;
   const HIGH_SPEED_WORKERS = (navigator.hardwareConcurrency || 0) >= 8 ? 3 : 2;
   const HIGH_WORKER_TIMEOUT = 2500;
-  const HIGH_SCAN_SIZE_SINGLE = 800;
-  const HIGH_SCAN_SIZE_MULTI = 1200;
+  const HIGH_SCAN_SIZE_SINGLE = 960;
+  const HIGH_SCAN_SIZE_MULTI = 1280;
   const HIGH_FULL_SCAN_EVERY_MISSES = 12;
 
   let stream = null;
@@ -114,7 +114,10 @@
   let lastValidFps = 0;
   let lastDecodeBackend = "—";
   let lastWorkerCount = 0;
-  let captureViaCanvas = /Android/i.test(navigator.userAgent || "");
+  let captureViaCanvas = false;
+  let highQuadCursor = 0;
+  let highScanRoi = null;
+  const highDecodeMeta = new Map();
 
   startBtn.onclick = start;
   stopBtn.onclick = stop;
@@ -173,7 +176,7 @@
     }
     try {
       await setupDetector();
-      const camera = { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } };
+      const camera = { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1440 } };
       try {
         stream = await navigator.mediaDevices.getUserMedia({ video: { ...camera, frameRate: { ideal: 120, max: 120 } }, audio: false });
       } catch (_) {
@@ -241,6 +244,9 @@
     roiMisses = 0;
     highScanMisses = 0;
     highMultiLayout = false;
+    highScanRoi = null;
+    highQuadCursor = 0;
+    highDecodeMeta.clear();
     lastScanStartedAt = -Infinity;
     startBtn.disabled = false;
     stopBtn.disabled = true;
@@ -373,13 +379,17 @@
       }
       const decoded = event.data?.bytes;
       decodedFrames += 1;
-      const codes = Array.isArray(decoded) ? decoded : decoded?.length ? [decoded] : [];
+      const origin = highDecodeMeta.get(event.data?.id);
+      if (event.data?.id != null) highDecodeMeta.delete(event.data.id);
+      const codes = normalizeDecodedCodes(decoded);
       validQrFrames += codes.length;
       if (codes.length) {
         highScanMisses = 0;
-        for (const bytes of codes) acceptDecodedBytes(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+        if (origin) updateHighScanRoiFromHits(codes, origin);
+        for (const code of codes) acceptDecodedBytes(code.bytes);
       } else {
         highScanMisses += 1;
+        if (highScanMisses >= 8) highScanRoi = null;
       }
     };
     worker.onerror = () => {
@@ -426,25 +436,31 @@
       workerBusyDrops += 1;
       return;
     }
+    const base = getHighSpeedSource();
+    const probeMulti = !highMultiLayout && highScanMisses > 0 && highScanMisses % HIGH_FULL_SCAN_EVERY_MISSES === 0;
+    const maxSymbols = (highMultiLayout || probeMulti) ? 4 : 1;
+    await postHighSpeedRegion(slot, base, maxSymbols);
+  }
+
+  async function postHighSpeedRegion(slot, source, maxSymbols) {
     highWorkerBusy[slot] = true;
-    highWorkerStartedAt[slot] = now;
-    if (highScanMisses >= HIGH_FULL_SCAN_EVERY_MISSES) captureViaCanvas = true;
-    const source = getHighSpeedSource();
+    highWorkerStartedAt[slot] = performance.now();
     const scanSize = currentHighScanSize();
     const scale = Math.min(1, scanSize / Math.max(source.width, source.height));
     const width = Math.max(1, Math.round(source.width * scale));
     const height = Math.max(1, Math.round(source.height * scale));
     try {
       const id = ++highFrameId;
+      highDecodeMeta.set(id, { x: source.x, y: source.y, srcW: source.width, srcH: source.height, outW: width, outH: height });
       const useBitmap = !captureViaCanvas && typeof createImageBitmap === "function" && typeof OffscreenCanvas === "function";
       if (useBitmap) {
         const bitmap = await createImageBitmap(video, source.x, source.y, source.width, source.height, {
           resizeWidth: width,
           resizeHeight: height,
-          resizeQuality: "high"
+          resizeQuality: "low"
         });
-        highWorkers[slot].postMessage({ id, bitmap }, [bitmap]);
-        return;
+        highWorkers[slot].postMessage({ id, bitmap, maxSymbols }, [bitmap]);
+        return true;
       }
       if (canvas.width !== width || canvas.height !== height) {
         canvas.width = width;
@@ -452,10 +468,13 @@
       }
       ctx.drawImage(video, source.x, source.y, source.width, source.height, 0, 0, width, height);
       const image = ctx.getImageData(0, 0, width, height);
-      highWorkers[slot].postMessage({ id, buf: image.data.buffer, w: width, h: height }, [image.data.buffer]);
+      highWorkers[slot].postMessage({ id, buf: image.data.buffer, w: width, h: height, maxSymbols }, [image.data.buffer]);
+      return true;
     } catch (_) {
       captureViaCanvas = true;
+      highDecodeMeta.delete(highFrameId);
       restartHighSpeedWorker(slot);
+      return false;
     }
   }
 
@@ -468,13 +487,92 @@
   function getHighSpeedSource() {
     const width = video.videoWidth;
     const height = video.videoHeight;
-    if (highScanMisses > 0 && highScanMisses % HIGH_FULL_SCAN_EVERY_MISSES === 0) {
-      return { x: 0, y: 0, width, height };
-    }
     const side = Math.max(1, Math.floor(Math.min(width, height) * 0.94));
     return {
       x: Math.floor((width - side) / 2),
       y: Math.floor((height - side) / 2),
+      width: side,
+      height: side
+    };
+  }
+
+  function overlappingQuadrants(source) {
+    const overlap = 0.12;
+    const cropW = Math.max(1, Math.round(source.width * (0.5 + overlap)));
+    const cropH = Math.max(1, Math.round(source.height * (0.5 + overlap)));
+    return [
+      { x: source.x, y: source.y, width: cropW, height: cropH },
+      { x: source.x + source.width - cropW, y: source.y, width: cropW, height: cropH },
+      { x: source.x, y: source.y + source.height - cropH, width: cropW, height: cropH },
+      { x: source.x + source.width - cropW, y: source.y + source.height - cropH, width: cropW, height: cropH }
+    ];
+  }
+
+  function normalizeDecodedCodes(decoded) {
+    if (!decoded) return [];
+    const items = Array.isArray(decoded) ? decoded : [decoded];
+    return items.map(item => {
+      if (!item) return null;
+      if (item instanceof Uint8Array) return { bytes: item, position: null };
+      if (ArrayBuffer.isView(item)) return { bytes: new Uint8Array(item.buffer, item.byteOffset, item.byteLength), position: null };
+      if (item.bytes) {
+        const bytes = item.bytes instanceof Uint8Array ? item.bytes : new Uint8Array(item.bytes);
+        return { bytes, position: item.position || null };
+      }
+      if (item.buffer) return { bytes: new Uint8Array(item), position: null };
+      return null;
+    }).filter(Boolean);
+  }
+
+  function updateHighScanRoiFromHits(codes, origin) {
+    if (!highMultiLayout) return;
+    const corners = [];
+    for (const code of codes) {
+      const position = code.position;
+      if (!position) continue;
+      for (const point of [position.topLeft, position.topRight, position.bottomRight, position.bottomLeft]) {
+        if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+        corners.push({
+          x: origin.x + point.x * origin.srcW / origin.outW,
+          y: origin.y + point.y * origin.srcH / origin.outH
+        });
+      }
+    }
+    if (!corners.length) return;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const point of corners) {
+      minX = Math.min(minX, point.x);
+      minY = Math.min(minY, point.y);
+      maxX = Math.max(maxX, point.x);
+      maxY = Math.max(maxY, point.y);
+    }
+    const box = Math.max(maxX - minX, maxY - minY, 64);
+    const pad = codes.length >= 4 ? 1.18 : codes.length >= 2 ? 1.55 : 3.8;
+    const side = Math.min(video.videoWidth, video.videoHeight, Math.round(codes.length < 2 ? box * 3.8 : box * pad));
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const next = {
+      x: Math.max(0, Math.min(video.videoWidth - side, Math.round(cx - side / 2))),
+      y: Math.max(0, Math.min(video.videoHeight - side, Math.round(cy - side / 2))),
+      width: side,
+      height: side
+    };
+    highScanRoi = unionHighScanRoi(highScanRoi, next);
+  }
+
+  function unionHighScanRoi(first, second) {
+    if (!first) return second;
+    const left = Math.min(first.x, second.x);
+    const top = Math.min(first.y, second.y);
+    const right = Math.max(first.x + first.width, second.x + second.width);
+    const bottom = Math.max(first.y + first.height, second.y + second.height);
+    const side = Math.min(video.videoWidth, video.videoHeight, Math.max(right - left, bottom - top, 64));
+    return {
+      x: Math.max(0, Math.min(video.videoWidth - side, left)),
+      y: Math.max(0, Math.min(video.videoHeight - side, top)),
       width: side,
       height: side
     };
@@ -495,6 +593,9 @@
     decodeSamples = 0;
     highFramesSeen = 0;
     highMultiLayout = false;
+    highScanRoi = null;
+    highQuadCursor = 0;
+    highDecodeMeta.clear();
     highUniqueFrames = 0;
     highInvalidFrames = 0;
     highDuplicateFrames = 0;
@@ -1001,7 +1102,9 @@
         " · 实际/报告 " + (cameraFrameRate || settings.frameRate || "?") + " FPS · 请求上限 " + cameraRequestedFps,
       "相机能力：FPS " + fpsRange + " · facingMode " + (settings.facingMode || "未知"),
       "实时：采集 " + lastCaptureFps.toFixed(1) + " · 分析 " + lastDecodeFps.toFixed(1) + " · 有效码 " + lastValidFps.toFixed(1) + " FPS",
-      "解码：" + backend + " · Worker " + workerCount + " · 平均 " + avgDecode + " · 扫描 " + currentHighScanSize(),
+      "解码：" + backend + " · Worker " + workerCount + " · 平均 " + avgDecode +
+        " · 扫描 " + currentHighScanSize() + " · 布局 " + (highMultiLayout ? "四码" : "单码") +
+        (highScanRoi ? " · ROI" : " · 全图"),
       "调度：Worker 就绪 " + highWorkerReady.filter(Boolean).length + "/" + workerCount +
         " · 忙时丢弃 " + workerBusyDrops + " · 重启 " + workerRestarts + " · 错误 " + workerErrors +
         " · 连续未识别 " + highScanMisses,

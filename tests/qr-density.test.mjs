@@ -24,4 +24,6 @@ assert.ok(template.indexOf('id="overlay"') < template.indexOf('class="receiver-l
 assert.ok(senderStyles.includes("grid-template-columns:minmax(300px,380px)"), "sender controls must keep the narrower desktop width");
 assert.ok(senderStyles.includes(".overlay.hidden{display:none}"), "generated file QR must replace the receiver entry");
 assert.ok(senderStyles.includes("overflow:visible") && senderStyles.includes("width:200px;height:200px"), "receiver QR safety area may not be clipped");
+assert.ok(senderStyles.includes("#qrCanvas{") && senderStyles.includes("border-radius:0"), "file QR corners must not clip finder patterns");
+assert.ok(senderStyles.includes("96vmin") || senderStyles.includes("100vmin"), "file QR must use most of the viewport");
 console.log("QR density tests ok");

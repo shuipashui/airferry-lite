@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>AirFerry Lite - 离线二维码发送端</title>
-  <style>:root{color-scheme:dark;--bg:#07110f;--panel:#0d1b17;--line:#244137;--text:#edf9f4;--muted:#93b4a8;--accent:#5ef0ad;--accent2:#22b979}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 15% 10%,#12352a 0,transparent 38%),var(--bg);font-family:Inter,ui-sans-serif,system-ui,"Microsoft YaHei",sans-serif;color:var(--text)}.shell{min-height:100vh;display:grid;grid-template-columns:minmax(300px,380px) minmax(420px,1fr);gap:20px;padding:20px}.panel{background:rgba(13,27,23,.92);border:1px solid var(--line);border-radius:22px;box-shadow:0 24px 60px rgba(0,0,0,.35)}.controls{padding:26px;display:flex;flex-direction:column;gap:20px}.brand{display:flex;gap:14px;align-items:center}.mark{display:grid;place-items:center;width:52px;height:52px;border-radius:16px;background:var(--accent);color:#062218;font-weight:900}.brand h1{margin:0;font-size:25px}.brand p{margin:4px 0 0;color:var(--muted)}.drop{min-height:150px;border:1px dashed #497365;border-radius:18px;display:grid;place-content:center;text-align:center;gap:8px;cursor:pointer;background:#0a1714}.drop.drag{border-color:var(--accent);background:#10271f}.drop input{display:none}.drop strong{font-size:17px}.drop span,.tip{color:var(--muted);font-size:13px;line-height:1.65}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.grid label{font-size:13px;color:var(--muted)}select{width:100%;margin-top:7px;padding:11px 12px;border-radius:12px;border:1px solid var(--line);background:#071410;color:var(--text)}.actions{display:flex;gap:10px;flex-wrap:wrap}button{border:1px solid var(--line);background:#132b23;color:var(--text);border-radius:12px;padding:12px 16px;font-weight:750;cursor:pointer}button.primary{background:var(--accent);color:#062218;border-color:transparent}button:disabled{opacity:.42;cursor:not-allowed}.status{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}.status div{padding:11px;background:#091612;border-radius:12px;min-width:0}.status span{display:block;color:var(--muted);font-size:11px}.status strong{display:block;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.progress{height:8px;background:#07110f;border-radius:99px;overflow:hidden}.progress i{display:block;width:0;height:100%;background:linear-gradient(90deg,var(--accent2),var(--accent));transition:width .12s}.viewer{display:grid;place-items:center;padding:28px;position:relative;overflow:hidden}#qrCanvas{display:block;width:min(78vh,100%);height:auto;aspect-ratio:1;background:#fff;border-radius:12px;image-rendering:pixelated}.overlay{position:absolute;inset:0;display:grid;place-items:center;padding:28px;background:rgba(7,17,15,.88)}.overlay.hidden{display:none}@media(max-width:900px){.shell{grid-template-columns:1fr}.viewer{min-height:60vh}.status{grid-template-columns:1fr}.grid{grid-template-columns:1fr}}
+  <style>:root{color-scheme:dark;--bg:#07110f;--panel:#0d1b17;--line:#244137;--text:#edf9f4;--muted:#93b4a8;--accent:#5ef0ad;--accent2:#22b979}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 15% 10%,#12352a 0,transparent 38%),var(--bg);font-family:Inter,ui-sans-serif,system-ui,"Microsoft YaHei",sans-serif;color:var(--text)}.shell{min-height:100vh;display:grid;grid-template-columns:minmax(300px,380px) minmax(420px,1fr);gap:20px;padding:20px}.panel{background:rgba(13,27,23,.92);border:1px solid var(--line);border-radius:22px;box-shadow:0 24px 60px rgba(0,0,0,.35)}.controls{padding:26px;display:flex;flex-direction:column;gap:20px}.brand{display:flex;gap:14px;align-items:center}.mark{display:grid;place-items:center;width:52px;height:52px;border-radius:16px;background:var(--accent);color:#062218;font-weight:900}.brand h1{margin:0;font-size:25px}.brand p{margin:4px 0 0;color:var(--muted)}.drop{min-height:150px;border:1px dashed #497365;border-radius:18px;display:grid;place-content:center;text-align:center;gap:8px;cursor:pointer;background:#0a1714}.drop.drag{border-color:var(--accent);background:#10271f}.drop input{display:none}.drop strong{font-size:17px}.drop span,.tip{color:var(--muted);font-size:13px;line-height:1.65}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.grid label{font-size:13px;color:var(--muted)}select{width:100%;margin-top:7px;padding:11px 12px;border-radius:12px;border:1px solid var(--line);background:#071410;color:var(--text)}.actions{display:flex;gap:10px;flex-wrap:wrap}button{border:1px solid var(--line);background:#132b23;color:var(--text);border-radius:12px;padding:12px 16px;font-weight:750;cursor:pointer}button.primary{background:var(--accent);color:#062218;border-color:transparent}button:disabled{opacity:.42;cursor:not-allowed}.status{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}.status div{padding:11px;background:#091612;border-radius:12px;min-width:0}.status span{display:block;color:var(--muted);font-size:11px}.status strong{display:block;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.progress{height:8px;background:#07110f;border-radius:99px;overflow:hidden}.progress i{display:block;width:0;height:100%;background:linear-gradient(90deg,var(--accent2),var(--accent));transition:width .12s}.viewer{display:grid;place-items:center;padding:12px;position:relative;overflow:hidden;background:#0d1b17}.viewer:fullscreen,.viewer:-webkit-full-screen{padding:0;background:#fff;border:0;border-radius:0;box-shadow:none}#qrCanvas{display:block;width:min(96vmin,100%);height:auto;max-height:100%;aspect-ratio:1;background:#fff;border-radius:0;image-rendering:pixelated}.viewer:fullscreen #qrCanvas,.viewer:-webkit-full-screen #qrCanvas{width:100vmin;height:100vmin;max-width:100%;max-height:100%}.overlay{position:absolute;inset:0;display:grid;place-items:center;padding:28px;background:rgba(7,17,15,.88)}.overlay.hidden{display:none}@media(max-width:900px){.shell{grid-template-columns:1fr}.viewer{min-height:60vh}.status{grid-template-columns:1fr}.grid{grid-template-columns:1fr}}
 .receiver-link{position:relative;z-index:1;display:grid;grid-template-columns:minmax(180px,260px) 200px;gap:28px;align-items:center;width:min(540px,100%);padding:24px;border:1px solid var(--line);border-radius:16px;background:#091612;overflow:visible;text-align:left}.receiver-link-copy{display:flex;flex-direction:column;gap:8px;min-width:0}.receiver-link-copy strong{font-size:18px}.receiver-link-copy span{color:var(--muted);font-size:13px}.receiver-link-copy a{color:var(--accent);font-size:13px;line-height:1.5;overflow-wrap:anywhere}.receiver-link-copy small{margin-top:6px;color:var(--muted);font-size:12px;line-height:1.5}.receiver-qr-wrap{display:grid;place-items:center;width:200px;height:200px;padding:12px;background:#fff;border-radius:6px;overflow:visible}.receiver-link canvas{display:block;width:176px;height:176px;flex:none;background:#fff;border-radius:0;image-rendering:pixelated}@media(max-width:620px){.overlay{padding:16px}.receiver-link{grid-template-columns:1fr;gap:18px;width:min(300px,100%);padding:18px;text-align:center}.receiver-qr-wrap{justify-self:center;width:174px;height:174px}.receiver-link canvas{width:150px;height:150px}}
 </style>
 </head>
@@ -19,22 +19,23 @@
       </label>
       <div class="grid">
         <label>每帧数据
-          <select id="chunkSize"><option value="1465">1465 B（低密度）</option><option value="2331" selected>2331 B（推荐）</option><option value="2953">2953 B（高吞吐）</option></select>
+          <select id="chunkSize"><option value="1465">1465 B（低密度）</option><option value="2331" selected>2331 B（单码推荐）</option><option value="2953">2953 B（单码高吞吐）</option></select>
         </label>
         <label>播放帧率
-          <select id="fps"><option value="24">24 FPS（稳定）</option><option value="30" selected>30 FPS（推荐）</option><option value="45">45 FPS（AirFerry 稳定档）</option><option value="60">60 FPS（实验）</option><option value="90">90 FPS（高刷屏）</option><option value="120">120 FPS（高刷屏）</option></select>
+          <select id="fps"><option value="20">20 FPS</option><option value="24">24 FPS</option><option value="30" selected>30 FPS（单码推荐）</option><option value="45">45 FPS（60 Hz 会落到 30）</option><option value="60">60 FPS（四码推荐）</option><option value="90">90 FPS（高刷屏）</option><option value="120">120 FPS（高刷屏）</option></select>
         </label>
         <label>二维码布局
           <select id="qrMode"><option value="single" selected>单码（兼容）</option><option value="quad">四码（多码吞吐）</option></select>
         </label>
       </div>
-      <div class="actions"><button id="prepareBtn" class="primary" disabled>生成二维码流</button><button id="playBtn" disabled>开始播放</button><button id="resetBtn" disabled>重置</button></div>
+      <p class="tip" id="rateHint">理论速度：—</p>
+      <div class="actions"><button id="prepareBtn" class="primary" disabled>生成二维码流</button><button id="playBtn" disabled>开始播放</button><button id="fullscreenBtn" disabled>全屏</button><button id="resetBtn" disabled>重置</button></div>
       <div class="status"><div><span>状态</span><strong id="statusText">等待文件</strong></div><div><span>会话</span><strong id="sessionText">—</strong></div><div><span>片段</span><strong id="frameText">—</strong></div></div>
       <div class="progress"><i id="progressBar"></i></div>
-      <p class="tip">四码模式每次同时显示 4 个不同喷泉帧，接收端需使用最新版网页或 APK。普通 60 Hz 屏幕请用 30 FPS；45/60 FPS 容易叠帧，手机解不出来。</p>
+      <p class="tip">四码请全屏并用 60 FPS（每刷新一帧，避免重复扫描）。30 FPS 四码会在同一屏上扫两遍，速度上不去。单码用 2331 B / 30 FPS；2953 B 只适合单码。四码每码固定上限 1003 B，选更大的每帧数据不会变快。理论速度是屏幕吞吐上限，喷泉码大约再加 15% 帧。</p>
     </section>
     <section class="panel viewer">
-      <canvas id="qrCanvas" width="900" height="900"></canvas>
+      <canvas id="qrCanvas" width="1080" height="1080"></canvas>
       <div class="overlay" id="overlay">
         <section class="receiver-link" aria-label="手机网页接收端">
           <div class="receiver-link-copy"><strong>手机网页接收端</strong><span>扫码后直接打开接收页面</span><a id="receiverUrl" target="_blank" rel="noopener"></a><small>选择文件并生成二维码流后，此入口会自动隐藏</small></div>
@@ -2387,6 +2388,7 @@ var qrcode = function() {
   const prepareBtn = el("prepareBtn");
   const playBtn = el("playBtn");
   const resetBtn = el("resetBtn");
+  const fullscreenBtn = el("fullscreenBtn");
   const canvas = el("qrCanvas");
   const overlay = el("overlay");
   const statusText = el("statusText");
@@ -2395,8 +2397,14 @@ var qrcode = function() {
   const progressBar = el("progressBar");
   const receiverUrl = el("receiverUrl");
   const receiverQrCanvas = el("receiverQrCanvas");
+  const rateHint = el("rateHint");
+  const HEADER_LEN = 20;
   const RECEIVER_URL = "https://shuipashui.github.io/airferry-lite/";
   const QR_CACHE_LIMIT = 64;
+  const QUAD_MAX_FRAME_BYTES = 1003;
+  const HIGH_QUEUE_LIMIT = 8;
+  const QUIET_MODULES = 4;
+  const COMMON_HZ = [60, 75, 90, 120, 144, 165, 240];
   let file = null;
   let transfer = null;
   let animationFrame = 0;
@@ -2407,6 +2415,11 @@ var qrcode = function() {
   const highQueue = [];
   let highNextSeq = 0;
   let codesPerScreen = 1;
+  let lastPatterns = null;
+  let vsyncPhase = 0;
+  let vsyncsPerQr = 2;
+  let lastRafAt = 0;
+  const rafSamples = [];
 
   function selectFile(next) {
     file = next || null;
@@ -2440,7 +2453,7 @@ var qrcode = function() {
       const packed = await H.packFile(file.name, file.type || "application/octet-stream", sourceBytes);
       codesPerScreen = qrMode.value === "quad" ? 4 : 1;
       const frameBytes = Number(chunkSize.value);
-      const effectiveFrameBytes = codesPerScreen === 4 ? Math.min(frameBytes, 1005) : frameBytes;
+      const effectiveFrameBytes = codesPerScreen === 4 ? Math.min(frameBytes, QUAD_MAX_FRAME_BYTES) : frameBytes;
       const blockLen = effectiveFrameBytes - H.HEADER_LEN;
       const sessionId = (Math.floor(Math.random() * 0xffff) + 1) & 0xffff;
       const encoder = new H.LTEncoder(packed.container, blockLen, sessionId);
@@ -2464,18 +2477,21 @@ var qrcode = function() {
       const prepared = { encoding: packed.compression, originalSize: sourceBytes.length, savedBytes: sourceBytes.length - packed.transmittedSize };
       highQueue.length = 0;
       highNextSeq = 0;
-      fillHighQueue(3);
       emitted = 0;
       qrCache.clear();
+      fillHighQueue(4);
       sessionText.textContent = transfer.session;
       frameText.textContent = "0 / " + transfer.total;
       progressBar.style.width = "0%";
       drawScreen(highQueue[0].patterns);
       overlay.classList.add("hidden");
-      statusText.textContent = "高速流已生成 · " + (codesPerScreen === 4 ? "四码，每码 " + effectiveFrameBytes + " B " : "单码 ") + (prepared.encoding === "gzip" ? "已压缩 " + Math.max(0, Math.round(prepared.savedBytes / prepared.originalSize * 100)) + "%" : "未压缩");
+      renderRateHint();
+      const rate = currentLayout();
+      statusText.textContent = "高速流已生成 · " + (codesPerScreen === 4 ? "四码，每码 " + effectiveFrameBytes + " B " : "单码 ") + (prepared.encoding === "gzip" ? "已压缩 " + Math.max(0, Math.round(prepared.savedBytes / prepared.originalSize * 100)) + "% · " : "未压缩 · ") + "理论 " + formatRate(rate.screen);
       playBtn.disabled = false;
       playBtn.textContent = "开始播放";
       resetBtn.disabled = false;
+      if (fullscreenBtn) fullscreenBtn.disabled = false;
     } catch (error) {
       statusText.textContent = "生成失败：" + error.message;
       prepareBtn.disabled = false;
@@ -2491,19 +2507,39 @@ var qrcode = function() {
     selectFile(null);
     playBtn.disabled = true;
     resetBtn.disabled = true;
+    if (fullscreenBtn) fullscreenBtn.disabled = true;
     sessionText.textContent = "—";
     frameText.textContent = "—";
     progressBar.style.width = "0%";
     overlay.classList.remove("hidden");
+    lastPatterns = null;
     clearCanvas();
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
   });
+
+  if (fullscreenBtn) {
+    fullscreenBtn.addEventListener("click", () => {
+      const viewer = canvas.closest(".viewer");
+      if (!viewer) return;
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+      else viewer.requestFullscreen().catch(() => {});
+    });
+    document.addEventListener("fullscreenchange", () => {
+      fullscreenBtn.textContent = document.fullscreenElement ? "退出全屏" : "全屏";
+      if (lastPatterns) drawScreen(lastPatterns);
+    });
+  }
 
   function start() {
     if (!transfer || animationFrame) return;
     intervalMs = 1000 / Math.max(1, Number(fps.value));
     lastTickAt = 0;
-    statusText.textContent = Number(fps.value) > 30
-      ? "正在循环播放 · 60Hz 屏幕请改用 30 FPS"
+    lastRafAt = 0;
+    vsyncPhase = 0;
+    rafSamples.length = 0;
+    vsyncsPerQr = vsyncsForFps(60, Number(fps.value));
+    statusText.textContent = codesPerScreen === 4
+      ? "正在循环播放 · 四码请全屏"
       : "正在循环播放";
     playBtn.textContent = "暂停";
     animationFrame = requestAnimationFrame(playLoop);
@@ -2511,11 +2547,21 @@ var qrcode = function() {
 
   function playLoop(timestamp) {
     if (!transfer || !animationFrame) return;
-    const elapsed = timestamp - lastTickAt;
-    if (!lastTickAt || elapsed >= intervalMs) {
-      lastTickAt = !lastTickAt || elapsed > intervalMs * 3
-        ? timestamp
-        : timestamp - (elapsed % intervalMs);
+    if (lastRafAt) {
+      const dt = timestamp - lastRafAt;
+      if (dt > 8 && dt < 50) {
+        rafSamples.push(dt);
+        if (rafSamples.length > 24) rafSamples.shift();
+        if (rafSamples.length >= 8) {
+          const avg = rafSamples.reduce((sum, value) => sum + value, 0) / rafSamples.length;
+          vsyncsPerQr = vsyncsForFps(snapRefreshHz(1000 / avg), Number(fps.value));
+        }
+      }
+    }
+    lastRafAt = timestamp;
+    vsyncPhase += 1;
+    if (vsyncPhase >= vsyncsPerQr) {
+      vsyncPhase = 0;
       tick();
     }
     animationFrame = requestAnimationFrame(playLoop);
@@ -2542,12 +2588,12 @@ var qrcode = function() {
     emitted += 1;
     frameText.textContent = (codesPerScreen === 4 ? "四码帧 " : "喷泉帧 ") + next.seqs.join(",") + " · K=" + transfer.total;
     progressBar.style.width = Math.min(100, emitted / Math.ceil(transfer.total * 1.15) * 100) + "%";
-    fillHighQueue(1);
+    fillHighQueue(2);
   }
 
   function fillHighQueue(max) {
     if (!transfer) return;
-    for (let count = 0; count < max && highQueue.length < 3; count += 1) {
+    for (let count = 0; count < max && highQueue.length < HIGH_QUEUE_LIMIT; count += 1) {
       const seqs = [];
       const patterns = [];
       for (let code = 0; code < codesPerScreen; code += 1) {
@@ -2557,18 +2603,24 @@ var qrcode = function() {
           : ordinal - transfer.total;
         const bytes = H.packFrame({ ...transfer.header, seq }, transfer.encoder.encode(seq));
         seqs.push(seq);
-        patterns.push(getHighSpeedQrPattern(bytes));
+        patterns.push(getHighSpeedQrPattern(bytes, seq));
       }
       highQueue.push({ seqs, patterns });
     }
   }
 
-  function getHighSpeedQrPattern(bytes) {
+  function getHighSpeedQrPattern(bytes, seq) {
+    const key = "h:" + seq;
+    const hit = qrCache.get(key);
+    if (hit) return hit;
     const frameBytes = bytes.length;
     const qr = qrcode(frameBytes === 2953 ? 40 : 0, "L");
     qr.addBytes(bytes);
     qr.make(4);
-    return extractPattern(qr);
+    const pattern = extractPattern(qr);
+    if (qrCache.size >= QR_CACHE_LIMIT) qrCache.delete(qrCache.keys().next().value);
+    qrCache.set(key, pattern);
+    return pattern;
   }
 
   function getQrPattern(text) {
@@ -2594,6 +2646,28 @@ var qrcode = function() {
     return { count, dark };
   }
 
+  function rasterize(pattern) {
+    if (pattern.tile) return pattern.tile;
+    const size = pattern.count + QUIET_MODULES * 2;
+    const tile = document.createElement("canvas");
+    tile.width = size;
+    tile.height = size;
+    const context = tile.getContext("2d", { alpha: false });
+    const image = context.createImageData(size, size);
+    const data = image.data;
+    data.fill(255);
+    for (let row = 0; row < pattern.count; row += 1) {
+      for (let col = 0; col < pattern.count; col += 1) {
+        if (!pattern.dark[row * pattern.count + col]) continue;
+        const pixel = ((row + QUIET_MODULES) * size + (col + QUIET_MODULES)) * 4;
+        data[pixel] = data[pixel + 1] = data[pixel + 2] = 0;
+      }
+    }
+    context.putImageData(image, 0, 0);
+    pattern.tile = tile;
+    return tile;
+  }
+
   function drawFrame(text) {
     try {
       drawPattern(getQrPattern(text));
@@ -2608,10 +2682,22 @@ var qrcode = function() {
     drawScreen([pattern]);
   }
 
+  function syncCanvasSize() {
+    const rect = canvas.getBoundingClientRect();
+    const side = Math.max(256, Math.floor(Math.min(rect.width, rect.height)));
+    if (canvas.width !== side || canvas.height !== side) {
+      canvas.width = side;
+      canvas.height = side;
+    }
+  }
+
   function drawScreen(patterns) {
     try {
+      lastPatterns = patterns;
+      syncCanvasSize();
       const size = canvas.width;
       const context = canvas.getContext("2d", { alpha: false });
+      context.imageSmoothingEnabled = false;
       context.fillStyle = "#fff";
       context.fillRect(0, 0, size, size);
       const columns = patterns.length === 4 ? 2 : 1;
@@ -2627,22 +2713,22 @@ var qrcode = function() {
   }
 
   function drawPatternTile(context, pattern, x, y, width, height) {
-    const quiet = 4;
-    const cell = Math.floor(Math.min(width, height) / (pattern.count + quiet * 2));
-    const used = cell * (pattern.count + quiet * 2);
+    const tile = rasterize(pattern);
+    const cell = Math.floor(Math.min(width, height) / tile.width);
+    if (cell < 1) return;
+    const used = cell * tile.width;
     const offsetX = Math.floor(x + (width - used) / 2);
     const offsetY = Math.floor(y + (height - used) / 2);
-    context.fillStyle = "#000";
-    for (let row = 0; row < pattern.count; row += 1) for (let col = 0; col < pattern.count; col += 1) {
-      if (pattern.dark[row * pattern.count + col]) context.fillRect(offsetX + (col + quiet) * cell, offsetY + (row + quiet) * cell, cell, cell);
-    }
+    context.imageSmoothingEnabled = false;
+    context.drawImage(tile, 0, 0, tile.width, tile.height, offsetX, offsetY, used, used);
   }
 
   function drawLinkQr(text) {
     try {
       const pattern = getQrPattern(text);
       const context = receiverQrCanvas.getContext("2d", { alpha: false });
-      const quiet = 4;
+      context.imageSmoothingEnabled = false;
+      const quiet = QUIET_MODULES;
       const cell = Math.floor(receiverQrCanvas.width / (pattern.count + quiet * 2));
       const used = cell * (pattern.count + quiet * 2);
       const offset = Math.floor((receiverQrCanvas.width - used) / 2);
@@ -2669,10 +2755,77 @@ var qrcode = function() {
     return (n / 1048576).toFixed(1) + " MB";
   }
 
+  function formatRate(n) {
+    return formatBytes(n) + "/s";
+  }
+
+  function snapRefreshHz(hz) {
+    return COMMON_HZ.reduce((best, value) => Math.abs(value - hz) < Math.abs(best - hz) ? value : best, 60);
+  }
+
+  function vsyncsForFps(hz, frameRate) {
+    const fps = Math.max(1, frameRate);
+    const rounded = Math.max(1, Math.round(hz / fps));
+    if (hz / rounded > fps * 1.12) return rounded + 1;
+    return rounded;
+  }
+
+  function qrModules(bytes) {
+    if (bytes <= QUAD_MAX_FRAME_BYTES) return 105;
+    if (bytes <= 1955) return 145;
+    if (bytes <= 2306) return 157;
+    return 177;
+  }
+
+  function currentLayout() {
+    const codes = qrMode.value === "quad" ? 4 : 1;
+    const frameBytes = Number(chunkSize.value);
+    const bytes = codes === 4 ? Math.min(frameBytes, QUAD_MAX_FRAME_BYTES) : frameBytes;
+    const frameRate = Number(fps.value);
+    const header = H?.HEADER_LEN || HEADER_LEN;
+    const cell = Math.floor((canvas.width / (codes === 4 ? 2 : 1)) / (qrModules(bytes) + QUIET_MODULES * 2));
+    return {
+      codes,
+      bytes,
+      fps: frameRate,
+      screen: bytes * codes * frameRate,
+      payload: Math.max(0, bytes - header) * codes * frameRate,
+      cell
+    };
+  }
+
+  function renderRateHint() {
+    if (!rateHint) return;
+    const rate = currentLayout();
+    let text = "理论速度：" + formatRate(rate.screen) + "（" + rate.bytes + " B × " + rate.codes + " 码 × " + rate.fps + " FPS）· 载荷约 " + formatRate(rate.payload);
+    if (rate.cell) text += " · 屏上约 " + rate.cell + " px/模块";
+    if (rate.codes === 4 && rate.cell && rate.cell < 4) text += "。模块偏小，请全屏后再播";
+    if (rate.codes === 4 && rate.fps < 60) text += "。四码 60 FPS 实测约 160 KB/s，30 FPS 会重复扫同一屏";
+    if (rate.codes === 4 && rate.bytes === QUAD_MAX_FRAME_BYTES && Number(chunkSize.value) > QUAD_MAX_FRAME_BYTES) {
+      text += "。四码已限制为每码 " + QUAD_MAX_FRAME_BYTES + " B";
+    }
+    if (rate.fps === 45) text += "。60 Hz 屏上 45 FPS 会对齐成 30 FPS 播放";
+    rateHint.textContent = text;
+  }
+
+  function syncFpsToLayout() {
+    if (qrMode.value === "quad") {
+      if (Number(fps.value) < 60) fps.value = "60";
+    } else if (Number(fps.value) > 30) fps.value = "30";
+    renderRateHint();
+  }
+
+  chunkSize.addEventListener("change", renderRateHint);
+  fps.addEventListener("change", renderRateHint);
+  qrMode.addEventListener("change", syncFpsToLayout);
+  if (typeof ResizeObserver === "function") {
+    new ResizeObserver(() => { if (lastPatterns) drawScreen(lastPatterns); }).observe(canvas.parentElement || canvas);
+  }
   receiverUrl.href = RECEIVER_URL;
   receiverUrl.textContent = RECEIVER_URL;
   drawLinkQr(RECEIVER_URL);
   clearCanvas();
+  renderRateHint();
 })();
 </script>
 </body>
