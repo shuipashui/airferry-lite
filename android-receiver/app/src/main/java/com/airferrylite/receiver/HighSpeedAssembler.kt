@@ -35,8 +35,13 @@ class HighSpeedAssembler {
         private const val MIX_B = 0x735a2d97
         private const val FRAME_MIX = 0xc2b2ae35.toInt()
 
-        fun looksLikeFrame(bytes: ByteArray) = bytes.size > FRAME_HEADER_SIZE &&
-            (bytes[0].toInt() and 0xff) == 0xd1 && (bytes[1].toInt() and 0xff) == 0x0c
+        fun looksLikeFrame(bytes: ByteArray): Boolean {
+            if (bytes.size <= FRAME_HEADER_SIZE || u8(bytes[0]) != 0xd1) return false
+            return u8(bytes[1]) in 0x0c..0x0f
+        }
+
+        fun isMultiLayoutFrame(bytes: ByteArray) = looksLikeFrame(bytes) &&
+            (u8(bytes[1]) == 0x0d || u8(bytes[1]) == 0x0f)
 
         private fun u8(value: Byte) = value.toInt() and 0xff
         private fun u16le(bytes: ByteArray, offset: Int) = u8(bytes[offset]) or (u8(bytes[offset + 1]) shl 8)
@@ -56,6 +61,7 @@ class HighSpeedAssembler {
         }
 
         private fun frameIndexes(count: Int, cdf: DoubleArray, sessionId: Int, sequence: Int): List<Int> {
+            if ((sequence ushr 31) != 0) return listOf((sequence and Int.MAX_VALUE) % count)
             var seed = (sessionId + 1) * FRAME_SEED_FACTOR xor (sequence + 0x85ebca6b.toInt())
             seed = (seed xor (seed ushr 13)) * FRAME_MIX
             seed = seed xor (seed ushr 16)
@@ -139,7 +145,9 @@ class HighSpeedAssembler {
         val blocks: Int,
         val blockLength: Int,
         val totalLength: Int,
-        val payloadFnv: Long
+        val payloadFnv: Long,
+        val layoutCodes: Int,
+        val systematic: Boolean
     )
 
     private var streamKey: String? = null
@@ -156,7 +164,7 @@ class HighSpeedAssembler {
 
     fun accept(bytes: ByteArray): HighSpeedUpdate {
         val frame = parseFrame(bytes) ?: return snapshot(error = "高速二维码帧格式错误")
-        val key = "${frame.sessionId}:${frame.blocks}:${frame.blockLength}:${frame.totalLength}:${frame.payloadFnv}"
+        val key = "${frame.sessionId}:${frame.blocks}:${frame.blockLength}:${frame.totalLength}:${frame.payloadFnv}:${frame.layoutCodes}:${if (frame.systematic) 1 else 0}"
         if (streamKey != key) {
             streamKey = key
             header = frame
@@ -188,7 +196,10 @@ class HighSpeedAssembler {
         if (blocks !in 1..MAX_BLOCKS || blockLength !in 1..MAX_BLOCK_SIZE || totalLength !in 1..MAX_CONTAINER_SIZE) return null
         if (blocks != ceil(totalLength.toDouble() / blockLength).toInt()) return null
         if (bytes.size != FRAME_HEADER_SIZE + blockLength) return null
-        return FrameHeader(sessionId, sequence, blocks, blockLength, totalLength.toInt(), payloadFnv)
+        val magic = u8(bytes[1])
+        val layoutCodes = if (magic == 0x0d || magic == 0x0f) 4 else 1
+        val systematic = magic == 0x0e || magic == 0x0f
+        return FrameHeader(sessionId, sequence, blocks, blockLength, totalLength.toInt(), payloadFnv, layoutCodes, systematic)
     }
 
     private fun snapshot(error: String? = null): HighSpeedUpdate {
@@ -269,6 +280,8 @@ class HighSpeedAssembler {
         private val solved = arrayOfNulls<ByteArray>(blockCount)
         private val byBlock = HashMap<Int, MutableSet<Equation>>()
         private val seen = HashSet<Int>()
+        private val received = LinkedHashMap<Int, ByteArray>()
+        private var lastDenseAttemptAt = 0
         var solvedCount = 0
             private set
         var framesNew = 0
@@ -279,6 +292,7 @@ class HighSpeedAssembler {
         fun addFrame(sequence: Int, block: ByteArray) {
             if (!seen.add(sequence) || isComplete) return
             framesNew += 1
+            if (blockCount <= DENSE_MAX_BLOCKS) received[sequence] = block.copyOf()
             val indexes = HighSpeedAssembler.frameIndexes(blockCount, cdf, sessionId, sequence).toMutableSet()
             val value = block.copyOf()
             for (index in indexes.toList()) {
@@ -286,13 +300,64 @@ class HighSpeedAssembler {
                 xor(value, known)
                 indexes.remove(index)
             }
-            if (indexes.isEmpty()) return
+            if (indexes.isEmpty()) {
+                maybeDenseComplete()
+                return
+            }
             if (indexes.size == 1) {
                 resolve(indexes.first(), value)
+                maybeDenseComplete()
                 return
             }
             val equation = Equation(indexes, value)
             for (index in indexes) byBlock.getOrPut(index) { HashSet() }.add(equation)
+            maybeDenseComplete()
+        }
+
+        private fun maybeDenseComplete() {
+            if (isComplete || blockCount > DENSE_MAX_BLOCKS) return
+            val startAt = blockCount + max(2, blockCount / 25)
+            if (framesNew < startAt || framesNew - lastDenseAttemptAt < DENSE_ATTEMPT_EVERY) return
+            lastDenseAttemptAt = framesNew
+            val wordCount = (blockCount + 63) / 64
+            data class DenseRow(val bits: LongArray, val bytes: ByteArray)
+            val pivots = arrayOfNulls<DenseRow>(blockCount)
+            var rank = 0
+            for ((sequence, payload) in received) {
+                val bits = LongArray(wordCount)
+                for (index in HighSpeedAssembler.frameIndexes(blockCount, cdf, sessionId, sequence)) {
+                    bits[index ushr 6] = bits[index ushr 6] or (1L shl (index and 63))
+                }
+                val rhs = payload.copyOf()
+                for (column in 0 until blockCount) {
+                    if ((bits[column ushr 6] and (1L shl (column and 63))) == 0L) continue
+                    val pivot = pivots[column]
+                    if (pivot == null) {
+                        pivots[column] = DenseRow(bits, rhs)
+                        rank += 1
+                        break
+                    }
+                    for (word in bits.indices) bits[word] = bits[word] xor pivot.bits[word]
+                    xor(rhs, pivot.bytes)
+                }
+                if (rank == blockCount) break
+            }
+            if (rank != blockCount) return
+            val denseSolved = arrayOfNulls<ByteArray>(blockCount)
+            for (column in blockCount - 1 downTo 0) {
+                val row = pivots[column] ?: return
+                val rhs = row.bytes.copyOf()
+                for (higher in column + 1 until blockCount) {
+                    if ((row.bits[higher ushr 6] and (1L shl (higher and 63))) != 0L) {
+                        xor(rhs, denseSolved[higher] ?: return)
+                    }
+                }
+                denseSolved[column] = rhs
+            }
+            for (index in denseSolved.indices) solved[index] = denseSolved[index]
+            solvedCount = blockCount
+            byBlock.clear()
+            received.clear()
         }
 
         fun assemble(): ByteArray? {
@@ -330,6 +395,11 @@ class HighSpeedAssembler {
 
         private fun xor(target: ByteArray, source: ByteArray) {
             for (index in target.indices) target[index] = (target[index].toInt() xor source[index].toInt()).toByte()
+        }
+
+        companion object {
+            private const val DENSE_MAX_BLOCKS = 768
+            private const val DENSE_ATTEMPT_EVERY = 8
         }
     }
 

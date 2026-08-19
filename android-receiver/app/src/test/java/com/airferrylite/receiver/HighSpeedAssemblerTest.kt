@@ -9,6 +9,22 @@ import org.junit.Test
 
 class HighSpeedAssemblerTest {
     @Test
+    fun recognizesSingleAndQuadLayoutMarkers() {
+        val frame = Base64.getDecoder().decode("0QwxSgAAAAAHABAAbgAAACLGYlvjOimgt5OYL00SrR+Mlm92")
+        assertTrue(HighSpeedAssembler.looksLikeFrame(frame))
+        assertTrue(!HighSpeedAssembler.isMultiLayoutFrame(frame))
+        frame[1] = 0x0d
+        assertTrue(HighSpeedAssembler.looksLikeFrame(frame))
+        assertTrue(HighSpeedAssembler.isMultiLayoutFrame(frame))
+        frame[1] = 0x0e
+        assertTrue(HighSpeedAssembler.looksLikeFrame(frame))
+        assertTrue(!HighSpeedAssembler.isMultiLayoutFrame(frame))
+        frame[1] = 0x0f
+        assertTrue(HighSpeedAssembler.looksLikeFrame(frame))
+        assertTrue(HighSpeedAssembler.isMultiLayoutFrame(frame))
+    }
+
+    @Test
     fun decodesGoldenFramesGeneratedByTheWebSender() {
         val assembler = HighSpeedAssembler()
         val frames = listOf(

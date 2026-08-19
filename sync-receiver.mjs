@@ -7,6 +7,7 @@ const mirror = path.join(root, "web-receiver");
 const files = [
   "app.js",
   "decoder-worker.js",
+  "highspeed-decoder-worker.js",
   "highspeed-protocol.js",
   "index.html",
   "manifest.webmanifest",
@@ -30,6 +31,9 @@ for (const file of ["jsQR.js", "jsQR-LICENSE.txt"]) {
   synchronize(path.join(root, "vendor", file), path.join(mirror, "vendor", file));
 }
 for (const file of ["decoder-worker.js", "zxing_reader-EOacYbLr.wasm"]) {
+  synchronize(path.join(root, "vendor", "decimen", file), path.join(mirror, "vendor", "decimen", file));
+}
+for (const file of ["multi-decoder-worker.js"]) {
   synchronize(path.join(root, "vendor", "decimen", file), path.join(mirror, "vendor", "decimen", file));
 }
 

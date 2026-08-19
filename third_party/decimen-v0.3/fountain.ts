@@ -97,6 +97,8 @@ export function frameIndices(
   sessionId: number,
   seq: number,
 ): number[] {
+  const wireSeq = seq >>> 0;
+  if ((wireSeq & 0x80000000) !== 0) return [(wireSeq & 0x7fffffff) % k];
   const rnd = splitmix32(frameSeed(sessionId, seq));
   // inverse-CDF sample the degree
   const u = rnd() * 2 ** -32;

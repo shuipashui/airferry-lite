@@ -38,6 +38,9 @@ const track = {
   getCapabilities() {
     return { focusMode: ["continuous"] };
   },
+  getSettings() {
+    return { frameRate: 60 };
+  },
   async applyConstraints() {
     focusApplied = true;
   }
@@ -102,6 +105,7 @@ const elements = {
   progressText: element(),
   progressBar: element(),
   speedText: element(),
+  scanRateText: element(),
   missing: element(),
   cameraHint: element(),
   result: element({ hidden: true }),

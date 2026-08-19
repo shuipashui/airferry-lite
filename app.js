@@ -12,11 +12,14 @@
   const stopBtn = document.getElementById("stopBtn");
   const resetBtn = document.getElementById("resetBtn");
   const copyMissing = document.getElementById("copyMissing");
+  const copyDiagnostics = document.getElementById("copyDiagnostics");
+  const diagnosticsEl = document.getElementById("diagnostics");
   const status = document.getElementById("status");
   const fileName = document.getElementById("fileName");
   const progressText = document.getElementById("progressText");
   const progressBar = document.getElementById("progressBar");
   const speedText = document.getElementById("speedText");
+  const scanRateText = document.getElementById("scanRateText");
   const missingEl = document.getElementById("missing");
   const hint = document.getElementById("cameraHint");
   const result = document.getElementById("result");
@@ -35,6 +38,8 @@
   const MAX_CHUNK_SIZE = 4096;
   const HIGH_SPEED_WORKERS = (navigator.hardwareConcurrency || 0) >= 8 ? 3 : 2;
   const HIGH_WORKER_TIMEOUT = 2500;
+  const HIGH_SCAN_SIZE = 800;
+  const HIGH_FULL_SCAN_EVERY_MISSES = 12;
 
   let stream = null;
   let scanTimer = 0;
@@ -73,17 +78,44 @@
   let highStreamKey = "";
   let highHeader = null;
   let highStartedAt = 0;
+  let highSpeedActive = false;
   let highFrameId = 0;
   let highWorkers = [];
   let highWorkerBusy = [];
   let highWorkerReady = [];
   let highWorkerStartedAt = [];
   let highWorkersDisabled = typeof Worker !== "function" || !H;
+  let highScanMisses = 0;
+  let scanStatsStartedAt = 0;
+  let capturedFrames = 0;
+  let decodedFrames = 0;
+  let validQrFrames = 0;
+  let cameraFrameRate = 0;
+  let cameraRequestedFps = 120;
+  let cameraSettings = null;
+  let cameraCapabilities = null;
+  let workerBusyDrops = 0;
+  let workerRestarts = 0;
+  let workerErrors = 0;
+  let decodeTimeMs = 0;
+  let decodeSamples = 0;
+  let highFramesSeen = 0;
+  let highUniqueFrames = 0;
+  let highInvalidFrames = 0;
+  let highDuplicateFrames = 0;
+  let highSequenceGaps = 0;
+  let highLastLogicalSequence = -1;
+  let highProtocolBytes = 0;
+  let highLastFrameAt = 0;
+  let lastCaptureFps = 0;
+  let lastDecodeFps = 0;
+  let lastValidFps = 0;
 
   startBtn.onclick = start;
   stopBtn.onclick = stop;
   resetBtn.onclick = reset;
   copyMissing.onclick = copyMissingIndexes;
+  copyDiagnostics?.addEventListener("click", copyDiagnosticsText);
   document.addEventListener("visibilitychange", () => {
     if (document.hidden && stream) stop("页面已切到后台");
   });
@@ -136,14 +168,16 @@
     }
     try {
       await setupDetector();
-      const camera = { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } };
+      const camera = { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } };
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { ...camera, frameRate: { exact: 60 } }, audio: false });
+        stream = await navigator.mediaDevices.getUserMedia({ video: { ...camera, frameRate: { ideal: 120, max: 120 } }, audio: false });
       } catch (_) {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { ...camera, frameRate: { ideal: 60 } }, audio: false });
+        cameraRequestedFps = 60;
+        stream = await navigator.mediaDevices.getUserMedia({ video: { ...camera, frameRate: { ideal: 60, max: 60 } }, audio: false });
       }
       startHighSpeedWorkers();
       if (!highWorkers.length && !barcodeDetector && typeof window.jsQR !== "function") throw new Error("DecoderUnavailable");
+      resetScanStats();
       configureCameraTrack(stream);
       video.srcObject = stream;
       await video.play();
@@ -168,7 +202,11 @@
       status.textContent = "摄像头连接已中断，请重新开始";
     }, { once: true });
     try {
+      const settings = track.getSettings?.();
+      cameraSettings = settings || null;
+      cameraFrameRate = Number(settings?.frameRate) || 0;
       const capabilities = track.getCapabilities?.();
+      cameraCapabilities = capabilities || null;
       if (capabilities?.focusMode?.includes("continuous")) {
         track.applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(() => {});
       }
@@ -189,6 +227,7 @@
     scanRegion = null;
     scanSequence = 0;
     roiMisses = 0;
+    highScanMisses = 0;
     lastScanStartedAt = -Infinity;
     startBtn.disabled = false;
     stopBtn.disabled = true;
@@ -227,7 +266,9 @@
     highStreamKey = "";
     highHeader = null;
     highStartedAt = 0;
+    highSpeedActive = false;
     speedText.textContent = "—";
+    scanRateText.textContent = "—";
     fileName.textContent = "-";
     progressText.textContent = "0%";
     progressBar.style.width = "0%";
@@ -237,6 +278,7 @@
     if (download.href) URL.revokeObjectURL(download.href);
     download.removeAttribute("href");
     status.textContent = "等待开始";
+    resetScanStats();
     flushPendingChunks();
     if (previousSession) queueStorage(() => Storage.remove(previousSession));
   }
@@ -246,7 +288,8 @@
     if (highWorkers.length && typeof video.requestVideoFrameCallback === "function") {
       scanFrameCallback = video.requestVideoFrameCallback(() => {
         scanFrameCallback = 0;
-        scanWithHighSpeedWorkers();
+        recordCapturedFrame();
+        void scanWithHighSpeedWorkers();
         scheduleScan();
       });
       return;
@@ -254,7 +297,8 @@
     if (highWorkers.length) {
       scanTimer = setTimeout(() => {
         scanTimer = 0;
-        scanWithHighSpeedWorkers();
+        recordCapturedFrame();
+        void scanWithHighSpeedWorkers();
         scheduleScan();
       }, 16);
       return;
@@ -296,7 +340,7 @@
   }
 
   function startHighSpeedWorker(index) {
-    const worker = new Worker("vendor/decimen/decoder-worker.js");
+    const worker = new Worker("highspeed-decoder-worker.js");
     highWorkers[index] = worker;
     highWorkerBusy[index] = false;
     highWorkerReady[index] = false;
@@ -307,12 +351,26 @@
         highWorkerReady[index] = true;
         return;
       }
+      const startedAt = highWorkerStartedAt[index];
       highWorkerBusy[index] = false;
       highWorkerStartedAt[index] = 0;
-      const bytes = event.data?.bytes;
-      if (bytes?.length) acceptDecodedBytes(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+      if (startedAt) {
+        decodeTimeMs += Math.max(0, performance.now() - startedAt);
+        decodeSamples += 1;
+      }
+      const decoded = event.data?.bytes;
+      decodedFrames += 1;
+      const codes = Array.isArray(decoded) ? decoded : decoded?.length ? [decoded] : [];
+      validQrFrames += codes.length;
+      if (codes.length) {
+        highScanMisses = 0;
+        for (const bytes of codes) acceptDecodedBytes(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+      } else {
+        highScanMisses += 1;
+      }
     };
     worker.onerror = () => {
+      workerErrors += 1;
       if (highWorkers[index] === worker) restartHighSpeedWorker(index);
     };
   }
@@ -320,6 +378,7 @@
   function restartHighSpeedWorker(index) {
     if (!stream || !highWorkers.length) return;
     highWorkers[index]?.terminate();
+    workerRestarts += 1;
     try {
       startHighSpeedWorker(index);
     } catch (_) {
@@ -341,43 +400,142 @@
     if (stream) status.textContent = "高速解码器不可用，已切换兼容扫描";
   }
 
-  function scanWithHighSpeedWorkers() {
+  async function scanWithHighSpeedWorkers() {
     if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
     const now = performance.now();
     for (let index = 0; index < highWorkers.length; index += 1) {
       if (highWorkerBusy[index] && now - highWorkerStartedAt[index] > HIGH_WORKER_TIMEOUT) restartHighSpeedWorker(index);
     }
     const slot = highWorkerBusy.findIndex((busy, index) => !busy && highWorkerReady[index]);
-    if (slot < 0) return;
-    const width = video.videoWidth;
-    const height = video.videoHeight;
-    if (canvas.width !== width || canvas.height !== height) {
-      canvas.width = width;
-      canvas.height = height;
+    if (slot < 0) {
+      workerBusyDrops += 1;
+      return;
     }
-    ctx.drawImage(video, 0, 0, width, height);
-    const image = ctx.getImageData(0, 0, width, height);
     highWorkerBusy[slot] = true;
     highWorkerStartedAt[slot] = now;
+    const source = getHighSpeedSource();
+    const scale = Math.min(1, HIGH_SCAN_SIZE / Math.max(source.width, source.height));
+    const width = Math.max(1, Math.round(source.width * scale));
+    const height = Math.max(1, Math.round(source.height * scale));
     try {
-      highWorkers[slot].postMessage({ id: ++highFrameId, buf: image.data.buffer, w: width, h: height }, [image.data.buffer]);
+      const id = ++highFrameId;
+      if (typeof createImageBitmap === "function" && typeof OffscreenCanvas === "function") {
+        const bitmap = await createImageBitmap(video, source.x, source.y, source.width, source.height, {
+          resizeWidth: width,
+          resizeHeight: height,
+          resizeQuality: "high"
+        });
+        highWorkers[slot].postMessage({ id, bitmap }, [bitmap]);
+        return;
+      }
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+      ctx.drawImage(video, source.x, source.y, source.width, source.height, 0, 0, width, height);
+      const image = ctx.getImageData(0, 0, width, height);
+      highWorkers[slot].postMessage({ id, buf: image.data.buffer, w: width, h: height }, [image.data.buffer]);
     } catch (_) {
       restartHighSpeedWorker(slot);
     }
   }
 
+  function getHighSpeedSource() {
+    const width = video.videoWidth;
+    const height = video.videoHeight;
+    if (highScanMisses > 0 && highScanMisses % HIGH_FULL_SCAN_EVERY_MISSES === 0) {
+      return { x: 0, y: 0, width, height };
+    }
+    const side = Math.max(1, Math.floor(Math.min(width, height) * 0.94));
+    return {
+      x: Math.floor((width - side) / 2),
+      y: Math.floor((height - side) / 2),
+      width: side,
+      height: side
+    };
+  }
+
+  function resetScanStats() {
+    scanStatsStartedAt = performance.now();
+    capturedFrames = 0;
+    decodedFrames = 0;
+    validQrFrames = 0;
+    cameraFrameRate = 0;
+    cameraSettings = null;
+    cameraCapabilities = null;
+    workerBusyDrops = 0;
+    workerRestarts = 0;
+    workerErrors = 0;
+    decodeTimeMs = 0;
+    decodeSamples = 0;
+    highFramesSeen = 0;
+    highUniqueFrames = 0;
+    highInvalidFrames = 0;
+    highDuplicateFrames = 0;
+    highSequenceGaps = 0;
+    highLastLogicalSequence = -1;
+    highProtocolBytes = 0;
+    highLastFrameAt = 0;
+    lastCaptureFps = 0;
+    lastDecodeFps = 0;
+    lastValidFps = 0;
+    renderDiagnostics();
+  }
+
+  function recordCapturedFrame() {
+    capturedFrames += 1;
+    const now = performance.now();
+    const elapsed = now - scanStatsStartedAt;
+    if (elapsed < 1000) return;
+    const captureFps = capturedFrames * 1000 / elapsed;
+    const decodeFps = decodedFrames * 1000 / elapsed;
+    const validFps = validQrFrames * 1000 / elapsed;
+    lastCaptureFps = captureFps;
+    lastDecodeFps = decodeFps;
+    lastValidFps = validFps;
+    const requested = cameraFrameRate ? " / " + Math.round(cameraFrameRate) : "";
+    scanRateText.textContent = "采集 " + captureFps.toFixed(0) + requested + " · 分析 " + decodeFps.toFixed(0) + " · 有效码 " + validFps.toFixed(0);
+    renderDiagnostics();
+    scanStatsStartedAt = now;
+    capturedFrames = 0;
+    decodedFrames = 0;
+    validQrFrames = 0;
+  }
+
   function acceptDecodedBytes(bytes) {
+    highFramesSeen += 1;
     const parsed = H?.parseFrame(bytes);
     if (parsed) {
+      const before = highDecoder?.framesNew || 0;
       acceptHighSpeedFrame(parsed);
+      const after = highDecoder?.framesNew || 0;
+      if (after > before) {
+        highUniqueFrames += 1;
+        highProtocolBytes += parsed.block.length;
+        highLastFrameAt = performance.now();
+        recordHighSequence(parsed.header);
+      } else highDuplicateFrames += 1;
       return;
     }
+    highInvalidFrames += 1;
     const text = utf8Decoder.decode(bytes);
     if (text.startsWith("AFL1|")) acceptDecoded(text);
   }
 
+  function recordHighSequence(header) {
+    const raw = header.seq >>> 0;
+    const logical = (raw & 0x80000000) !== 0
+      ? raw & 0x7fffffff
+      : header.k + raw;
+    if (highLastLogicalSequence >= 0 && logical > highLastLogicalSequence + 1) {
+      highSequenceGaps += logical - highLastLogicalSequence - 1;
+    }
+    if (logical > highLastLogicalSequence) highLastLogicalSequence = logical;
+  }
+
   function acceptHighSpeedFrame(parsed) {
     if (finishing) return;
+    highSpeedActive = true;
     const { header, block } = parsed;
     const identity = H.streamIdentity(header);
     if (!highDecoder || highStreamKey !== identity) {
@@ -520,7 +678,10 @@
         if (event.data.error) pending.reject(new Error(event.data.error));
         else pending.resolve(event.data.code || null);
       };
-      decodeWorker.onerror = () => disableDecodeWorker();
+      decodeWorker.onerror = () => {
+        workerErrors += 1;
+        disableDecodeWorker();
+      };
     }
     const id = ++decodeRequestId;
     return new Promise((resolve, reject) => {
@@ -576,6 +737,7 @@
   }
 
   function acceptDecoded(text) {
+    if (highSpeedActive) return;
     const now = performance.now();
     if (text === lastDecodedText && now - lastDecodedAt < 250) return;
     lastDecodedText = text;
@@ -794,6 +956,47 @@
       status.textContent = "缺失编号已复制";
     } catch (_) {
       status.textContent = "复制失败，请手动记录缺失编号";
+    }
+  }
+
+  function renderDiagnostics() {
+    if (!diagnosticsEl) return;
+    const settings = cameraSettings || stream?.getVideoTracks?.()[0]?.getSettings?.() || {};
+    const fpsCapability = cameraCapabilities?.frameRate;
+    const fpsRange = fpsCapability
+      ? ((fpsCapability.min ?? "?") + "-" + (fpsCapability.max ?? "?"))
+      : "未知";
+    const backend = highWorkers.length
+      ? "AFL2 WASM Worker"
+      : barcodeDetector
+        ? "BarcodeDetector"
+        : workerDisabled ? "jsQR 主线程" : "AFL1 Worker";
+    const avgDecode = decodeSamples ? (decodeTimeMs / decodeSamples).toFixed(1) + " ms" : "—";
+    diagnosticsEl.textContent = [
+      "相机：" + (settings.width || video.videoWidth || "?") + "×" + (settings.height || video.videoHeight || "?") +
+        " · 实际/报告 " + (cameraFrameRate || settings.frameRate || "?") + " FPS · 请求上限 " + cameraRequestedFps,
+      "相机能力：FPS " + fpsRange + " · facingMode " + (settings.facingMode || "未知"),
+      "实时：采集 " + lastCaptureFps.toFixed(1) + " · 分析 " + lastDecodeFps.toFixed(1) + " · 有效码 " + lastValidFps.toFixed(1) + " FPS",
+      "解码：" + backend + " · Worker " + highWorkers.length + " · 平均 " + avgDecode,
+      "调度：Worker 就绪 " + highWorkerReady.filter(Boolean).length + "/" + highWorkers.length +
+        " · 忙时丢弃 " + workerBusyDrops + " · 重启 " + workerRestarts + " · 错误 " + workerErrors +
+        " · 连续未识别 " + highScanMisses,
+      "协议：识别 " + highFramesSeen + " · 唯一 " + highUniqueFrames + " · 重复 " + highDuplicateFrames +
+        " · 无效 " + highInvalidFrames + " · 序列跳跃 " + highSequenceGaps +
+        " · 解块 " + (highDecoder?.solvedCount || 0) + "/" + (highDecoder?.k || 0),
+      "高速会话：最近帧 " + (highLastFrameAt ? Math.max(0, Math.round(performance.now() - highLastFrameAt)) + " ms" : "—") +
+        " · 有效载荷 " + formatBytes(highProtocolBytes) + " · 会话 " + (highHeader ? H.streamIdentity(highHeader) : "—"),
+      "环境：" + (navigator.userAgent || "未知")
+    ].join("\n");
+  }
+
+  async function copyDiagnosticsText() {
+    renderDiagnostics();
+    try {
+      await navigator.clipboard.writeText(diagnosticsEl?.textContent || "");
+      status.textContent = "诊断信息已复制";
+    } catch (_) {
+      status.textContent = "复制失败，请长按诊断信息复制";
     }
   }
 

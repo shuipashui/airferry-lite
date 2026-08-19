@@ -6,6 +6,7 @@
   const fileLabel = el("fileLabel");
   const chunkSize = el("chunkSize");
   const fps = el("fps");
+  const qrMode = el("qrMode");
   const prepareBtn = el("prepareBtn");
   const playBtn = el("playBtn");
   const resetBtn = el("resetBtn");
@@ -21,13 +22,14 @@
   const QR_CACHE_LIMIT = 64;
   let file = null;
   let transfer = null;
-  let timer = null;
+  let animationFrame = 0;
   let emitted = 0;
-  let nextTickAt = 0;
+  let lastTickAt = 0;
   let intervalMs = 125;
   const qrCache = new Map();
   const highQueue = [];
   let highNextSeq = 0;
+  let codesPerScreen = 1;
 
   function selectFile(next) {
     file = next || null;
@@ -59,8 +61,10 @@
       const sourceBytes = new Uint8Array(await file.arrayBuffer());
       if (!H) throw new Error("高速协议未加载");
       const packed = await H.packFile(file.name, file.type || "application/octet-stream", sourceBytes);
+      codesPerScreen = qrMode.value === "quad" ? 4 : 1;
       const frameBytes = Number(chunkSize.value);
-      const blockLen = frameBytes - H.HEADER_LEN;
+      const effectiveFrameBytes = codesPerScreen === 4 ? Math.min(frameBytes, 1005) : frameBytes;
+      const blockLen = effectiveFrameBytes - H.HEADER_LEN;
       const sessionId = (Math.floor(Math.random() * 0xffff) + 1) & 0xffff;
       const encoder = new H.LTEncoder(packed.container, blockLen, sessionId);
       transfer = {
@@ -71,7 +75,9 @@
           k: encoder.k,
           blockLen,
           totalLen: packed.container.length,
-          payloadFnv: H.fnv1a(packed.container)
+          payloadFnv: H.fnv1a(packed.container),
+          layoutCodes: codesPerScreen === 4 ? 4 : 1,
+          systematic: true
         },
         session: sessionId.toString(16).padStart(4, "0"),
         total: encoder.k,
@@ -87,9 +93,9 @@
       sessionText.textContent = transfer.session;
       frameText.textContent = "0 / " + transfer.total;
       progressBar.style.width = "0%";
-      drawPattern(highQueue[0].pattern);
+      drawScreen(highQueue[0].patterns);
       overlay.classList.add("hidden");
-      statusText.textContent = "高速流已生成 · " + (prepared.encoding === "gzip" ? "已压缩 " + Math.max(0, Math.round(prepared.savedBytes / prepared.originalSize * 100)) + "%" : "未压缩");
+      statusText.textContent = "高速流已生成 · " + (codesPerScreen === 4 ? "四码，每码 " + effectiveFrameBytes + " B " : "单码 ") + (prepared.encoding === "gzip" ? "已压缩 " + Math.max(0, Math.round(prepared.savedBytes / prepared.originalSize * 100)) + "%" : "未压缩");
       playBtn.disabled = false;
       playBtn.textContent = "开始播放";
       resetBtn.disabled = false;
@@ -99,7 +105,7 @@
     }
   });
 
-  playBtn.addEventListener("click", () => timer ? stop() : start());
+  playBtn.addEventListener("click", () => animationFrame ? stop() : start());
   resetBtn.addEventListener("click", () => {
     stop();
     file = null;
@@ -116,30 +122,32 @@
   });
 
   function start() {
-    if (!transfer || timer) return;
+    if (!transfer || animationFrame) return;
     intervalMs = 1000 / Math.max(1, Number(fps.value));
-    nextTickAt = performance.now();
-    statusText.textContent = "正在循环播放";
+    lastTickAt = 0;
+    statusText.textContent = Number(fps.value) >= 60
+      ? "正在循环播放 · 高帧率仅适合高刷屏"
+      : "正在循环播放";
     playBtn.textContent = "暂停";
-    scheduleTick();
+    animationFrame = requestAnimationFrame(playLoop);
   }
 
-  function scheduleTick() {
-    if (!transfer || timer) return;
-    const now = performance.now();
-    if (nextTickAt < now - intervalMs * 2) nextTickAt = now;
-    timer = setTimeout(() => {
-      timer = null;
+  function playLoop(timestamp) {
+    if (!transfer || !animationFrame) return;
+    const elapsed = timestamp - lastTickAt;
+    if (!lastTickAt || elapsed >= intervalMs) {
+      lastTickAt = !lastTickAt || elapsed > intervalMs * 3
+        ? timestamp
+        : timestamp - (elapsed % intervalMs);
       tick();
-      nextTickAt += intervalMs;
-      scheduleTick();
-    }, Math.max(0, nextTickAt - now));
+    }
+    animationFrame = requestAnimationFrame(playLoop);
   }
 
   function stop() {
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
+    if (animationFrame) {
+      cancelAnimationFrame(animationFrame);
+      animationFrame = 0;
     }
     if (transfer) {
       statusText.textContent = "已暂停";
@@ -153,9 +161,9 @@
       fillHighQueue(1);
       return;
     }
-    drawPattern(next.pattern);
+    drawScreen(next.patterns);
     emitted += 1;
-    frameText.textContent = "喷泉帧 " + next.seq + " · K=" + transfer.total;
+    frameText.textContent = (codesPerScreen === 4 ? "四码帧 " : "喷泉帧 ") + next.seqs.join(",") + " · K=" + transfer.total;
     progressBar.style.width = Math.min(100, emitted / Math.ceil(transfer.total * 1.15) * 100) + "%";
     fillHighQueue(1);
   }
@@ -163,9 +171,18 @@
   function fillHighQueue(max) {
     if (!transfer) return;
     for (let count = 0; count < max && highQueue.length < 3; count += 1) {
-      const seq = highNextSeq++;
-      const bytes = H.packFrame({ ...transfer.header, seq }, transfer.encoder.encode(seq));
-      highQueue.push({ seq, pattern: getHighSpeedQrPattern(bytes) });
+      const seqs = [];
+      const patterns = [];
+      for (let code = 0; code < codesPerScreen; code += 1) {
+        const ordinal = highNextSeq++;
+        const seq = ordinal < transfer.total
+          ? (0x80000000 | ordinal) >>> 0
+          : ordinal - transfer.total;
+        const bytes = H.packFrame({ ...transfer.header, seq }, transfer.encoder.encode(seq));
+        seqs.push(seq);
+        patterns.push(getHighSpeedQrPattern(bytes));
+      }
+      highQueue.push({ seqs, patterns });
     }
   }
 
@@ -211,27 +228,36 @@
   }
 
   function drawPattern(pattern) {
+    drawScreen([pattern]);
+  }
+
+  function drawScreen(patterns) {
     try {
-      const quiet = 4;
       const size = canvas.width;
-      const cell = Math.floor(size / (pattern.count + quiet * 2));
-      const used = cell * (pattern.count + quiet * 2);
-      const offset = Math.floor((size - used) / 2);
       const context = canvas.getContext("2d", { alpha: false });
       context.fillStyle = "#fff";
       context.fillRect(0, 0, size, size);
-      context.fillStyle = "#000";
-      for (let row = 0; row < pattern.count; row += 1) {
-        for (let col = 0; col < pattern.count; col += 1) {
-          if (pattern.dark[row * pattern.count + col]) {
-            context.fillRect(offset + (col + quiet) * cell, offset + (row + quiet) * cell, cell, cell);
-          }
-        }
-      }
+      const columns = patterns.length === 4 ? 2 : 1;
+      const rows = patterns.length === 4 ? 2 : 1;
+      const tileWidth = size / columns;
+      const tileHeight = size / rows;
+      patterns.forEach((pattern, index) => drawPatternTile(context, pattern, index % columns * tileWidth, Math.floor(index / columns) * tileHeight, tileWidth, tileHeight));
     } catch (error) {
       stop();
       statusText.textContent = "二维码过密，请降低每帧数据";
       console.error(error);
+    }
+  }
+
+  function drawPatternTile(context, pattern, x, y, width, height) {
+    const quiet = 4;
+    const cell = Math.floor(Math.min(width, height) / (pattern.count + quiet * 2));
+    const used = cell * (pattern.count + quiet * 2);
+    const offsetX = Math.floor(x + (width - used) / 2);
+    const offsetY = Math.floor(y + (height - used) / 2);
+    context.fillStyle = "#000";
+    for (let row = 0; row < pattern.count; row += 1) for (let col = 0; col < pattern.count; col += 1) {
+      if (pattern.dark[row * pattern.count + col]) context.fillRect(offsetX + (col + quiet) * cell, offsetY + (row + quiet) * cell, cell, cell);
     }
   }
 

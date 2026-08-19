@@ -26,6 +26,9 @@ export const MAX_FILE_LABEL = `${MAX_FILE_BYTES / 1024 / 1024} MB`;
 const FILE_HEADER_LEN = 49;
 const MAGIC0 = 0xd1;
 const MAGIC1 = 0x0c;
+const MAGIC1_QUAD = 0x0d;
+const MAGIC1_SYSTEMATIC = 0x0e;
+const MAGIC1_QUAD_SYSTEMATIC = 0x0f;
 const FILE_MAGIC = new Uint8Array([0x44, 0x43, 0x46, 0x32]); // DCF2
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -276,13 +279,18 @@ export interface FrameHeader {
   blockLen: number;
   totalLen: number;
   payloadFnv: number;
+  layoutCodes?: 1 | 4;
+  systematic?: boolean;
 }
 
 export function packFrame(h: FrameHeader, block: Uint8Array): Uint8Array {
   const out = new Uint8Array(HEADER_LEN + block.length);
   const dv = new DataView(out.buffer);
   dv.setUint8(0, MAGIC0);
-  dv.setUint8(1, MAGIC1);
+  const magic1 = h.systematic
+    ? h.layoutCodes === 4 ? MAGIC1_QUAD_SYSTEMATIC : MAGIC1_SYSTEMATIC
+    : h.layoutCodes === 4 ? MAGIC1_QUAD : MAGIC1;
+  dv.setUint8(1, magic1);
   dv.setUint16(2, h.sessionId, true);
   dv.setUint32(4, h.seq, true);
   dv.setUint16(8, h.k, true);
@@ -297,7 +305,7 @@ export function parseFrame(
   bytes: Uint8Array,
 ): { header: FrameHeader; block: Uint8Array } | null {
   if (bytes.length <= HEADER_LEN) return null;
-  if (bytes[0] !== MAGIC0 || bytes[1] !== MAGIC1) return null;
+  if (bytes[0] !== MAGIC0 || ![MAGIC1, MAGIC1_QUAD, MAGIC1_SYSTEMATIC, MAGIC1_QUAD_SYSTEMATIC].includes(bytes[1]!)) return null;
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const header: FrameHeader = {
     sessionId: dv.getUint16(2, true),
@@ -306,6 +314,8 @@ export function parseFrame(
     blockLen: dv.getUint16(10, true),
     totalLen: dv.getUint32(12, true),
     payloadFnv: dv.getUint32(16, true),
+    layoutCodes: bytes[1] === MAGIC1_QUAD || bytes[1] === MAGIC1_QUAD_SYSTEMATIC ? 4 : 1,
+    systematic: bytes[1] === MAGIC1_SYSTEMATIC || bytes[1] === MAGIC1_QUAD_SYSTEMATIC,
   };
   if (header.k === 0 || header.blockLen === 0 || header.totalLen === 0) return null;
   if (bytes.length !== HEADER_LEN + header.blockLen) return null;
@@ -326,7 +336,7 @@ export function parseFrame(
  * k, sessionId and seq produce an identical frame.
  */
 export function streamIdentity(h: FrameHeader): string {
-  return `${h.sessionId}:${h.k}:${h.blockLen}:${h.totalLen}:${h.payloadFnv}`;
+  return `${h.sessionId}:${h.k}:${h.blockLen}:${h.totalLen}:${h.payloadFnv}:${h.layoutCodes || 1}:${h.systematic ? 1 : 0}`;
 }
 
 export function fnv1a(bytes: Uint8Array): number {

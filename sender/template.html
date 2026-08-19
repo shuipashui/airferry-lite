@@ -20,13 +20,16 @@
           <select id="chunkSize"><option value="1465">1465 B（低密度）</option><option value="2331" selected>2331 B（推荐）</option><option value="2953">2953 B（高吞吐）</option></select>
         </label>
         <label>播放帧率
-          <select id="fps"><option value="24">24 FPS（稳定）</option><option value="30" selected>30 FPS（推荐）</option><option value="60">60 FPS（实验）</option></select>
+          <select id="fps"><option value="24">24 FPS（稳定）</option><option value="30" selected>30 FPS（推荐）</option><option value="45">45 FPS（AirFerry 稳定档）</option><option value="60">60 FPS（实验）</option><option value="90">90 FPS（高刷屏）</option><option value="120">120 FPS（高刷屏）</option></select>
+        </label>
+        <label>二维码布局
+          <select id="qrMode"><option value="single" selected>单码（兼容）</option><option value="quad">四码（多码吞吐）</option></select>
         </label>
       </div>
       <div class="actions"><button id="prepareBtn" class="primary" disabled>生成二维码流</button><button id="playBtn" disabled>开始播放</button><button id="resetBtn" disabled>重置</button></div>
       <div class="status"><div><span>状态</span><strong id="statusText">等待文件</strong></div><div><span>会话</span><strong id="sessionText">—</strong></div><div><span>片段</span><strong id="frameText">—</strong></div></div>
       <div class="progress"><i id="progressBar"></i></div>
-      <p class="tip">网页和 APK 统一使用 AFL2 高速协议。默认 2331 B / 30 FPS 适合 60 Hz 屏幕；60 FPS 保留给高刷新率屏幕和可稳定采集 60 FPS 的设备。</p>
+      <p class="tip">四码模式每次同时显示 4 个不同喷泉帧，接收端需使用最新版网页或 APK。60 Hz 屏幕优先 30/45 FPS；60 FPS 仅建议高刷屏。</p>
     </section>
     <section class="panel viewer">
       <canvas id="qrCanvas" width="900" height="900"></canvas>
