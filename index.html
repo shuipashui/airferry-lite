@@ -11,11 +11,11 @@
 </head>
 <body>
   <main class="app">
-    <header><div class="mark">AF</div><div><h1>AirFerry Lite</h1><p>手机网页接收端 v24</p></div><a id="openSender" class="jump small" href="sender/dist/airferry-lite-sender.html">打开发送端</a></header>
+    <header><div class="mark">AF</div><div><h1>AirFerry Lite</h1><p>手机网页接收端 v26</p></div><a id="openSender" class="jump small" href="sender/dist/airferry-lite-sender.html">打开发送端</a></header>
     <section class="camera-card">
       <video id="video" playsinline muted></video>
       <canvas id="scanCanvas" hidden></canvas>
-      <div id="cameraHint" class="camera-hint">点击“开始扫描”，对准电脑全屏二维码。码要完整出现在画面里，太近会切掉定位点</div>
+      <div id="cameraHint" class="camera-hint">点击“开始扫描”，对准电脑全屏二维码。单码把三个角都留在画面里，可以靠近；四码不用特意拉远</div>
     </section>
     <div class="actions">
       <button id="startBtn" class="primary">开始扫描</button>
@@ -31,13 +31,13 @@
     <section class="card"><div class="row"><strong>缺失片段</strong><button id="copyMissing" class="small" disabled>复制编号</button></div><code id="missing">-</code></section>
     <section class="card diagnostics"><div class="row"><strong>诊断信息</strong><button id="copyDiagnosticsCard" class="small">复制诊断</button></div><pre id="diagnostics">等待开始扫描</pre></section>
     <section id="result" class="card result" hidden><strong>文件已恢复</strong><span id="resultInfo"></span><a id="download" class="download" download>下载文件</a></section>
-    <p class="note">网页接收端需要 HTTPS 才能访问摄像头。四码请先让电脑发送端全屏，再用 60 FPS 播放。二维码四周留一点边，不要贴到镜头前。</p>
+    <p class="note">网页接收端需要 HTTPS 才能访问摄像头。四码请先让电脑发送端全屏，再用 60 FPS 播放。单码四周留一点边，三个定位点都要看得见。</p>
     <div class="sticky-bar"><button type="button" id="copyDiagnostics" class="small">复制诊断</button></div>
   </main>
   <script src="vendor/jsQR.js"></script>
   <script src="receiver-storage.js"></script>
   <script src="protocol.js"></script>
   <script src="highspeed-protocol.js"></script>
-  <script src="app.js?v=24"></script>
+  <script src="app.js?v=26"></script>
 </body>
 </html>

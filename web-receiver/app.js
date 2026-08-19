@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v24";
+  const RECEIVER_BUILD = "v26";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -53,10 +53,10 @@
   const HIGH_WORKER_TIMEOUT = 2500;
   const HIGH_ACQUIRE_SIZE = 1440;
   const HIGH_TRACK_SIZE = 960;
-  const HIGH_TILE_SIZE = 960;
+  const HIGH_TILE_SIZE = 720;
   const HIGH_FULL_SCAN_EVERY_MISSES = 12;
   const HIGH_ROI_MISS_LIMIT = 3;
-  const HIGH_CLOSE_BOX_RATIO = 0.62;
+  const HIGH_CLOSE_BOX_RATIO = 0.5;
   const HIGH_QUAD_OVERLAP = 0.18;
 
   let stream = null;
@@ -423,7 +423,6 @@
         if (highScanMisses >= HIGH_ROI_MISS_LIMIT) {
           highScanRoi = null;
           highTrackedTiles = null;
-          lastHitBox = 0;
         }
         if (highScanMisses >= 12) captureViaCanvas = true;
       }
@@ -483,18 +482,17 @@
 
   function nextHighScanJobs() {
     const retry = highScanMisses > 0;
-    const base = getHighSpeedSource();
-    const probeMulti = !highMultiLayout && highScanMisses > 0 && highScanMisses % HIGH_FULL_SCAN_EVERY_MISSES === 0;
+    const probeMulti = !highMultiLayout && lastHitBox < 700 && highScanMisses > 0 && highScanMisses % HIGH_FULL_SCAN_EVERY_MISSES === 0;
     if (highMultiLayout || probeMulti || (highTrackedTiles && highTrackedTiles.length >= 3)) {
       const tiles = highTrackedTiles && highTrackedTiles.length >= 3
         ? highTrackedTiles.map(clampScanRegion)
-        : overlappingQuadrants(base);
+        : overlappingQuadrants(centerSquareSource());
       const start = tiles.length ? highQuadCursor % tiles.length : 0;
       if (tiles.length) highQuadCursor = (start + 1) % tiles.length;
       const rotated = tiles.slice(start).concat(tiles.slice(0, start));
       return rotated.map(source => ({ source, maxSymbols: 1, retry, tile: true }));
     }
-    return [{ source: base, maxSymbols: 1, retry, tile: false }];
+    return [{ source: getHighSpeedSource(), maxSymbols: 1, retry, tile: false }];
   }
 
   async function postHighSpeedRegion(slot, source, maxSymbols, retryBinarizer, tile) {
@@ -544,8 +542,10 @@
   }
 
   function scanSizeForSource(source, tile) {
-    const cap = tile || highMultiLayout ? HIGH_TILE_SIZE : highScanRoi ? HIGH_TRACK_SIZE : HIGH_ACQUIRE_SIZE;
-    return Math.min(cap, Math.max(source.width, source.height, 64));
+    const longest = Math.max(source.width, source.height, 64);
+    if (tile || highMultiLayout) return Math.min(HIGH_TILE_SIZE, longest);
+    if (highScanRoi) return Math.min(lastHitBox >= 700 ? HIGH_TILE_SIZE : HIGH_TRACK_SIZE, longest);
+    return Math.min(HIGH_ACQUIRE_SIZE, longest);
   }
 
   function currentHighScanSize() {
@@ -564,9 +564,21 @@
     };
   }
 
+  function fullFrameSource() {
+    return {
+      x: 0,
+      y: 0,
+      width: Math.max(1, video.videoWidth || 1),
+      height: Math.max(1, video.videoHeight || 1)
+    };
+  }
+
   function getHighSpeedSource() {
-    if (highScanRoi && highScanMisses < HIGH_ROI_MISS_LIMIT) return highScanRoi;
-    return centerSquareSource();
+    if (highScanRoi && highScanMisses < HIGH_ROI_MISS_LIMIT) {
+      if (highScanMisses > 0 && !highMultiLayout) return inflateRect(highScanRoi, 1.2 + highScanMisses * 0.2);
+      return highScanRoi;
+    }
+    return highMultiLayout ? centerSquareSource() : fullFrameSource();
   }
 
   function overlappingQuadrants(source) {
@@ -584,10 +596,36 @@
   function clampScanRegion(region) {
     const width = video.videoWidth || 1;
     const height = video.videoHeight || 1;
-    const left = Math.max(0, Math.min(width - 1, Math.round(region.x)));
-    const top = Math.max(0, Math.min(height - 1, Math.round(region.y)));
-    const side = Math.max(64, Math.min(Math.round(region.width), Math.round(region.height), width - left, height - top));
-    return { x: left, y: top, width: side, height: side };
+    let w = Math.max(64, Math.round(region.width));
+    let h = Math.max(64, Math.round(region.height));
+    let left = Math.round(region.x);
+    let top = Math.round(region.y);
+    if (left < 0) {
+      w += left;
+      left = 0;
+    }
+    if (top < 0) {
+      h += top;
+      top = 0;
+    }
+    if (left + w > width) w = width - left;
+    if (top + h > height) h = height - top;
+    w = Math.max(64, Math.min(w, width));
+    h = Math.max(64, Math.min(h, height));
+    if (left + w > width) left = Math.max(0, width - w);
+    if (top + h > height) top = Math.max(0, height - h);
+    return { x: left, y: top, width: w, height: h };
+  }
+
+  function inflateRect(region, factor) {
+    const cx = region.x + region.width / 2;
+    const cy = region.y + region.height / 2;
+    return clampScanRegion({
+      x: cx - region.width * factor / 2,
+      y: cy - region.height * factor / 2,
+      width: region.width * factor,
+      height: region.height * factor
+    });
   }
 
   function inflateRegion(region, factor) {
@@ -640,21 +678,23 @@
     const view = Math.min(video.videoWidth, video.videoHeight);
     const box = Math.max(maxX - minX, maxY - minY, 64);
     lastHitBox = box;
-    if (box >= view * HIGH_CLOSE_BOX_RATIO) {
+    if (highMultiLayout && codes.length < 3) {
       highScanRoi = centerSquareSource();
+    } else if (box >= view * HIGH_CLOSE_BOX_RATIO && !highMultiLayout) {
+      highScanRoi = inflateRect({
+        x: minX,
+        y: minY,
+        width: Math.max(64, maxX - minX),
+        height: Math.max(64, maxY - minY)
+      }, 1.22);
     } else {
-      const pad = codes.length >= 4 ? 1.35 : codes.length >= 2 ? 2.15 : highMultiLayout ? 3.8 : 2.0;
-      const minSide = highMultiLayout ? 720 : 960;
-      const side = Math.min(view, Math.max(minSide, Math.round(box * pad)));
-      const cx = (minX + maxX) / 2;
-      const cy = (minY + maxY) / 2;
-      const next = {
-        x: Math.max(0, Math.min(video.videoWidth - side, Math.round(cx - side / 2))),
-        y: Math.max(0, Math.min(video.videoHeight - side, Math.round(cy - side / 2))),
-        width: side,
-        height: side
-      };
-      highScanRoi = unionHighScanRoi(highScanRoi, next);
+      const pad = codes.length >= 4 ? 1.35 : codes.length >= 2 ? 2.15 : highMultiLayout ? 3.8 : 1.4;
+      highScanRoi = clampScanRegion({
+        x: minX - (maxX - minX) * (pad - 1) / 2,
+        y: minY - (maxY - minY) * (pad - 1) / 2,
+        width: (maxX - minX) * pad,
+        height: (maxY - minY) * pad
+      });
     }
     if (highMultiLayout || codes.length >= 2) rememberTilesFromHits(codes, origin);
     else if (!highMultiLayout) highTrackedTiles = null;
