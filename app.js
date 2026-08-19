@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v51";
+  const RECEIVER_BUILD = "v52";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -62,9 +62,10 @@
   const HIGH_QUAD_OVERLAP = 0.18;
   const HIGH_LOCATE_EVERY = 5;
   const HIGH_TILE_PAD = 1.35;
+  const HIGH_TILE_TRACK = 1.18;
   const HIGH_QUAD_ACQUIRE_MS = 100;
   const HIGH_QUAD_TILE_MISS_LIMIT = 6;
-  const HIGH_QUAD_FROZEN_MISS_LIMIT = 24;
+  const HIGH_QUAD_TRACK_MISS_LIMIT = 8;
 
   let stream = null;
   let scanTimer = 0;
@@ -561,7 +562,7 @@
       if (highWorkerBusy[index] && now - highWorkerStartedAt[index] > HIGH_WORKER_TIMEOUT) restartHighSpeedWorker(index);
     }
     const locked = highTrackedTiles ? highTrackedTiles.filter(Boolean).length : 0;
-    if (barcodeDetector && !highLocateLock && highMultiLayout && locked < 4 && now - lastNativeLocate > HIGH_QUAD_ACQUIRE_MS) {
+    if (barcodeDetector && !highLocateLock && highMultiLayout && locked < 3 && now - lastNativeLocate > HIGH_QUAD_ACQUIRE_MS) {
       lastNativeLocate = now;
       void locateQuadWithNative();
     }
@@ -615,7 +616,7 @@
     if (filled >= 2) {
       const inferred = inferMissingQuadTiles(highTrackedTiles);
       const known = inferred[slot];
-      if (known) return clampScanRegion(inflateRect(known, HIGH_TILE_PAD));
+      if (known) return clampScanRegion(known);
     }
     return overlappingQuadrants(chooseQuadRegion())[slot];
   }
@@ -728,12 +729,12 @@
         maxY = box.y + box.height;
       }
       if (!Number.isFinite(minX)) continue;
-      tiles.push({
+      tiles.push(inflateRegion({
         x: minX,
         y: minY,
         width: Math.max(64, maxX - minX),
         height: Math.max(64, maxY - minY)
-      });
+      }, HIGH_TILE_TRACK));
     }
     return tiles;
   }
@@ -788,11 +789,13 @@
   }
 
   function lockQuadSlots(fresh, sighting) {
-    if (fresh && fresh.length) mergeVideoTiles(fresh, sighting);
-    if ((highTrackedTiles || []).filter(Boolean).length >= 2) {
-      highTrackedTiles = inferMissingQuadTiles(highTrackedTiles);
-      highTileProven = (highTrackedTiles || []).map(tile => !!tile);
+    if (!(fresh && fresh.length)) return;
+    const locked = (highTrackedTiles || []).filter(Boolean).length;
+    if (fresh.length >= 3 || locked < 3) {
+      highTrackedTiles = slotTilesByCluster(fresh);
     }
+    highQuadFrozen = (highTrackedTiles || []).filter(Boolean).length >= 4;
+    highTileProven = (highTrackedTiles || [null, null, null, null]).map(tile => !!tile);
   }
 
   function evenRect(x, y, width, height, maxW, maxH) {
@@ -1146,7 +1149,8 @@
   function rememberQuadHits(hits) {
     const transferHits = hits.filter(hit => transferHitKey(hit));
     if (!transferHits.length) {
-      const missLimit = highQuadFrozen ? HIGH_QUAD_FROZEN_MISS_LIMIT : HIGH_QUAD_TILE_MISS_LIMIT;
+      const locked = (highTrackedTiles || []).filter(Boolean).length;
+      const missLimit = locked >= 3 ? HIGH_QUAD_TRACK_MISS_LIMIT : HIGH_QUAD_TILE_MISS_LIMIT;
       if (highScanMisses + 1 >= missLimit) {
         highTrackedTiles = null;
         highTileProven = [false, false, false, false];
@@ -1165,7 +1169,7 @@
     }
     const corners = [];
     for (const hit of transferHits) corners.push(...mappedCorners(hit, hit.origin || { x: 0, y: 0, srcW: 1, srcH: 1, outW: 1, outH: 1 }));
-    if (corners.length && !highQuadFrozen) {
+    if (corners.length) {
       let minX = Infinity;
       let minY = Infinity;
       let maxX = -Infinity;
@@ -1190,7 +1194,7 @@
       else if (transferHits.length >= 3) highScanRoi = unionHighScanRoi(highScanRoi || next, next);
       else highScanRoi = next;
     }
-    if (highMultiLayout && transferHits.length && !highQuadFrozen) {
+    if (highMultiLayout && transferHits.length) {
       const tiles = [];
       for (const hit of transferHits) {
         const mapped = mappedCorners(hit, hit.origin || { x: 0, y: 0, srcW: 1, srcH: 1, outW: 1, outH: 1 });
@@ -1205,20 +1209,19 @@
           maxX = Math.max(maxX, point.x);
           maxY = Math.max(maxY, point.y);
         }
-        tiles.push({
+        tiles.push(inflateRegion({
           x: minX,
           y: minY,
           width: Math.max(64, maxX - minX),
           height: Math.max(64, maxY - minY)
-        });
+        }, HIGH_TILE_TRACK));
       }
       if (tiles.length) lockQuadSlots(tiles, false);
-      if (transferHits.length >= 4 && (highTrackedTiles || []).filter(Boolean).length >= 4) highQuadFrozen = true;
     }
   }
 
   function decodeQuadFrame() {
-    if (highGrabInFlight || highWorkerBusy.some(Boolean)) {
+    if (highGrabInFlight) {
       workerBusyDrops += 1;
       return;
     }
@@ -1226,10 +1229,15 @@
     highGrabInFlight = true;
     void (async () => {
       try {
-        const inferred = inferMissingQuadTiles(highTrackedTiles).filter(Boolean).map(tile => clampScanRegion(inflateRect(tile, HIGH_TILE_PAD)));
-        const region = inferred.length >= 3 ? unionScanCrops(inferred) : chooseQuadRegion();
+        const inferred = inferMissingQuadTiles(highTrackedTiles).filter(Boolean).map(tile => clampScanRegion(tile));
+        const region = inferred.length >= 2 ? unionScanCrops(inferred) : chooseQuadRegion();
         const packed = await grabPackedRegion(region);
+        highGrabInFlight = false;
         if (!stream || !packed) return;
+        if (highWorkerBusy.some(Boolean)) {
+          workerBusyDrops += 1;
+          return;
+        }
         const hits = [];
         const seen = new Set();
         const add = list => {
@@ -1242,7 +1250,7 @@
             hits.push(hit);
           }
         };
-        const crops = inferred.length >= 3 ? inferred : overlappingQuadrants(region);
+        const crops = inferred.length >= 2 ? inferred : overlappingQuadrants(region);
         add(await readCropsFromPacked(packed, crops, false));
         rememberQuadHits(hits);
       } finally {
@@ -1500,7 +1508,7 @@
         y: minY,
         width: Math.max(64, maxX - minX),
         height: Math.max(64, maxY - minY)
-      }, 1.18));
+      }, HIGH_TILE_TRACK));
     }
     if (tiles.length <= 1) return tiles;
     const midX = tiles.reduce((sum, tile) => sum + tile.x + tile.width / 2, 0) / tiles.length;
@@ -1518,7 +1526,7 @@
   function rememberTilesFromHits(codes, origin) {
     const fresh = tilesFromHits(codes, origin);
     if (highMultiLayout) {
-      if (fresh.length >= 2) mergeVideoTiles(fresh, false);
+      if (fresh.length >= 3) lockQuadSlots(fresh, false);
       return;
     }
     for (const tile of fresh) mergeTrackedTile(tile);
