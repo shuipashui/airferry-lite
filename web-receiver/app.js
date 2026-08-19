@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v35";
+  const RECEIVER_BUILD = "v36";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -529,7 +529,13 @@
     return [{ source: getHighSpeedSource(), maxSymbols: 1, retry, tile: false }];
   }
 
-  function quadGridSlot(x, y) {
+  function quadGridSlot(x, y, tiles) {
+    const filled = (tiles || highTrackedTiles || []).filter(Boolean);
+    if (filled.length >= 2) {
+      const midX = filled.reduce((sum, tile) => sum + tile.x + tile.width / 2, 0) / filled.length;
+      const midY = filled.reduce((sum, tile) => sum + tile.y + tile.height / 2, 0) / filled.length;
+      return (y < midY ? 0 : 2) + (x < midX ? 0 : 1);
+    }
     const grid = centerSquareSource();
     return (y < grid.y + grid.height / 2 ? 0 : 2) + (x < grid.x + grid.width / 2 ? 0 : 1);
   }
@@ -659,29 +665,52 @@
   }
 
   function mergeVideoTiles(fresh, sighting) {
-    const slots = (highTrackedTiles && highTrackedTiles.length === 4)
-      ? highTrackedTiles.slice()
-      : slotTilesByCluster(highTrackedTiles || []);
-    for (const tile of fresh || []) {
-      const slot = quadGridSlot(tile.x + tile.width / 2, tile.y + tile.height / 2);
-      if (sighting) {
-        if (!slots[slot]) {
-          slots[slot] = tile;
-          highTileProven[slot] = false;
-        }
-        continue;
+    const current = (highTrackedTiles || []).filter(Boolean);
+    const wasProven = [];
+    for (let index = 0; index < 4; index += 1) {
+      if (highTrackedTiles && highTrackedTiles[index] && highTileProven[index]) {
+        wasProven.push(tileCenter(highTrackedTiles[index]));
       }
-      if (slots[slot] && highTileProven[slot]) {
-        const current = slots[slot];
-        const dx = current.x + current.width / 2 - (tile.x + tile.width / 2);
-        const dy = current.y + current.height / 2 - (tile.y + tile.height / 2);
-        const radius = Math.max(tile.width, tile.height) * 0.45;
-        if (dx * dx + dy * dy > radius * radius) continue;
-      }
-      slots[slot] = tile;
-      highTileProven[slot] = true;
     }
-    highTrackedTiles = slots;
+    for (const tile of fresh || []) {
+      let best = -1;
+      let bestDist = Infinity;
+      for (let index = 0; index < current.length; index += 1) {
+        const a = tileCenter(current[index]);
+        const b = tileCenter(tile);
+        const dist = (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y);
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = index;
+        }
+      }
+      const radius = Math.max(tile.width, tile.height) * 0.45;
+      if (best >= 0 && bestDist <= radius * radius) {
+        if (!sighting) current[best] = tile;
+      } else if (current.length < 4) {
+        current.push(tile);
+      }
+    }
+    highTrackedTiles = slotTilesByCluster(current);
+    const nextProven = [false, false, false, false];
+    for (let index = 0; index < 4; index += 1) {
+      const tile = highTrackedTiles[index];
+      if (!tile) continue;
+      const c = tileCenter(tile);
+      const radius = Math.max(tile.width, tile.height) * 0.45;
+      const near = (point) => {
+        const dx = point.x - c.x;
+        const dy = point.y - c.y;
+        return dx * dx + dy * dy <= radius * radius;
+      };
+      if (wasProven.some(near)) nextProven[index] = true;
+      if (!sighting) {
+        for (const hit of fresh || []) {
+          if (near(tileCenter(hit))) nextProven[index] = true;
+        }
+      }
+    }
+    highTileProven = nextProven;
   }
 
   function evenRect(x, y, width, height, maxW, maxH) {
@@ -1256,27 +1285,16 @@
       const b = filled[1];
       const dx = b.x + b.width / 2 - (a.x + a.width / 2);
       const dy = b.y + b.height / 2 - (a.y + a.height / 2);
-      const grid = centerSquareSource();
       if (Math.abs(dx) >= Math.abs(dy)) {
         const left = a.x + a.width / 2 < b.x + b.width / 2 ? a : b;
         const right = left === a ? b : a;
-        if (left.y + left.height / 2 < grid.y + grid.height / 2) {
-          slots[0] = left;
-          slots[1] = right;
-        } else {
-          slots[2] = left;
-          slots[3] = right;
-        }
+        slots[0] = left;
+        slots[1] = right;
       } else {
         const top = a.y + a.height / 2 < b.y + b.height / 2 ? a : b;
         const bottom = top === a ? b : a;
-        if (top.x + top.width / 2 < grid.x + grid.width / 2) {
-          slots[0] = top;
-          slots[2] = bottom;
-        } else {
-          slots[1] = top;
-          slots[3] = bottom;
-        }
+        slots[0] = top;
+        slots[2] = bottom;
       }
       return slots;
     }
