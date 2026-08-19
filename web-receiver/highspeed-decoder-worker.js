@@ -7,7 +7,7 @@ let captureCanvas = null;
 let captureContext = null;
 
 async function bridgeMessage(event) {
-  const { bitmap, id, maxSymbols } = event.data || {};
+  const { bitmap, id, maxSymbols, retryBinarizer } = event.data || {};
   if (!bitmap) {
     decodeMessage(event);
     return;
@@ -20,10 +20,11 @@ async function bridgeMessage(event) {
       captureCanvas = new OffscreenCanvas(width, height);
       captureContext = captureCanvas.getContext("2d", { alpha: false, willReadFrequently: true });
     }
+    captureContext.imageSmoothingEnabled = false;
     captureContext.drawImage(bitmap, 0, 0);
     bitmap.close();
     const image = captureContext.getImageData(0, 0, width, height);
-    decodeMessage({ data: { id, buf: image.data.buffer, w: width, h: height, maxSymbols } });
+    decodeMessage({ data: { id, buf: image.data.buffer, w: width, h: height, maxSymbols, retryBinarizer } });
   } catch (_) {
     try { bitmap.close(); } catch (_) {}
     self.postMessage({ id, bytes: null });
