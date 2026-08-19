@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v34";
+  const RECEIVER_BUILD = "v35";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -827,12 +827,11 @@
     };
   }
 
-  async function grabPackedCenter() {
-    const src = centerSquareSource();
-    let packed = await grabLumaRegion(src);
-    if (!packed) packed = grabCanvasPacked(src);
-    if (packed && (packed.regionW > src.width * 1.08 || packed.regionH > src.height * 1.08)) {
-      const cropped = cropLuma(packed, src);
+  async function grabPackedRegion(source) {
+    let packed = await grabLumaRegion(source);
+    if (!packed) packed = grabCanvasPacked(source);
+    if (packed && (packed.regionW > source.width * 1.08 || packed.regionH > source.height * 1.08)) {
+      const cropped = cropLuma(packed, source);
       if (cropped) {
         return {
           lum: cropped.lum,
@@ -846,6 +845,10 @@
       }
     }
     return packed;
+  }
+
+  function grabPackedCenter() {
+    return grabPackedRegion(centerSquareSource());
   }
 
   function downscaleLuma(lum, width, height, maxSide) {
@@ -892,20 +895,43 @@
     return true;
   }
 
+  function unionScanCrops(crops) {
+    if (!crops.length) return centerSquareSource();
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const crop of crops) {
+      minX = Math.min(minX, crop.x);
+      minY = Math.min(minY, crop.y);
+      maxX = Math.max(maxX, crop.x + crop.width);
+      maxY = Math.max(maxY, crop.y + crop.height);
+    }
+    return clampScanRegion({
+      x: minX,
+      y: minY,
+      width: Math.max(64, maxX - minX),
+      height: Math.max(64, maxY - minY)
+    });
+  }
+
   function nextQuadCrops(count) {
     const src = centerSquareSource();
     const fallback = exclusiveQuadrants(src);
     const slots = inferMissingQuadTiles(highTrackedTiles);
-    const provenCount = highTrackedTiles ? highTrackedTiles.filter(Boolean).length : 0;
-    const hunt = provenCount < 4;
+    const filled = slots.filter(Boolean).length;
     const crops = [];
     for (let index = 0; index < 4 && crops.length < count; index += 1) {
       const quad = (highQuadCursor + index) % 4;
       const known = slots[quad];
-      crops.push(clampScanRegion(hunt || !known ? fallback[quad] : inflateRect(known, HIGH_TILE_PAD)));
+      if (known) {
+        crops.push(clampScanRegion(highTileProven[quad] ? inflateRect(known, HIGH_TILE_PAD) : known));
+      } else {
+        crops.push(fallback[quad]);
+      }
     }
     highQuadCursor = (highQuadCursor + Math.max(1, crops.length)) % 4;
-    return crops;
+    return { crops, filled };
   }
 
   function scanQuadFromLuma() {
@@ -919,9 +945,11 @@
       return;
     }
     const retry = highScanMisses >= 2;
-    const crops = nextQuadCrops(freeSlots.length);
+    const planned = nextQuadCrops(freeSlots.length);
+    const crops = planned.crops;
+    const packedSrc = planned.filled >= 2 ? unionScanCrops(crops) : centerSquareSource();
     highGrabInFlight = true;
-    void grabPackedCenter().then((packed) => {
+    void grabPackedRegion(packedSrc).then((packed) => {
       try {
         if (!stream || !packed) return;
         for (let index = 0; index < freeSlots.length; index += 1) {
