@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v29";
+  const RECEIVER_BUILD = "v30";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -470,7 +470,12 @@
     for (let index = 0; index < highWorkers.length; index += 1) {
       if (highWorkerBusy[index] && now - highWorkerStartedAt[index] > HIGH_WORKER_TIMEOUT) restartHighSpeedWorker(index);
     }
-    const jobs = nextHighScanJobs();
+    let jobs;
+    try {
+      jobs = nextHighScanJobs();
+    } catch (_) {
+      return;
+    }
     let posted = 0;
     for (const job of jobs) {
       const slot = highWorkerBusy.findIndex((busy, index) => !busy && highWorkerReady[index]);
@@ -482,6 +487,8 @@
       highBitmapLock = true;
       try {
         await postHighSpeedRegion(slot, job.source, job.maxSymbols, job.retry, job.tile);
+      } catch (_) {
+        highWorkerBusy[slot] = false;
       } finally {
         highBitmapLock = false;
       }
@@ -538,7 +545,7 @@
     const slots = tiles && tiles.length === 4 ? tiles.slice() : [null, null, null, null];
     const known = [];
     for (let index = 0; index < 4; index += 1) if (slots[index]) known.push(index);
-    if (known.length === 0 || known.length === 4) return slots;
+    if (known.length < 2 || known.length === 4) return slots;
     if (known.length === 3) {
       const missing = [0, 1, 2, 3].find(index => !slots[index]);
       const c = [0, 1, 2, 3].map(index => slots[index] && tileCenter(slots[index]));
