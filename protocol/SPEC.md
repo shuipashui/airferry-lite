@@ -64,8 +64,8 @@ Frames from another session, malformed numeric fields, invalid group ranges and 
 ## Compatibility
 
 The outer magic remains `AFL1`. Receivers that only understand `H` and `D` should ignore unknown `P` frames and continue receiving repeated data frames. Senders keep the original `frames` collection (header plus data) and expose parity-aware `playbackFrames` separately.
-## AFL2 网页高速协议
+## AFL2 高速协议
 
-网页高速模式使用 Decimen Optical Transfer v0.3.0 的 MIT 二进制协议：每帧为 20 字节小端头部加 `blockLen` 字节 XOR 喷泉块。魔数为 `D1 0C`，字段依次为 sessionId、seq、k、blockLen、totalLen 和 payloadFNV。接收端可按任意顺序接收帧，LT 解码器在约 `1.15 × k` 个有效帧后恢复容器。
+当前发送端、网页接收端和 Android APK 都使用 Decimen Optical Transfer v0.3.0 的 MIT 二进制协议：每帧为 20 字节小端头部加 `blockLen` 字节 XOR 喷泉块。首字节为 `0xD1`；次字节区分布局和是否系统帧（`0x0C` 单码修复、`0x0D` 四码修复、`0x0E` 单码系统、`0x0F` 四码系统）。其后字段依次为 sessionId、seq、k、blockLen、totalLen 和 payloadFNV。接收端可按任意顺序收帧，LT 解码器在约 `1.15 × k` 个有效帧后恢复容器。
 
-发送端固定 QR ECC-L、掩码 4，V40-L 最大帧为 2953 字节，其中 2933 字节为喷泉块。网页接收端使用 3 个 ZXing WASM Worker；Worker 忙时直接丢弃摄像帧，不排队。`AFL2` 只给网页接收端使用，Android APK 继续使用本文前述的 `AFL1` 文本协议。
+发送端固定 QR ECC-L、掩码 4。单码最大帧 2953 字节（QR V40-L，其中 2933 字节为喷泉块）；四码每码上限 1003 字节（QR V22-L）。网页接收端使用 2 或 3 个 ZXing WASM Worker，忙时丢弃摄像帧、不排队。Android APK 用 zxing-cpp 读 CameraX Y 平面。网页和 APK 仍可接收上文 `AFL1` 文本流，但当前发送端不再发出 `AFL1`。

@@ -3,7 +3,7 @@
 AirFerry Lite 是一个无需服务器的离线光学文件传输项目：电脑浏览器将文件编码为连续二维码，手机网页或 Android 接收端通过摄像头恢复文件。
 
 - 发送端：单文件 HTML，可直接双击打开，无运行时 CDN 依赖，并展示手机接收端网址二维码
-- 网页接收端：GitHub Pages HTTPS 页面，支持 IndexedDB 断点恢复和 Android Chrome 等现代移动浏览器
+- 网页接收端：GitHub Pages HTTPS 页面，支持 Android Chrome 等现代移动浏览器；旧 AFL1 流可 IndexedDB 断点
 - Android 接收端：原生 APK（Android 10+，当前 0.8.2），CameraX 采集、zxing-cpp 原生解码、最新帧策略
 - 传输协议：`AFL1` 描述帧、数据帧、GF(256) 线性修复帧、择优 gzip、分片 CRC-32 和原文件 CRC-32
 - 高速协议：`AFL2` 二进制帧、LT 喷泉码、固定掩码 4，单码默认 30 FPS，四码默认 60 FPS
@@ -20,7 +20,7 @@ AirFerry Lite 是一个无需服务器的离线光学文件传输项目：电脑
 1. 在电脑打开单文件发送端，选择文件。
 2. 选择布局和帧率，点击“生成二维码流”。四码请再点“全屏”后开始播放。
 3. 手机打开网页接收端或安装 APK，允许摄像头权限并开始扫描。
-4. 保持手机稳定对准全屏二维码，接收完成后保存或下载文件。
+4. 保持手机稳定对准二维码（四码请让发送端全屏），接收完成后保存或下载文件。
 
 推荐参数：
 
@@ -28,32 +28,34 @@ AirFerry Lite 是一个无需服务器的离线光学文件传输项目：电脑
 - 四码推荐：全屏 + 60 FPS（每码上限 1003 B / QR V22；选更大的“每帧数据”不会增加四码载荷）
 - 单码高吞吐：2953 B / 30 FPS（QR V40，只适合单码、近距离、画面清晰）
 - 稳妥：1465 B / 24 或 30 FPS（距离较远、摩尔纹明显或对焦不稳时使用）
-- 不建议：45 FPS 在 60 Hz 屏幕上会对齐成更快的刷新节拍，V40 几乎扫不到；90/120 FPS 只在高刷屏上有意义
+- 不建议：60 Hz 屏幕上选 45 FPS 会按 30 FPS 播放；90/120 FPS 只在高刷屏上有意义
 
-发送端按显示器刷新对齐播放：60 Hz 上 30 FPS 每码显示 2 帧，60 FPS 每刷新一帧。四码在 30 FPS 容易重复扫到同一屏，实测吞吐接近 60 FPS 的三分之二。理论速度是 `每码字节 × 码数 × FPS`，喷泉码大约再加 15% 帧。
+发送端按显示器刷新对齐播放：60 Hz 上 30 FPS 每码显示 2 帧，60 FPS 每刷新一帧。四码若停在 30 FPS，相机会对同一屏扫两遍，吞吐上不去。理论速度是 `每码字节 × 码数 × FPS`，喷泉码大约再加 15% 帧。
 
-网页接收端在 Worker 中运行 Decimen v0.3 的 ZXing WASM：优先请求最高 120 FPS（不支持则 60 FPS），用 `requestVideoFrameCallback` 跟随真实取帧。单码把中心区域缩到最多 960 像素、`maxSymbols=1`；四码最多 1280 像素、`maxSymbols=4`。忙时丢弃过期帧。界面区分采集、分析和有效二维码 FPS，并提供可复制诊断。
+网页接收端在 Worker 中运行 Decimen v0.3 的 ZXing WASM（2 或 3 个 Worker）：优先请求最高 120 FPS（不支持则 60 FPS），用 `requestVideoFrameCallback` 跟随真实取帧。单码把中心区域缩到最多 960 像素、`maxSymbols=1`；四码最多 1280 像素、`maxSymbols=4`。忙时丢弃过期帧。界面区分采集、分析和有效二维码 FPS，并提供可复制诊断。若页面仍像旧版，强制刷新以更新 Service Worker。旧 `AFL1` 文本流会回退到 jsQR。
 
-Android APK 0.8.2 用 CameraX 分析流（目标 1920×1440）和 `zxing-cpp` 2.3.0 读 Y 平面，关闭旋转/反色/再缩放。单码一次最多 1 个符号；四码先扫四个重叠象限，不够 4 个再整图补扫。采集走最新帧，解码约数毫秒到十余毫秒时可跟上 60 FPS 分析。APK 只把明确的 `AFL1|` 交给旧接收器，其余二进制帧走 `AFL2`。发送端先发 K 个系统源块，再发 LT 修复帧。两端都提供可复制诊断（机型、相机能力、解码耗时、空结果、ROI、唯一/重复帧、解块进度），不含账号或上传路径。本地完成 LT 解码、gzip 解压和 SHA-256 校验。
+Android APK 0.8.2 用 CameraX 分析流（目标 1920×1440）和 `zxing-cpp` 2.3.0 读 Y 平面，关闭旋转/反色/再缩放。单码一次最多 1 个符号；四码先扫四个重叠象限，不够 4 个再整图补扫。采集走最新帧。APK 只把明确的 `AFL1|` 交给旧接收器，其余二进制帧走 `AFL2`。发送端先发 K 个系统源块，再发 LT 修复帧。完成后文件写到系统下载目录下的 `AirFerry Lite` 文件夹。两端都提供可复制诊断（机型、相机能力、解码耗时、空结果、ROI、唯一/重复帧、解块进度）。本地完成 LT 解码、gzip 解压和 SHA-256 校验。
 
-生成二维码流前，发送端会尝试浏览器原生 gzip。仅当文件不小于 1 KiB 且压缩后至少缩小约 5% 时才发送压缩载荷，否则保持原始数据。接收端同时校验传输载荷和解压后的原文件。
+当前发送端走 AFL2：文件至少 768 字节、MIME 不像已经压缩过、且 gzip 后再小 64 字节以上时才压缩，否则保持原始数据。接收端同时校验传输载荷和解压后的原文件。
 
-网页接收进度会按会话写入 IndexedDB。刷新或意外关闭后再次打开，可恢复最近一次未完成传输；完成下载或点击“清空进度”后删除对应断点。
+IndexedDB 断点只用于旧的 AFL1 文本流。当前 AFL2 传输保存在内存里，刷新网页或关掉 APK 后需要重新扫描。
 
-## 抗丢帧
+## 丢帧与修复
 
-发送端每组数据后插入一个 GF(256) 线性修复帧。每轮循环都会为同一分组生成新的种子和系数，接收端可累计多个独立修复方程。旧版接收端会忽略未知字段，仍可依靠循环数据帧完成接收。协议细节见 [protocol/SPEC.md](protocol/SPEC.md)。
+当前发送端使用 LT 喷泉码：接收端按任意顺序收帧，大约 `1.15 × k` 个有效块即可恢复。旧 AFL1 发送端仍会在每组数据后插入 GF(256) 线性修复帧，网页和 APK 都还能收。协议细节见 [protocol/SPEC.md](protocol/SPEC.md)。
 
 ## 目录
 
 ```text
-app.js                                      # GitHub Pages 网页接收端
+index.html                                  # GitHub Pages 网页接收端入口
+app.js / protocol.js / highspeed-protocol.js
 sw.js                                       # 网页接收端缓存
 android-receiver/                           # Android APK 源码
 sender/dist/airferry-lite-sender.html       # 可直接使用的单文件发送端
 sender/                                     # 发送端源码和构建脚本
 shared/                                     # AFL1 / AFL2 共享协议
 web-receiver/                               # 网页接收端镜像
+third_party/decimen-v0.3/                   # AFL2 所参考的 MIT 源码
 tests/                                      # 协议、密度、恢复和接收端安全测试
 protocol/SPEC.md                            # 线协议说明
 ```
@@ -81,20 +83,20 @@ cd android-receiver
 .\build-local.ps1 assembleDebug
 ```
 
-APK 输出为 `android-receiver/app/build/outputs/apk/debug/app-debug.apk`。如果迁移项目目录，需要重新生成 `android-receiver/local.properties`，或把脚本中的 SDK 路径改为当前仓库下的 `.tools/android-sdk`。
+APK 输出为 `android-receiver/app/build/outputs/apk/debug/app-debug.apk`。没有本地 SDK 时，可从 GitHub Actions 工作流 `Build Android receiver` 下载 `airferry-lite-android-debug` 产物。如果迁移项目目录，需要重新生成 `android-receiver/local.properties`，或把脚本中的 SDK 路径改为当前仓库下的 `.tools/android-sdk`。
 
 ## 网页接收限制
 
 - 必须通过 HTTPS 或 localhost 才能访问摄像头。
 - 单次原文件和传输载荷上限目前均为 64 MiB。
-- 刷新页面会恢复最近一次未完成进度；主动清空进度后需重新扫描。
+- 刷新页面不会保留当前 AFL2 进度；旧 AFL1 会话仍可从 IndexedDB 恢复，主动清空进度后需重新扫描。
 - gzip 传输要求接收浏览器支持 `DecompressionStream`；当前 Android Chrome 和原生 Android 接收端均支持该路径。
 - 光学速度受屏幕亮度、摩尔纹、摄像头对焦、手机性能和环境反光影响。
 - 四码请让发送端全屏；大文件或低性能设备可改单码 30 FPS。Android 原生接收端更适合后续扩展大文件落盘。
 
 ## 和 AirFerry / Decimen 的关系
 
-本项目保留 AirFerry 的 `AFL1` 接收代码用于读取旧发送端，但当前发送端不再暴露兼容模式，网页和 APK 统一使用 `AFL2`。`AFL2` 参考 `bashalarmistalt/decimen-optical-transfer` v0.3.0 的 MIT 实现，引入二进制 LT 喷泉码、固定掩码、发送端 lookahead 和并行解码。Decimen 当前 AGPL 版本的四二维码/RaptorQ 实现没有复制进 MIT 项目；后续若引入必须单独处理许可证、二进制协议和 Android 解码实现。
+本项目保留 AirFerry 的 `AFL1` 接收代码用于读取旧发送端，但当前发送端不再暴露兼容模式，网页和 APK 统一发送/接收 `AFL2`。`AFL2` 参考 `bashalarmistalt/decimen-optical-transfer` v0.3.0 的 MIT 实现，引入二进制 LT 喷泉码、固定掩码和发送端 lookahead。网页用多个 ZXing WASM Worker 解码，Android 用 zxing-cpp。Decimen 当前 AGPL 版本的四二维码/RaptorQ 实现没有复制进 MIT 项目；后续若引入必须单独处理许可证、二进制协议和 Android 解码实现。
 
 ## 许可证
 
