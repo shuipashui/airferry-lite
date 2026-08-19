@@ -24,7 +24,7 @@
   const HEADER_LEN = 20;
   const RECEIVER_URL = "https://shuipashui.github.io/airferry-lite/";
   const QR_CACHE_LIMIT = 64;
-  const QUAD_MAX_FRAME_BYTES = 1003;
+  const QUAD_MAX_FRAME_BYTES = 1273;
   const HIGH_QUEUE_LIMIT = 8;
   const QUIET_MODULES = 4;
   const COMMON_HZ = [60, 75, 90, 120, 144, 165, 240];
@@ -406,9 +406,16 @@
   }
 
   function qrModules(bytes) {
-    if (bytes <= QUAD_MAX_FRAME_BYTES) return 105;
-    if (bytes <= 1955) return 145;
-    if (bytes <= 2306) return 157;
+    if (bytes <= 1003) return 105;
+    if (bytes <= 1091) return 109;
+    if (bytes <= 1171) return 113;
+    if (bytes <= 1273) return 117;
+    if (bytes <= 1367) return 121;
+    if (bytes <= 1465) return 125;
+    if (bytes <= 1952) return 145;
+    if (bytes <= 2188) return 153;
+    if (bytes <= 2303) return 157;
+    if (bytes <= 2431) return 161;
     return 177;
   }
 

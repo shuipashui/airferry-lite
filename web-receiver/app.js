@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v37";
+  const RECEIVER_BUILD = "v38";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -152,6 +152,10 @@
   let highTileProven = [false, false, false, false];
   let highQuadCursor = 0;
   let clusterHuntFlip = 0;
+  let startInFlight = false;
+  let hideStopTimer = 0;
+  let cameraRetryCount = 0;
+  let cameraStartedAt = 0;
   let highScanRoi = null;
   let highTrackedTiles = null;
   let lastHitBox = 0;
@@ -168,7 +172,18 @@
   copyDiagnostics?.addEventListener("click", copyDiagnosticsText);
   copyDiagnosticsCard?.addEventListener("click", copyDiagnosticsText);
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden && stream) stop("页面已切到后台");
+    if (!document.hidden) {
+      if (hideStopTimer) {
+        clearTimeout(hideStopTimer);
+        hideStopTimer = 0;
+      }
+      return;
+    }
+    if (!stream) return;
+    hideStopTimer = setTimeout(() => {
+      hideStopTimer = 0;
+      if (document.hidden && stream) stop("页面已切到后台");
+    }, 1200);
   });
   restoreSavedSession();
 
@@ -211,20 +226,43 @@
     }
   }
 
+  function waitForCameraVideo() {
+    if (video.readyState >= 1 && video.videoWidth) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        video.removeEventListener("loadedmetadata", onReady);
+        reject(new Error("CameraTimeout"));
+      }, 4000);
+      function onReady() {
+        clearTimeout(timer);
+        video.removeEventListener("loadedmetadata", onReady);
+        resolve();
+      }
+      video.addEventListener("loadedmetadata", onReady);
+    });
+  }
+
   async function start() {
-    if (stream) return;
+    if (stream || startInFlight) return;
     if (restoring) {
       status.textContent = "正在恢复断点，请稍候";
       return;
     }
+    startInFlight = true;
+    startBtn.disabled = true;
     try {
       await setupDetector();
       const camera = { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1440 } };
+      const relaxed = cameraRetryCount > 0;
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { ...camera, frameRate: { ideal: 120, max: 120 } }, audio: false });
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: relaxed ? camera : { ...camera, frameRate: { ideal: 120 } },
+          audio: false
+        });
+        cameraRequestedFps = relaxed ? 60 : 120;
       } catch (_) {
         cameraRequestedFps = 60;
-        stream = await navigator.mediaDevices.getUserMedia({ video: { ...camera, frameRate: { ideal: 60, max: 60 } }, audio: false });
+        stream = await navigator.mediaDevices.getUserMedia({ video: camera, audio: false });
       }
       lastUsedLuma = false;
       lumaUnavailable = false;
@@ -238,11 +276,17 @@
       }
       if (!highWorkers.length && !barcodeDetector && typeof window.jsQR !== "function") throw new Error("DecoderUnavailable");
       resetScanStats();
+      cameraStartedAt = performance.now();
       configureCameraTrack(stream);
       video.srcObject = stream;
-      await video.play();
+      await waitForCameraVideo();
+      try {
+        await video.play();
+      } catch (playErr) {
+        if (playErr && playErr.name === "AbortError") await video.play();
+        else throw playErr;
+      }
       hint.classList.add("hidden");
-      startBtn.disabled = true;
       stopBtn.disabled = false;
       status.textContent = highWorkers.length ? "正在高速扫描" : barcodeDetector ? "正在快速扫描" : "正在扫描";
       scheduleScan();
@@ -250,6 +294,8 @@
       closeCamera();
       status.textContent = err.message === "DecoderUnavailable" ? "二维码解码器加载失败" : err.name === "NotAllowedError" ? "摄像头权限被拒绝" : "摄像头不可用";
       hint.textContent = err.message === "DecoderUnavailable" ? "请检查网络后刷新页面" : "请在 HTTPS 页面中允许摄像头权限";
+    } finally {
+      startInFlight = false;
     }
   }
 
@@ -258,7 +304,16 @@
     if (!track) return;
     track.addEventListener("ended", () => {
       if (stream !== activeStream) return;
+      const early = cameraStartedAt && performance.now() - cameraStartedAt < 1600;
       closeCamera();
+      if (early && cameraRetryCount < 2) {
+        cameraRetryCount += 1;
+        status.textContent = "摄像头重试中";
+        setTimeout(() => {
+          if (!stream && !startInFlight) void start();
+        }, 80);
+        return;
+      }
       status.textContent = "摄像头连接已中断，请重新开始";
     }, { once: true });
     try {
@@ -274,6 +329,10 @@
   }
 
   function closeCamera() {
+    if (hideStopTimer) {
+      clearTimeout(hideStopTimer);
+      hideStopTimer = 0;
+    }
     clearTimeout(scanTimer);
     scanTimer = 0;
     if (scanFrameCallback && typeof video.cancelVideoFrameCallback === "function") {
@@ -309,6 +368,7 @@
   }
 
   function stop(message) {
+    cameraRetryCount = 0;
     if (!stream) return;
     closeCamera();
     status.textContent = message || (meta ? "已暂停" : "等待开始");
@@ -494,7 +554,7 @@
       if (highWorkerBusy[index] && now - highWorkerStartedAt[index] > HIGH_WORKER_TIMEOUT) restartHighSpeedWorker(index);
     }
     const locked = highTrackedTiles ? highTrackedTiles.filter(Boolean).length : 0;
-    if (barcodeDetector && !highLocateLock && highMultiLayout && locked < 4 && !highGrabInFlight && now - lastNativeLocate > (locked === 0 ? HIGH_QUAD_ACQUIRE_MS : HIGH_QUAD_DEGRADED_MS)) {
+    if (barcodeDetector && !highLocateLock && highMultiLayout && locked < 4 && now - lastNativeLocate > (locked === 0 ? HIGH_QUAD_ACQUIRE_MS : HIGH_QUAD_DEGRADED_MS)) {
       lastNativeLocate = now;
       void locateQuadWithNative();
     }
@@ -970,7 +1030,7 @@
     const cw = Math.max(1, maxX - minX);
     const ch = Math.max(1, maxY - minY);
     const pad = size * 0.08;
-    if (filled.length >= 3 || Math.min(cw, ch) > size * 0.75) {
+    if (filled.length >= 3 || (cw > size * 1.35 && ch > size * 1.35)) {
       const side = Math.max(cw, ch) + pad * 2;
       const src = clampScanRegion({
         x: minX + cw / 2 - side / 2,
@@ -1041,7 +1101,9 @@
     const retry = highScanMisses >= 2;
     const planned = nextQuadCrops(freeSlots.length);
     const crops = planned.crops;
-    const packedSrc = planned.provenCount >= 4 ? unionScanCrops(crops) : planned.src;
+    const packedSrc = planned.locked >= 2 || planned.provenCount >= 4
+      ? unionScanCrops(crops)
+      : (planned.src || fullFrameSource());
     highGrabInFlight = true;
     void grabPackedRegion(packedSrc).then((packed) => {
       try {

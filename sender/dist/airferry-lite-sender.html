@@ -19,7 +19,7 @@
       </label>
       <div class="grid">
         <label>每帧数据
-          <select id="chunkSize"><option value="1465">1465 B（低密度）</option><option value="2331" selected>2331 B（单码推荐）</option><option value="2953">2953 B（单码高吞吐）</option></select>
+          <select id="chunkSize"><option value="1003">1003 B（四码稳妥）</option><option value="1273">1273 B（四码）</option><option value="1465">1465 B（低密度）</option><option value="2331" selected>2331 B（单码推荐）</option><option value="2953">2953 B（单码高吞吐）</option></select>
         </label>
         <label>播放帧率
           <select id="fps"><option value="20">20 FPS</option><option value="24">24 FPS</option><option value="30" selected>30 FPS（60 Hz 推荐）</option><option value="45">45 FPS（60 Hz 会落到 30）</option><option value="60">60 FPS（高刷四码）</option><option value="90">90 FPS（高刷屏）</option><option value="120">120 FPS（高刷屏）</option></select>
@@ -32,7 +32,7 @@
       <div class="actions"><button id="prepareBtn" class="primary" disabled>生成二维码流</button><button id="playBtn" disabled>开始播放</button><button id="fullscreenBtn" disabled>全屏</button><button id="resetBtn" disabled>重置</button><a id="openReceiver" class="jump" target="_blank" rel="noopener">打开接收端</a></div>
       <div class="status"><div><span>状态</span><strong id="statusText">等待文件</strong></div><div><span>会话</span><strong id="sessionText">—</strong></div><div><span>片段</span><strong id="frameText">—</strong></div></div>
       <div class="progress"><i id="progressBar"></i></div>
-      <p class="tip">四码请全屏。60 Hz 电脑用 30 FPS（每码显示两帧，比 60 FPS 更稳）；120 Hz 再用 60 FPS。四个码都要进手机画面。单码用 2331 B / 30 FPS；2953 B 只适合单码。四码每码固定上限 1003 B，选更大的每帧数据不会变快。理论速度是屏幕吞吐上限，喷泉码大约再加 15% 帧。</p>
+      <p class="tip">四码请全屏。60 Hz 电脑用 30 FPS（每码显示两帧，比 60 FPS 更稳）；120 Hz 再用 60 FPS。四个码都要进手机画面。单码用 2331 B / 30 FPS；2953 B 只适合单码。四码每码上限 1273 B（QR V25），选更大的每帧数据不会再增加；更远或不稳可改 1003 B。理论速度是屏幕吞吐上限，喷泉码大约再加 15% 帧。</p>
     </section>
     <section class="panel viewer">
       <canvas id="qrCanvas" width="1080" height="1080"></canvas>
@@ -2402,7 +2402,7 @@ var qrcode = function() {
   const HEADER_LEN = 20;
   const RECEIVER_URL = "https://shuipashui.github.io/airferry-lite/";
   const QR_CACHE_LIMIT = 64;
-  const QUAD_MAX_FRAME_BYTES = 1003;
+  const QUAD_MAX_FRAME_BYTES = 1273;
   const HIGH_QUEUE_LIMIT = 8;
   const QUIET_MODULES = 4;
   const COMMON_HZ = [60, 75, 90, 120, 144, 165, 240];
@@ -2784,9 +2784,16 @@ var qrcode = function() {
   }
 
   function qrModules(bytes) {
-    if (bytes <= QUAD_MAX_FRAME_BYTES) return 105;
-    if (bytes <= 1955) return 145;
-    if (bytes <= 2306) return 157;
+    if (bytes <= 1003) return 105;
+    if (bytes <= 1091) return 109;
+    if (bytes <= 1171) return 113;
+    if (bytes <= 1273) return 117;
+    if (bytes <= 1367) return 121;
+    if (bytes <= 1465) return 125;
+    if (bytes <= 1952) return 145;
+    if (bytes <= 2188) return 153;
+    if (bytes <= 2303) return 157;
+    if (bytes <= 2431) return 161;
     return 177;
   }
 

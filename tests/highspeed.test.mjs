@@ -62,6 +62,12 @@ qr.addBytes(first);
 qr.make(4);
 assert.equal(qr.getModuleCount(), 177, "2953-byte frame must fit QR V40-L");
 
+const quadFrame = new Uint8Array(1273);
+const quadQr = context.qrcode(0, "L");
+quadQr.addBytes(quadFrame);
+quadQr.make(4);
+assert.equal(quadQr.getModuleCount(), 117, "1273-byte quad frame must fit QR V25-L");
+
   const worker = fs.readFileSync(new URL("../vendor/decimen/decoder-worker.js", import.meta.url), "utf8");
   const workerBridge = fs.readFileSync(new URL("../vendor/decimen/highspeed-decoder-worker.js", import.meta.url), "utf8");
   assert.ok(worker.includes("zxing_reader-EOacYbLr.wasm"));
@@ -94,6 +100,8 @@ const template = fs.readFileSync(new URL("../sender/template.html", import.meta.
 const sender = fs.readFileSync(new URL("../sender/app.js", import.meta.url), "utf8");
 assert.ok(!template.includes('id="mode"'), "legacy compatibility modes must not be exposed by the sender");
 assert.ok(!template.includes("兼容稳定") && !template.includes("兼容均衡") && !template.includes("兼容快速"));
+assert.ok(template.includes('<option value="1003">1003 B（四码稳妥）'));
+assert.ok(template.includes('<option value="1273">1273 B（四码）'));
 assert.ok(template.includes('<option value="2331" selected>'));
 assert.ok(template.includes('<option value="30" selected>'));
 assert.ok(template.includes("30 FPS（60 Hz 推荐）"));
@@ -108,7 +116,7 @@ assert.ok(sender.includes('qrcode(frameBytes === 2953 ? 40 : 0, "L")'));
   assert.ok(sender.includes("qr.make(4)"));
   assert.ok(sender.includes("requestAnimationFrame(playLoop)"));
   assert.ok(sender.includes("codesPerScreen = qrMode.value === \"quad\" ? 4 : 1"));
-  assert.ok(sender.includes("QUAD_MAX_FRAME_BYTES = 1003"));
+  assert.ok(sender.includes("QUAD_MAX_FRAME_BYTES = 1273"));
   assert.ok(sender.includes("Math.min(frameBytes, QUAD_MAX_FRAME_BYTES)"));
   assert.ok(sender.includes("function vsyncsForFps"));
   assert.ok(sender.includes("hz / rounded > fps * 1.12"));
