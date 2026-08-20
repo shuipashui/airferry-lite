@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v80";
+  const RECEIVER_BUILD = "v81";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -165,7 +165,6 @@
   let lastCameraLiveAt = 0;
   const cameraEndedBound = new WeakSet();
   let hideStopTimer = 0;
-  let androidFocusTimer = 0;
   let highScanRoi = null;
   let highTrackedTiles = null;
   let lastHitBox = 0;
@@ -268,7 +267,7 @@
       await setupDetector();
       const androidCam = /Android/i.test(navigator.userAgent || "");
       const camera = androidCam
-        ? { facingMode: { ideal: "environment" }, width: { ideal: 1440 }, height: { ideal: 1920 }, frameRate: { ideal: 30, max: 30 } }
+        ? { facingMode: { ideal: "environment" }, width: { ideal: 1440 }, height: { ideal: 1920 }, frameRate: { ideal: 60, max: 60 } }
         : { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1440 } };
       if (!androidCam) {
         try {
@@ -282,7 +281,7 @@
         }
       }
       if (!stream) {
-        cameraRequestedFps = androidCam ? 30 : 60;
+        cameraRequestedFps = 60;
         stream = await navigator.mediaDevices.getUserMedia({ video: camera, audio: false });
       }
       lastUsedLuma = false;
@@ -362,29 +361,10 @@
       cameraFrameRate = Number(settings?.frameRate) || 0;
       const capabilities = track.getCapabilities?.();
       cameraCapabilities = capabilities || null;
-      const androidCam = /Android/i.test(navigator.userAgent || "");
-      if (capabilities?.focusMode?.includes("continuous") && !androidCam) {
+      if (capabilities?.focusMode?.includes("continuous") && !/Android/i.test(navigator.userAgent || "")) {
         track.applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(() => {});
       }
-      if (androidCam) lockAndroidPreview(track, capabilities);
     } catch (_) {}
-  }
-
-  function lockAndroidPreview(track, capabilities) {
-    if (androidFocusTimer) clearTimeout(androidFocusTimer);
-    const modes = capabilities || {};
-    const pick = (list, names) => names.find(name => list?.includes(name));
-    androidFocusTimer = setTimeout(() => {
-      androidFocusTimer = 0;
-      if (!stream || stream.getVideoTracks?.()[0] !== track) return;
-      const advanced = {};
-      const focus = pick(modes.focusMode, ["manual", "none", "single-shot"]);
-      const exposure = pick(modes.exposureMode, ["manual", "none", "once"]);
-      if (focus) advanced.focusMode = focus;
-      if (exposure) advanced.exposureMode = exposure;
-      if (!Object.keys(advanced).length) return;
-      track.applyConstraints({ advanced: [advanced] }).catch(() => {});
-    }, 600);
   }
 
   function freezeCameraPreview() {
@@ -402,10 +382,6 @@
     if (hideStopTimer) {
       clearTimeout(hideStopTimer);
       hideStopTimer = 0;
-    }
-    if (androidFocusTimer) {
-      clearTimeout(androidFocusTimer);
-      androidFocusTimer = 0;
     }
     lastCameraLiveAt = 0;
     clearTimeout(scanTimer);
