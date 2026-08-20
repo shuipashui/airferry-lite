@@ -1,15 +1,9 @@
 (() => {
-  const RECEIVER_BUILD = "v73";
+  const RECEIVER_BUILD = "v74";
   if ("serviceWorker" in navigator) {
-    let swRefreshing = false;
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
     }).catch(() => {});
-    navigator.serviceWorker.addEventListener?.("controllerchange", () => {
-      if (swRefreshing) return;
-      swRefreshing = true;
-      location.reload();
-    });
   }
 
   const P = window.AirFerryLiteProtocol;
@@ -311,6 +305,11 @@
       bindCameraEnded(stream);
       lastCameraLiveAt = performance.now();
       if (cameraFreeze) cameraFreeze.hidden = true;
+      hint.classList.add("hidden");
+      startBtn.disabled = false;
+      stopBtn.disabled = false;
+      status.textContent = "正在打开摄像头";
+      scheduleScan();
       startHighSpeedWorkers();
       if (highWorkers.length) {
         lastDecodeBackend = "AFL2 WASM Worker";
@@ -320,11 +319,7 @@
         lastWorkerCount = 0;
       }
       if (!highWorkers.length && !barcodeDetector && typeof window.jsQR !== "function") throw new Error("DecoderUnavailable");
-      hint.classList.add("hidden");
-      startBtn.disabled = false;
-      stopBtn.disabled = false;
       status.textContent = highWorkers.length ? "正在高速扫描" : barcodeDetector ? "正在快速扫描" : "正在扫描";
-      scheduleScan();
     } catch (err) {
       closeCamera();
       status.textContent = err.message === "DecoderUnavailable" ? "二维码解码器加载失败" : err.message === "CameraEnded" ? "摄像头连接已中断，请重新开始" : err.name === "NotAllowedError" ? "摄像头权限被拒绝" : "摄像头不可用";

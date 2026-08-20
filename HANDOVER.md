@@ -4,7 +4,7 @@
 
 对外说明只写 [README.md](README.md)。不要在 README 里放版本号、实测 KB/s、Worker / VideoFrame 细节或本文链接。
 
-**交接时点：** 2026-08-20。网页接收端 **v73**。Android APK 冻结 **0.8.12**。发送端是根目录 `sender/` 打出的单文件 HTML，无独立版本号，以 Pages 上的 `sender/dist/airferry-lite-sender.html` 为准。
+**交接时点：** 2026-08-20。网页接收端 **v74**。Android APK 冻结 **0.8.12**。发送端是根目录 `sender/` 打出的单文件 HTML，无独立版本号，以 Pages 上的 `sender/dist/airferry-lite-sender.html` 为准。
 
 ## 1. 项目一句话
 
@@ -29,11 +29,11 @@
 
 | 部件 | 版本 | 对照 |
 |---|---|---|
-| 网页接收端 | **v73** | 单码路径同 v66/v68。四码：一张 720 bitmap 交给 1 个 Worker（maxSymbols 4），主线程不再 getImageData。Android 预览 30 FPS、Worker 2 |
+| 网页接收端 | **v74** | 四码取帧同 v73（不卡）。首次安装 SW 不再 navigate/reload 黑屏。Android 预览 30 FPS、Worker 2 |
 | Android APK | **0.8.12**（versionCode 27） | 未经明确要求不要改。历史峰值 **0.8.8：60 Hz 四码约 193 KB/s** |
 | 发送端 | AFL2 单文件 HTML | 默认 2331 B · 30 FPS · 单码；四码每码上限 **1273 B** |
 
-诊断第一行必须是 `网页：v73`（改版后变成 `网页：vN`）。
+诊断第一行必须是 `网页：v74`（改版后变成 `网页：vN`）。
 
 ## 4. 实测对照（回归用这些，不要用更旧的数）
 
@@ -76,7 +76,15 @@ v71 Pages：1440 atlas 再切四格，主线程更卡；1.5 s 无帧会 `closeCa
 
 v72 Pages：720 packed 后在**页面线程** `getImageData` + 转 luma，流水线按相机 60 FPS 跑，主线程仍然卡；锁格阶段还对 `video` 跑 `BarcodeDetector`。不要再走。
 
-v73：四码主路径是 **一张 720 ImageBitmap 直接交给 1 个 Worker**（`maxSymbols: 4`），像素提取在 Worker 里做。同时只允许 1 帧在飞，取帧间隔 ≥ 33 ms。Android 预览请求 **30 FPS**，只开 **2 个 Worker**。四码布局确定后不要再 `BarcodeDetector.detect(video)`。单码取帧不要动。诊断第一行 `网页：v73`。
+v73 Pages 实测（2331 B · 30 FPS · 四码，相机 1920×1440 **30 FPS**）：
+
+- 采集 **30.0** · 分析 14.5 · 有效 **24.2 FPS**
+- 解码 **43.5 ms** · 取帧 bitmap · 扫描 720 · **格 4** · **每帧 1.42**
+- 忙时丢弃 **256** · 实时 **30.2** · 平均 26.8 · 会话 **26.6 KB/s**
+- **页面不卡了。** 每帧 1.42 比 v70 的 0.57 好，但 `HIGH_QUAD_INFLIGHT = 1` 让第二个 Worker 闲着，分析只有 14.5。
+- 刚进新版本页面会黑几秒、相机打不开：新 SW `install` 下 WASM 后 `activate` 里 `client.navigate`，再叠加 `controllerchange` reload，把刚申请的相机掐掉。
+
+v74：取帧不变。新 SW 只 `claim`，**不要** `navigate` / `controllerchange` reload（每次升版本都会把刚打开的相机掐掉）。install 先缓存页面资源，WASM 等 Worker 要用再下。预览起来后再起 Worker。诊断第一行 `网页：v74`。
 
 ### 怎么读诊断
 
@@ -120,7 +128,7 @@ v73：四码主路径是 **一张 720 ImageBitmap 直接交给 1 个 Worker**（
 
 根目录 `index.html` + `app.js` + `sw.js` 即 GitHub Pages。`web-receiver/` 是 byte-identical 镜像（换行除外），改完必跑 `node sync-receiver.mjs`。
 
-高速路径：`requestVideoFrameCallback` → `scanWithHighSpeedWorkers`。Worker 忙则丢最新帧，不排队。先 `play()` 再启动 4 个 WASM Worker，避免和相机抢内存。
+高速路径：`requestVideoFrameCallback` → `scanWithHighSpeedWorkers`。Worker 忙则丢最新帧，不排队。先 `play()` 和 `scheduleScan()` 让预览出来，再起 WASM Worker。Android 2 个，桌面最多 4 个。
 
 ### 单码（不要改这条取帧）
 
@@ -147,6 +155,8 @@ v73：四码主路径是 **一张 720 ImageBitmap 直接交给 1 个 Worker**（
 - 不要在 `ended` 上自动重试 getUserMedia。
 - 停止：`freezeCameraPreview()` 把最后一帧画到 `#cameraFreeze`，再 `srcObject = null`，避免闪黑。
 - `finishing` 时 `closeCamera` 不要清布局字段，否则完成后诊断会变成「单码 · 全图」。
+- 首次安装或替换 Service Worker：`claim` 即可。**不要** `client.navigate`，**不要** `controllerchange` 时 `location.reload()`（每次升版本都会黑屏并把 getUserMedia 掐掉）。HTML 已是 `fetch(no-store)`，进新版页面就是新 JS。若标签页还停在更旧的缓存，手动刷新或清站点数据。
+- install 不要 `cache.addAll` 整个 WASM；Worker 第一次用再缓存。
 
 ## 7. Android APK 实现（0.8.12，冻结）
 
@@ -239,22 +249,23 @@ tests/                          npm test：协议 / 安全 / 运行时针
 
 - 不要 Android 连续对焦 / 120 FPS 请求 / 横屏 1920×1440 相机约束。
 - 不要运行中假 `ended` 立刻 `closeCamera()`（会黑屏）。
+- 不要在 SW `activate` 里 `client.navigate`，不要 `controllerchange` 时 `location.reload()`。
 - 不要 60 Hz 屏上 120 FPS 发送。
 - 不要 commit `.env`、密钥、`.tools/`。不要改 git config，不要 `--force` 推 `main`。`protocol.js` 若只有 CRLF 脏改，不要提交。
 
 ## 10. 怎么改网页、怎么上线
 
 1. 改根目录 `app.js` / `index.html` / `sw.js`（发送端则改 `sender/` 再 `node sender/build.mjs`）。
-2. 接收端：升 `RECEIVER_BUILD`、标题、`CACHE_NAME`、**`index.html` 里 `app.js?v=`**、`tests/receiver-safety.test.mjs` 里的版本针。不要再用 `sessionStorage === RECEIVER_BUILD` 跳过刷新。
+2. 接收端：升 `RECEIVER_BUILD`、标题、`CACHE_NAME`、**`index.html` 里 `app.js?v=`**、`tests/receiver-safety.test.mjs` 里的版本针。不要 `controllerchange` / `navigate` 强制刷新。
 3. `node sync-receiver.mjs`（或 `npm run build:receiver`）。
 4. `npm test`。
 5. commit 后 `git push origin HEAD`。GitHub 不通时对当前 `main` 做 tree 补丁，不要假设本地 `origin/main` 等于 GitHub。
 6. `gh api repos/shuipashui/airferry-lite/pages/builds` 等到 `built`。
-7. 拉 `https://shuipashui.github.io/airferry-lite/app.js?v=N` 确认 `RECEIVER_BUILD`。Chrome 若一直停在旧版，是旧 Service Worker；新 SW 激活时会强制打开页面。仍不对就清掉该站数据。
+7. 拉 `https://shuipashui.github.io/airferry-lite/app.js?v=N` 确认 `RECEIVER_BUILD`。新 SW 不会再强制刷新。若标签页还显示旧版，手动刷新一次或清掉该站数据。
 
 ## 11. 已知缺口
 
-1. **网页四码** 对照仍是 v64 会话 **45.7 KB/s**。v69–v72 的每格 720 / atlas / 主线程 getImageData 更卡或闪退，不要再走。v73 把像素搬进 Worker。不要搬 APK 的 ≥3 命中重排。单码取帧不要顺手改。
+1. **网页四码** 对照仍是 v64 会话 **45.7 KB/s**。v73 不卡，但会话 **26.6 KB/s**（30 FPS 预览 + 1 帧在飞 + 解码 43 ms）。不要退回主线程 getImageData。若要提速，先试 `HIGH_QUAD_INFLIGHT = 2`，不要再加每格 video 读回。不要搬 APK 的 ≥3 命中重排。单码取帧不要顺手改。
 2. AFL2 进度只在内存，刷新即丢。IndexedDB 只服务 AFL1。
 3. 文件上限 64 MiB。
 4. 本地 `origin/main` 和 GitHub `main` 的 SHA 偶尔对不齐（API 推送），以 GitHub API 的 ref 为准。
@@ -265,4 +276,4 @@ MIT。第三方见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。只使用 
 
 ---
 
-当前网页 **v73**，APK **0.8.12**。网页单码实时 **65 KB/s**（路径未改，但 Android 预览改 30 FPS 后要重新测）。四码对照仍是 v64 会话 **45.7 KB/s**。以 Pages 诊断第一行 `网页：v73` 为准。
+当前网页 **v74**，APK **0.8.12**。四码 v73 不卡，会话 **26.6 KB/s**。以 Pages 诊断第一行 `网页：v74` 为准。

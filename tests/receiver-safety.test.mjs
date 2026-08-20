@@ -55,7 +55,7 @@ for (const needle of [
   ,"const HIGH_QUAD_PACKED_SIZE = 720;"
   ,">= 4 ? 4 : 2"
   ,"!/Android/i.test(navigator.userAgent || \"\")"
-  ,"const RECEIVER_BUILD = \"v73\";"
+  ,"const RECEIVER_BUILD = \"v74\";"
   ,"function grabLumaRegion"
   ,"function cropLuma"
   ,"function downscaleLuma"
@@ -148,7 +148,7 @@ for (const needle of [
   ,"elapsed < 1000"
   ," · 每帧 "
 ]) assert.ok(source.includes(needle), "missing receiver guard: " + needle);
-assert.ok(indexHtml.includes("app.js?v=73"), "index.html must cache-bust app.js with the current receiver build");
+assert.ok(indexHtml.includes("app.js?v=74"), "index.html must cache-bust app.js with the current receiver build");
 assert.ok(indexHtml.includes('id="cameraFreeze"'), "stop must freeze the last preview frame instead of flashing black");
 assert.ok(!source.includes("highMultiLayout || !highSingleConfirmed"), "single-code acquire must not be replaced by quadrant crops");
 assert.ok(!source.includes("dueRelock"), "quad must not fall back to overlapping quadrants after empty misses");
@@ -203,9 +203,13 @@ assert.ok(source.includes("retryBinarizer, crop }"), "ImageBitmap posts must inc
 assert.ok(!source.includes("if (highScanMisses >= 12) captureViaCanvas"), "decode misses must not stick the session on the canvas path");
 assert.ok(!source.includes("createImageBitmap(video, {"), "ImageBitmap grabs must pass a source rectangle so Chrome can GPU-scale");
 assert.ok(!source.includes("if (!highMultiLayout && !highScanRoi) return;"), "single-code speed must not wait for an ROI crop before counting bytes");
-assert.ok(source.includes("let swRefreshing = false;"), "service worker updates must reload even when the previous build already recorded a refresh");
-assert.ok(serviceWorker.includes("client.navigate(client.url)"), "new service worker must navigate open pages off a stuck old build");
-assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v73";'), "service worker cache version was not bumped");
+assert.ok(source.includes("navigator.serviceWorker.register(\"sw.js?v=\" + RECEIVER_BUILD)"), "the page must still register the versioned service worker");
+assert.ok(!source.includes("controllerchange"), "a new service worker must not reload the page and kill getUserMedia");
+assert.ok(!source.includes("location.reload()"), "the receiver must not reload itself when the worker activates");
+assert.ok(serviceWorker.includes("self.clients.claim()"), "the new service worker must still take over open pages");
+assert.ok(!serviceWorker.includes("client.navigate(client.url)"), "activating the worker must not navigate the page and kill getUserMedia");
+assert.ok(serviceWorker.includes("ASSETS.filter((path) => !path.endsWith(\".wasm\"))") || serviceWorker.includes("ASSETS.filter(path => !path.endsWith(\".wasm\"))"), "install must not wait to download WASM before the page can open the camera");
+assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v74";'), "service worker cache version was not bumped");
 assert.ok(serviceWorker.includes('path.endsWith(".wasm")'), "service worker must cache WASM/worker files instead of no-store");
 assert.ok(serviceWorker.includes('"./highspeed-protocol.js"') && serviceWorker.includes('"./vendor/decimen/highspeed-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/multi-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/zxing_reader-EOacYbLr.wasm"'), "high-speed receiver assets are not cached");
 assert.equal(mirrorSource, source, "web-receiver app.js drifted from the published root receiver");
