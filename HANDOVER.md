@@ -2,7 +2,7 @@
 
 本文给后续接手的人：当前能跑什么、什么不能动、哪些路已经烧死、网页怎么发到 GitHub Pages。对外说明只写 [README.md](README.md)：不要在 README 里放版本号、实测 KB/s、Worker / VideoFrame 实现细节或本文链接。
 
-**交接时点：** 2026-08-20。网页接收端 **v66**。v65 Pages：单码掉到 `取帧 canvas`，采集 8.8、解码 109 ms、实时 10 KB/s；克隆相机轨导致预览闪退又自己回来。四码对照仍是 v64 解完、会话 45.7 KB/s。Android APK 仍冻结 **0.8.12**。
+**交接时点：** 2026-08-20。网页接收端 **v67**。v66 单码（第二次开始）采集 51.9、有效 30.9、解码 37.6 ms、ROI 720、取帧 bitmap、实时 **65.0 KB/s**、会话 53.8 KB/s。第一次扫几秒 `ended` 把相机关掉黑屏。四码对照仍是 v64 解完、会话 45.7 KB/s。Android APK 仍冻结 **0.8.12**。
 
 ## 1. 项目一句话
 
@@ -26,7 +26,7 @@
 
 | 部件 | 版本 | 状态 |
 |---|---|---|
-| 网页接收端 | **v66（待 Pages 实测单码 ROI 裁切）** | 四码不要动。禁止 `track.clone()` / MST。锁 ROI 后按四码打包那样 `createImageBitmap(video, x,y,w,h,{resize 720})`。抓帧失败不要粘在 canvas |
+| 网页接收端 | **v67（待 Pages 确认单码不再被 ended 关相机）** | 四码不要动。单码锁 ROI 后 video 裁 720（v66 已到约 65 KB/s）。预览还在就不关相机 |
 | Android APK | **0.8.12**（versionCode 27） | 未经明确要求不要改。峰值是 **0.8.8：60 Hz 四码约 193 KB/s** |
 | 发送端 | AFL2，单文件 HTML | 60 Hz 上单码超过 30 FPS 会拉回 30；四码每码上限 **1273 B** |
 
@@ -48,7 +48,8 @@ v54 / v61 的「≥3 命中重排 2×2」在网页上会把还没锁住的格子
 | **v63** | BarcodeDetector 先锁单码 ROI；未锁定整幅 960；完成后保留诊断 | 四码解完 1117/1117，采集 49、有效 46、解码 10.8 ms、格 4、平均 58.5↑、会话 **42.8 KB/s**。单码 ROI 720，采集 **9.0**、解码 99 ms、就绪 4/4、忙时丢弃 0、实时 **9.1 KB/s** |
 | **v64** | 单码 `new VideoFrame(video)` 传到 Worker 再裁 720；最多 4 个在途；失败回退整幅 bitmap | 四码解完，采集 39、有效 55、平均 73.2↑、会话 **45.7 KB/s**。单码仍采集 **9.6**、解码 98 ms、忙时丢弃 0、实时 **6.9 KB/s**。和 v63 一样，主线程仍在整帧读回 |
 | **v65** | 单码 `track.clone()` + `MediaStreamTrackProcessor` 泵最新帧；四码不启动泵 | 取帧 **canvas**、采集 **8.8**、解码 109 ms、实时 **10.2 KB/s**。克隆轨让预览闪退又自己恢复，随后粘在 canvas |
-| **v66** | 去掉 MST/克隆/`new VideoFrame(video)`。锁 ROI 后 video 源矩形裁到 720（与四码 packed 相同 API）。失败不切 canvas、不重启 Worker | 待 Pages 实测。诊断看 `取帧 bitmap`，不要再闪相机 |
+| **v66** | 去掉 MST/克隆/`new VideoFrame(video)`。锁 ROI 后 video 源矩形裁到 720。失败不切 canvas | 第二次开始：采集 **51.9**、有效 30.9、解码 37.6 ms、取帧 bitmap、实时 **65.0**、会话 **53.8 KB/s**。第一次扫几秒黑屏关相机（`ended` → closeCamera） |
+| **v67** | 预览仍有画面时忽略 `ended`；每条轨只绑一次监听；Start 可替换已死的轨。单码解码路径同 v66 | 待 Pages 实测。单码对照是 v66 的 65 KB/s |
 
 v60 已烧：二次 `createImageBitmap` 没有保住开头那条快路径，还把命中率打到 0.45。v61 的新证据是：**瞄准快、锁码慢，是因为锁码后多了一次主线程裁图**；扫描边长不是原因。不要再围着 1440 / 720 / video 源矩形打转。
 
@@ -127,7 +128,7 @@ tests/                          npm test 串起来的协议/安全/运行时针
 - **不要**对 Android `getUserMedia` 要 120 FPS（非 Android 可以试，失败再 60）。
 - **不要**在 Android UA 上 `focusMode: continuous`（v38 会把 track ended）。
 - **不要**对这台竖屏红米要横屏 `1920×1440`（会切模式闪退）。Android 用 `1440×1920`。
-- **不要**把启动瞬间的 `ended` 当成真断线立刻 `closeCamera()`。等 `play()` 后再看 `readyState`。
+- **不要**把运行中的 `ended` 立刻 `closeCamera()`。这台 Chrome 在单码 ROI 裁切时会假 ended（v66：扫几秒黑屏）。预览 `readyState >= 2` 且还有宽高就忽略并重新挂监听。
 - **不要**页面隐藏时自动停摄像头。
 - **不要**在 `ended` 上自动重试 getUserMedia。
 - 这台机 120/240/480 是高速录像管道，不能给 ImageAnalysis / 网页分析流。
@@ -139,10 +140,10 @@ tests/                          npm test 串起来的协议/安全/运行时针
 - 不要改 git config，不要 `--force` 推 `main`。
 - 不要 commit `.env`、密钥、`.tools/`。
 
-## 7. 网页 v66 实际在做什么
+## 7. 网页 v67 实际在做什么
 
-- 四码：v64 已解完、会话约 46 KB/s。策略不变。不要启动第二路相机轨。
-- 单码：BarcodeDetector 锁 ROI 后，主线程按四码 packed 的方式裁 video 到 720 再送给 Worker。瞄准未锁定时仍整幅 960。假 `ended` 会重新挂监听，不关相机。
+- 四码：v64 已解完、会话约 46 KB/s。策略不变。
+- 单码：v66 的 ROI video 裁 720 已到采集 52、约 65 KB/s。不要改这条取帧。v67 只修相机：假 `ended` 不关预览；死轨时再点开始会重新 getUserMedia。
 - 完成后 `finishing` 时 `closeCamera` 不清布局字段。
 
 ## 8. 发送端要点
@@ -174,7 +175,7 @@ tests/                          npm test 串起来的协议/安全/运行时针
 
 ## 11. 已知缺口（按优先级）
 
-1. **网页单码锁码后掉速**（v65：克隆轨闪相机，随后 `取帧 canvas`、采集 8.8、**10 KB/s**）。v66 去掉克隆，锁 ROI 后走四码那种 video 裁 720。
+1. **网页单码** v66 已到实时 65 KB/s。优先保证相机不被假 `ended` 关掉（v67）。不要再换取帧 API。
 2. **网页四码** v64 已解完，会话 45.7 KB/s。不要再改锁格 / 解码路径。不要为单码去克隆相机轨。
 3. 完成后诊断曾被清成「单码 · 全图」。v63 在 `finishing` 时保留布局字段。
 4. **网页四码每帧命中**（v61 崩到 2.1 KB/s / 每帧 0.01）。v62 回到 v53 锁格 + 窗内跟随。
@@ -185,7 +186,7 @@ tests/                          npm test 串起来的协议/安全/运行时针
 
 ## 12. 不要做的「优化」清单（摘要）
 
-`dueRelock`、全图 BarcodeDetector 跟踪、YUV `copyTo` 当快路径、从 HTMLVideoElement `new VideoFrame(video)` 当快路径（v64）、`track.clone()` / `MediaStreamTrackProcessor`（v65 闪相机并掉进 canvas）、四次 `createImageBitmap`、双倍 pad、nudge、probeMulti、删 `tileCenter`、1 个命中锁格、Android 连续对焦、Android 120 FPS 请求、Android 横屏 1920×1440 相机请求、启动瞬间 ended 立刻关相机、visibility 停相机、120 FPS 发送（60 Hz 屏）、单码全图因 `lastHitBox >= 700` 压到 720、`createImageBitmap(video, { resize })` 不带源矩形、整幅取帧再从 bitmap 裁 720（v60）、用稀疏 WASM 命中 `rebuildQuadFromHits` 重排 2×2（v61）。
+`dueRelock`、全图 BarcodeDetector 跟踪、YUV `copyTo` 当快路径、从 HTMLVideoElement `new VideoFrame(video)` 当快路径（v64）、`track.clone()` / `MediaStreamTrackProcessor`（v65 闪相机并掉进 canvas）、四次 `createImageBitmap`、双倍 pad、nudge、probeMulti、删 `tileCenter`、1 个命中锁格、Android 连续对焦、Android 120 FPS 请求、Android 横屏 1920×1440 相机请求、启动瞬间 ended 立刻关相机、运行中假 ended 立刻 closeCamera（v66 黑屏）、visibility 停相机、120 FPS 发送（60 Hz 屏）、单码全图因 `lastHitBox >= 700` 压到 720、`createImageBitmap(video, { resize })` 不带源矩形、整幅取帧再从 bitmap 裁 720（v60）、用稀疏 WASM 命中 `rebuildQuadFromHits` 重排 2×2（v61）。
 
 ## 13. 许可证
 
@@ -193,4 +194,4 @@ MIT。第三方见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。只使用 
 
 ---
 
-交接时网页是 **v66**，APK **0.8.12**。四码对照是 v64 解完、会话 **45.7 KB/s**。单码对照是 v65 canvas **10 KB/s**。以 Pages 诊断第一行 `网页：v66` 为准。单码应看到 `取帧 bitmap`，相机不应再闪。
+交接时网页是 **v67**，APK **0.8.12**。四码对照是 v64 解完、会话 **45.7 KB/s**。单码对照是 v66 ROI bitmap、采集 52、**65 KB/s**。以 Pages 诊断第一行 `网页：v67` 为准。

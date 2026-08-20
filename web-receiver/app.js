@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v66";
+  const RECEIVER_BUILD = "v67";
   if ("serviceWorker" in navigator) {
     let swRefreshing = false;
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
@@ -161,6 +161,7 @@
   let highSingleConfirmed = false;
   let startInFlight = false;
   let cameraEndedWhileStarting = false;
+  const cameraEndedBound = new WeakSet();
   let hideStopTimer = 0;
   let highScanRoi = null;
   let highTrackedTiles = null;
@@ -242,7 +243,12 @@
   }
 
   async function start() {
-    if (stream || startInFlight) return;
+    if (startInFlight) return;
+    if (stream) {
+      const live = stream.getVideoTracks?.()[0];
+      if (live && live.readyState === "live") return;
+      closeCamera();
+    }
     if (restoring) {
       status.textContent = "正在恢复断点，请稍候";
       return;
@@ -315,15 +321,17 @@
 
   function bindCameraEnded(activeStream) {
     const track = activeStream.getVideoTracks()[0];
-    if (!track) return;
+    if (!track || cameraEndedBound.has(track)) return;
+    cameraEndedBound.add(track);
     track.addEventListener("ended", () => {
+      cameraEndedBound.delete(track);
       if (stream !== activeStream) return;
       if (startInFlight) {
         cameraEndedWhileStarting = true;
         bindCameraEnded(activeStream);
         return;
       }
-      if (track.readyState === "live") {
+      if (track.readyState === "live" || (video.readyState >= 2 && video.videoWidth)) {
         bindCameraEnded(activeStream);
         return;
       }

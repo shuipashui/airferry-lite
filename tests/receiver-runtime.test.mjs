@@ -182,6 +182,10 @@ assert.equal(widthWrites + heightWrites, writesAfterData, "canvas dimensions wer
 assert.equal(typeof trackEnded, "function", "camera track interruption was not monitored");
 
 trackEnded();
+assert.notEqual(video.srcObject, null, "ended must not close the camera while the preview still has a frame");
+video.readyState = 0;
+video.videoWidth = 0;
+trackEnded();
 assert.equal(video.srcObject, null);
 assert.equal(elements.startBtn.disabled, false);
 assert.equal(elements.stopBtn.disabled, true);
