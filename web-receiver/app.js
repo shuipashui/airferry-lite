@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v63";
+  const RECEIVER_BUILD = "v64";
   if ("serviceWorker" in navigator) {
     let swRefreshing = false;
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
@@ -66,7 +66,7 @@
   const HIGH_QUAD_ACQUIRE_MS = 100;
   const HIGH_QUAD_TILE_MISS_LIMIT = 6;
   const HIGH_QUAD_FROZEN_MISS_LIMIT = 24;
-  const HIGH_SINGLE_INFLIGHT = 2;
+  const HIGH_SINGLE_INFLIGHT = 4;
 
   let stream = null;
   let scanTimer = 0;
@@ -150,6 +150,7 @@
   let lastDecodeBackend = "—";
   let lastWorkerCount = 0;
   let captureViaCanvas = false;
+  let highVideoFrameBlocked = false;
   let lastUsedLuma = false;
   let lumaUnavailable = false;
   let highGrabInFlight = false;
@@ -731,7 +732,7 @@
         highMultiLayout = true;
         lockQuadSlots(tiles, true);
       } else if (tiles.length === 1 && !highMultiLayout) {
-        highScanRoi = clampScanRegion(inflateRect(tiles[0], 1.4));
+        highScanRoi = clampScanRegion(inflateRect(tiles[0], 1.55));
         highScanMisses = 0;
       }
     } catch (_) {
@@ -1400,10 +1401,55 @@
     let height = Math.max(1, Math.round(source.height * scale));
     lastPostedScanSize = Math.max(width, height);
     let postedBitmap = null;
+    let postedFrame = null;
     try {
       const id = ++highFrameId;
       highDecodeMeta.set(id, { x: source.x, y: source.y, srcW: source.width, srcH: source.height, outW: width, outH: height });
       const useBitmap = !captureViaCanvas && typeof createImageBitmap === "function" && typeof OffscreenCanvas === "function";
+      if (useBitmap && !tile && !highMultiLayout && !highVideoFrameBlocked && typeof VideoFrame === "function") {
+        try {
+          postedFrame = new VideoFrame(video);
+          const vw = postedFrame.displayWidth || video.videoWidth;
+          const vh = postedFrame.displayHeight || video.videoHeight;
+          const sx = vw / Math.max(1, video.videoWidth || vw);
+          const sy = vh / Math.max(1, video.videoHeight || vh);
+          const mapped = {
+            x: source.x * sx,
+            y: source.y * sy,
+            width: source.width * sx,
+            height: source.height * sy
+          };
+          const full = { width: vw, height: vh, vw, vh };
+          const cropped = mapped.x > 1 || mapped.y > 1 || mapped.x + mapped.width < vw - 1 || mapped.y + mapped.height < vh - 1;
+          let crop;
+          if (cropped) {
+            const next = cropBitmapToSource(full, mapped, scanSize);
+            crop = { x: next.x, y: next.y, w: next.w, h: next.h, dw: next.width, dh: next.height };
+            width = next.width;
+            height = next.height;
+          } else {
+            const maxSide = HIGH_TRACK_SIZE;
+            const outScale = Math.min(1, maxSide / Math.max(vw, vh, 1));
+            width = Math.max(1, Math.round(vw * outScale));
+            height = Math.max(1, Math.round(vh * outScale));
+            crop = { x: 0, y: 0, w: vw, h: vh, dw: width, dh: height };
+          }
+          lastPostedScanSize = Math.max(width, height);
+          const frameMeta = highDecodeMeta.get(id);
+          if (frameMeta) {
+            frameMeta.outW = width;
+            frameMeta.outH = height;
+            frameMeta.postedAt = performance.now();
+          }
+          highWorkers[slot].postMessage({ id, frame: postedFrame, maxSymbols, retryBinarizer, crop }, [postedFrame]);
+          postedFrame = null;
+          return true;
+        } catch (_) {
+          highVideoFrameBlocked = true;
+          try { postedFrame?.close(); } catch (_) {}
+          postedFrame = null;
+        }
+      }
       if (useBitmap) {
         let bitmap;
         let crop = null;
@@ -1460,6 +1506,7 @@
       captureViaCanvas = true;
       highDecodeMeta.delete(highFrameId);
       try { postedBitmap?.close(); } catch (_) {}
+      try { postedFrame?.close(); } catch (_) {}
       restartHighSpeedWorker(slot);
       return false;
     }

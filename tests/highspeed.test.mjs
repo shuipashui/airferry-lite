@@ -75,6 +75,8 @@ assert.equal(quadQr.getModuleCount(), 117, "1273-byte quad frame must fit QR V25
   assert.ok(workerBridge.includes('importScripts("./multi-decoder-worker.js")'));
   assert.ok(workerBridge.includes("maxSymbols"), "bitmap bridge must forward maxSymbols to the WASM decoder");
   assert.ok(workerBridge.includes("data.lum"), "bitmap bridge must forward packed luma without a canvas round-trip");
+  assert.ok(workerBridge.includes("if (data.frame)"), "bitmap bridge must handle transferred VideoFrame before the luma fallback");
+  assert.ok(workerBridge.includes("bitmapFromFrame"), "bitmap bridge must crop and resize a transferred VideoFrame off the main thread");
   assert.ok(workerBridge.includes("crop.w") && workerBridge.includes("drawImage(bitmap, crop.x, crop.y, crop.w, crop.h"), "bitmap bridge must crop locked single-code ROI off the main thread");
   const publishedApp = fs.readFileSync(new URL("../app.js", import.meta.url), "utf8");
   assert.ok(publishedApp.includes('new Worker("vendor/decimen/highspeed-decoder-worker.js")'), "WASM worker must start from vendor/decimen so locateFile finds the wasm");

@@ -3,7 +3,7 @@
 AirFerry Lite 是一个无需服务器的离线光学文件传输项目：电脑浏览器将文件编码为连续二维码，手机网页或 Android 接收端通过摄像头恢复文件。
 
 - 发送端：单文件 HTML，可直接双击打开，无运行时 CDN 依赖，并展示手机接收端网址二维码
-- 网页接收端：GitHub Pages HTTPS 页面（当前 **v63**）。四码 v62 实测约 96 KB/s；单码用原生定位锁 ROI。细节见 [HANDOVER.md](HANDOVER.md)
+- 网页接收端：GitHub Pages HTTPS 页面（当前 **v64**）。四码 v63 已解完，会话约 43 KB/s；单码把 VideoFrame 交给 Worker，避开主线程整帧 `createImageBitmap`。细节见 [HANDOVER.md](HANDOVER.md)
 - Android 接收端：原生 APK（Android 10+，**冻结在 0.8.12**），CameraX 采集、zxing-cpp 原生解码、最新帧策略
 - 传输协议：`AFL1` 描述帧、数据帧、GF(256) 线性修复帧、择优 gzip、分片 CRC-32 和原文件 CRC-32
 - 高速协议：`AFL2` 二进制帧、LT 喷泉码、固定掩码 4
@@ -24,7 +24,7 @@ AirFerry Lite 是一个无需服务器的离线光学文件传输项目：电脑
 3. 手机打开网页接收端或安装 APK，允许摄像头权限并开始扫描。
 4. 保持手机稳定对准二维码（四码请让发送端全屏），接收完成后保存或下载文件。
 
-诊断第一行必须是 `网页：v63`。Chrome 若一直停在旧版，是旧 Service Worker 不刷新；新 SW 激活时会强制打开页面。仍不对就清掉该站数据。
+诊断第一行必须是 `网页：v64`。Chrome 若一直停在旧版，是旧 Service Worker 不刷新；新 SW 激活时会强制打开页面。仍不对就清掉该站数据。
 
 ## 推荐参数
 
@@ -32,7 +32,7 @@ AirFerry Lite 是一个无需服务器的离线光学文件传输项目：电脑
 
 | 场景 | 参数 | 说明 |
 |---|---|---|
-| 单码推荐 | **2331 B · 30 FPS** | QR 约 V34。网页 v62 未锁 ROI 时约 7.5 KB/s；v63 先用原生定位锁框 |
+| 单码推荐 | **2331 B · 30 FPS** | QR 约 V34。网页 v63 已锁 ROI，但采集仍约 9 FPS / 9 KB/s；v64 改传 VideoFrame |
 | 四码推荐 | **全屏 · 2331 B · 30 FPS** | 发送端会把四码每码限制到 1273 B（QR V22–V25）。网页 v62 实测实时约 96 KB/s |
 | 单码高吞吐 | 2953 B · 30 FPS | QR V40，只适合单码、近距离、画面清晰 |
 | 更远 / 摩尔纹 | 1465 B 或四码 1003 B · 24/30 FPS | 对焦不稳时更稳 |
@@ -45,7 +45,7 @@ AirFerry Lite 是一个无需服务器的离线光学文件传输项目：电脑
 
 ## 接收端现状
 
-网页接收端在 Worker 中运行 Decimen v0.3 的 ZXing WASM（通常 4 个 Worker）。**v63** 单码用 Chrome `BarcodeDetector` 先锁 ROI，再在 Worker 里裁 720 解码；四码锁格走 v53，格 4 后窗内跟随（v62 实测约 96 KB/s）。WASM/Worker 走 Service Worker 缓存优先。旧 `AFL1` 文本流会回退到 jsQR。
+网页接收端在 Worker 中运行 Decimen v0.3 的 ZXing WASM（通常 4 个 Worker）。**v64** 单码用 Chrome `BarcodeDetector` 锁 ROI 后，把 `VideoFrame` 传到 Worker 再裁 720；四码锁格仍走 v53（v63 已解完 1117/1117，会话约 43 KB/s）。WASM/Worker 走 Service Worker 缓存优先。旧 `AFL1` 文本流会回退到 jsQR。
 
 Android APK **0.8.12 冻结，未经要求不要改**。峰值是 0.8.8：60 Hz 四码约 **193 KB/s**。0.8.12 用 CameraX 分析流（目标 1920×1440）和 `zxing-cpp` 2.3.0 读 Y 平面。单码一次最多 1 个符号；四码并行扫上一帧四个码的位置。采集走最新帧。完成后文件写到系统下载目录下的 `AirFerry Lite` 文件夹。
 
@@ -62,7 +62,7 @@ IndexedDB 断点只用于旧的 AFL1 文本流。当前 AFL2 传输保存在内�
 ```text
 index.html                                  # GitHub Pages 网页接收端入口
 app.js / protocol.js / highspeed-protocol.js
-sw.js                                       # 网页接收端缓存（airferry-lite-v63）
+sw.js                                       # 网页接收端缓存（airferry-lite-v64）
 android-receiver/                           # Android APK 源码（0.8.12）
 sender/dist/airferry-lite-sender.html       # 可直接使用的单文件发送端
 sender/                                     # 发送端源码和构建脚本

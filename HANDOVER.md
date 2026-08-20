@@ -2,7 +2,7 @@
 
 本文给后续接手的人：当前能跑什么、什么不能动、哪些路已经烧死、网页怎么发到 GitHub Pages。用户向文档见 [README.md](README.md)。
 
-**交接时点：** 2026-08-20。网页接收端 **v63**。v62 Pages：四码实时 **96.1 KB/s** 并解完（完成后诊断被 closeCamera 清成「单码 · 全图」）；单码全图 1440、解码 85 ms、采集 9.2、实时 **7.5 KB/s**。Android APK 仍冻结 **0.8.12**。
+**交接时点：** 2026-08-20。网页接收端 **v64**。v63 Pages：四码已解完 1117/1117（采集 49、有效 46、解码 10.8 ms、格 4、平均爬到 58.5、会话 42.8 KB/s）；单码已锁 ROI 720，但采集仍 9.0、解码 99 ms、Worker 闲着、实时 **9.1 KB/s**。Android APK 仍冻结 **0.8.12**。
 
 ## 1. 项目一句话
 
@@ -26,7 +26,7 @@
 
 | 部件 | 版本 | 状态 |
 |---|---|---|
-| 网页接收端 | **v63（待 Pages 实测单码）** | 四码 v62 已到约 96 KB/s。单码用 BarcodeDetector 先锁 ROI，未锁定时整幅只缩到 960。完成后保留布局诊断 |
+| 网页接收端 | **v64（待 Pages 实测单码 VideoFrame）** | 四码不要动。单码把 `VideoFrame` 传到 Worker 裁 ROI；失败再回退 `createImageBitmap` |
 | Android APK | **0.8.12**（versionCode 27） | 未经明确要求不要改。峰值是 **0.8.8：60 Hz 四码约 193 KB/s** |
 | 发送端 | AFL2，单文件 HTML | 60 Hz 上单码超过 30 FPS 会拉回 30；四码每码上限 **1273 B** |
 
@@ -45,7 +45,8 @@ v54 / v61 的「≥3 命中重排 2×2」在网页上会把还没锁住的格子
 | **v60** | 整幅取帧再从 bitmap 裁 720 | 采集 **12.4**、有效 **4.8**、每帧 **0.45**、实时 **10.9 KB/s**。比 v59 更差 |
 | **v61** | 整幅 1440 快路径不变，ROI 裁切改在 Worker | 采集 **19.8**、有效 12.9、解码 59 ms、实时 **22.2 KB/s**。比 v60 好，仍不到瞄准时的 50+ FPS |
 | **v62** | 锁码后整幅快照缩到 ROI≈720；单码最多 2 个 Worker 在途 | 四码实时 **96.1 KB/s** 并解完。单码未锁 ROI：扫描 1440 全图、解码 85 ms、采集 **9.2**、实时 **7.5 KB/s** |
-| **v63** | BarcodeDetector 先锁单码 ROI；未锁定整幅 960；完成后保留诊断 | 待 Pages 实测单码 |
+| **v63** | BarcodeDetector 先锁单码 ROI；未锁定整幅 960；完成后保留诊断 | 四码解完 1117/1117，采集 49、有效 46、解码 10.8 ms、格 4、平均 58.5↑、会话 **42.8 KB/s**。单码 ROI 720，采集 **9.0**、解码 99 ms、就绪 4/4、忙时丢弃 0、实时 **9.1 KB/s** |
+| **v64** | 单码 `new VideoFrame(video)` 传到 Worker 再裁 720；最多 4 个在途；失败回退整幅 bitmap | 待 Pages 实测。四码路径未改 |
 
 v60 已烧：二次 `createImageBitmap` 没有保住开头那条快路径，还把命中率打到 0.45。v61 的新证据是：**瞄准快、锁码慢，是因为锁码后多了一次主线程裁图**；扫描边长不是原因。不要再围着 1440 / 720 / video 源矩形打转。
 
@@ -87,7 +88,7 @@ third_party/decimen-v0.3/       MIT 源，不要混入后续 AGPL Decimen
 tests/                          npm test 串起来的协议/安全/运行时针
 ```
 
-网页高速路径：`requestVideoFrameCallback` → `scanWithHighSpeedWorkers`。单码走 `getHighSpeedSource` + `createImageBitmap`；四码走 `decodeQuadFrame`（一张打包 bitmap，四个窗口）。Worker 忙则丢最新帧，不排队。
+网页高速路径：`requestVideoFrameCallback` → `scanWithHighSpeedWorkers`。单码优先 `new VideoFrame(video)` 传到 Worker 再裁；失败才 `createImageBitmap`。四码走 `decodeQuadFrame`（一张打包 bitmap，四个窗口）。Worker 忙则丢最新帧，不排队。
 
 `sync-receiver.mjs` 把根目录接收端文件拷进 `web-receiver/`。改完必跑。
 
@@ -97,9 +98,9 @@ tests/                          npm test 串起来的协议/安全/运行时针
 
 - 锁码后采集掉到约 12、忙时丢弃 0 = 取帧把主线程 / rVFC 卡住。不要只改扫描边长或 ROI 文案。
 - 已烧：整幅压到 720（v53）、video 裁 ROI（v56/v57/v59）、不带源矩形的 `createImageBitmap(video, { resize })`（v58）、整幅取帧再从 bitmap 裁 720（v60）。
-- `useLuma = highMultiLayout && size <= HIGH_TILE_SIZE+16`。单码不要走四码的 VideoFrame/Y。
+- `useLuma = highMultiLayout && size <= HIGH_TILE_SIZE+16`。单码不要走四码的 `VideoFrame.copyTo` + RGBA→Y。把 `VideoFrame` **转移**进 Worker 不是这条已烧路径。
 - 不要切竖屏中心方块。不要 `probeMulti`。不要 `if (lastHitBox >= 700) return 720`。
-- 锁码后主线程必须继续走 `createImageBitmap(video, 0, 0, vw, vh, { resize 1440 })`。ROI 只作为 crop 参数交给 Worker。
+- 单码不要在主线程 `await createImageBitmap(video)`。ROI 只作为 crop 参数交给 Worker。VideoFrame 失败时才回退 `createImageBitmap(video, 0, 0, vw, vh)`。
 - 诊断第一行必须是 `网页：vN`。index.html 的 `app.js?v=` 必须一起升。
 
 ### 四码
@@ -134,10 +135,10 @@ tests/                          npm test 串起来的协议/安全/运行时针
 - 不要改 git config，不要 `--force` 推 `main`。
 - 不要 commit `.env`、密钥、`.tools/`。
 
-## 7. 网页 v63 实际在做什么
+## 7. 网页 v64 实际在做什么
 
-- 四码：v62 实测实时 96 KB/s。策略不变：`grabBitmapPacked`、v53 `lockQuadSlots`、格 4 后 `followContainedQuadHits`。格 4 后仍不跑 BarcodeDetector。
-- 单码：没 ROI 时 `BarcodeDetector` 找框（1 个码锁 ROI；≥2 个码切四码）。未锁定整幅只缩到 **960**，锁 ROI 后 Worker 裁 720。不要再让 V34 在 1440 全图上搜。
+- 四码：v63 已解完。策略不变：`grabBitmapPacked`、v53 `lockQuadSlots`、格 4 后 `followContainedQuadHits`。格 4 后仍不跑 BarcodeDetector。平均慢慢升高是因为滚动窗口逐渐丢掉瞄准段，不是掉速。
+- 单码：没 ROI 时 `BarcodeDetector` 找框。锁 ROI 后主线程不再 `await createImageBitmap(video)`，而是 `postMessage` 转移 `VideoFrame`，Worker 里 `createImageBitmap(frame, x,y,w,h,{resize 720})`。失败则回退 v63 的整幅 bitmap。
 - 完成后 `finishing` 时 `closeCamera` 不清 `highMultiLayout` / `highScanRoi` / `highTrackedTiles`，诊断还能看到四码/格 4。
 
 ## 8. 发送端要点
@@ -167,14 +168,14 @@ tests/                          npm test 串起来的协议/安全/运行时针
 
 ## 11. 已知缺口（按优先级）
 
-1. **网页单码锁码后掉速**（v62：全图 1440、采集 9.2、实时 7.5 KB/s）。v63 用原生定位先锁 ROI。
-2. **网页四码** v62 已到实时 96 KB/s、会话 42 KB/s（瞄准段仍拉低平均）。不要再改锁格策略除非单码也稳了。
+1. **网页单码锁码后掉速**（v63：ROI 720、采集 9.0、解码 99 ms、Worker 4/4 闲、实时 9.1 KB/s）。瓶颈是主线程整帧 `createImageBitmap`，不是缺 ROI。v64 改传 VideoFrame。
+2. **网页四码** v63 已解完，会话 42.8 KB/s。不要再改锁格 / 解码路径。
 3. 完成后诊断曾被清成「单码 · 全图」。v63 在 `finishing` 时保留布局字段。
-2. **网页四码每帧命中**（v61 崩到 2.1 KB/s / 每帧 0.01）。v62 回到 v53 锁格 + 窗内跟随。
-3. **开始扫描相机闪退**。v62 不再把启动期 `ended` 立刻关相机，Android 改为竖屏 1440×1920。
-4. AFL2 进度只在内存，刷新即丢。IndexedDB 只服务 AFL1。
-5. 文件上限 64 MiB。
-6. 本地 `origin/main` 和 GitHub `main` 的 SHA 经常对不齐（API 推送），但 tree 应一致。以 GitHub API 的 ref 为准。
+4. **网页四码每帧命中**（v61 崩到 2.1 KB/s / 每帧 0.01）。v62 回到 v53 锁格 + 窗内跟随。
+5. **开始扫描相机闪退**。v62 不再把启动期 `ended` 立刻关相机，Android 改为竖屏 1440×1920。
+6. AFL2 进度只在内存，刷新即丢。IndexedDB 只服务 AFL1。
+7. 文件上限 64 MiB。
+8. 本地 `origin/main` 和 GitHub `main` 的 SHA 经常对不齐（API 推送），但 tree 应一致。以 GitHub API 的 ref 为准。
 
 ## 12. 不要做的「优化」清单（摘要）
 
@@ -186,4 +187,4 @@ MIT。第三方见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。只使用 
 
 ---
 
-交接时网页是 **v63**，APK **0.8.12**。四码对照是 v62 实时 **96 KB/s**。单码对照是 v62 全图 7.5 KB/s。以 Pages 诊断第一行 `网页：v63` 为准。
+交接时网页是 **v64**，APK **0.8.12**。四码对照是 v63 解完、会话 **42.8 KB/s**。单码对照是 v63 ROI 720、采集 9、**9.1 KB/s**。以 Pages 诊断第一行 `网页：v64` 为准。

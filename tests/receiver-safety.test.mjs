@@ -55,7 +55,7 @@ for (const needle of [
   ,"const HIGH_QUAD_PACKED_SIZE = 720;"
   ,">= 4 ? 4 : 2"
   ,"!/Android/i.test(navigator.userAgent || \"\")"
-  ,"const RECEIVER_BUILD = \"v63\";"
+  ,"const RECEIVER_BUILD = \"v64\";"
   ,"function grabLumaRegion"
   ,"function cropLuma"
   ,"function downscaleLuma"
@@ -72,7 +72,7 @@ for (const needle of [
   ,"function transferHitTile"
   ,"function slotContainingHit"
   ,"function grabMaxSideForSource"
-  ,"const HIGH_SINGLE_INFLIGHT = 2;"
+  ,"const HIGH_SINGLE_INFLIGHT = 4;"
   ,"function chooseQuadRegion"
   ,"function readCropsFromPacked"
   ,"function tileCovered"
@@ -139,7 +139,7 @@ for (const needle of [
   ,"elapsed < 1000"
   ," · 每帧 "
 ]) assert.ok(source.includes(needle), "missing receiver guard: " + needle);
-assert.ok(indexHtml.includes("app.js?v=63"), "index.html must cache-bust app.js with the current receiver build");
+assert.ok(indexHtml.includes("app.js?v=64"), "index.html must cache-bust app.js with the current receiver build");
 assert.ok(!source.includes("highMultiLayout || !highSingleConfirmed"), "single-code acquire must not be replaced by quadrant crops");
 assert.ok(!source.includes("dueRelock"), "quad must not fall back to overlapping quadrants after empty misses");
 assert.ok(!source.includes("HIGH_MULTI_FULL_DECODE_EVERY"), "quad must not periodic-relock the whole ROI");
@@ -163,6 +163,9 @@ assert.ok(!source.includes("if (lastHitBox >= 700) return Math.min(HIGH_TILE_SIZ
 assert.ok(source.includes("if (highScanMisses > 0) return inflateRect(highScanRoi, 1.2 + highScanMisses * 0.2);"), "single-code tracking must keep an ROI so WASM does not search the whole portrait");
 assert.ok(source.includes("if (tile || highMultiLayout || highScanRoi) return Math.min(HIGH_TILE_SIZE, longest);"), "locked single-code ROI must scan at 720 like v26, not 960/1440");
 assert.ok(source.includes("createImageBitmap(video, 0, 0, vw, vh,"), "single-code video grabs must snapshot the full frame, not crop the HTMLVideoElement");
+assert.ok(source.includes("postedFrame = new VideoFrame(video)"), "single-code must transfer a VideoFrame instead of awaiting createImageBitmap on the main thread");
+assert.ok(source.includes("{ id, frame: postedFrame, maxSymbols, retryBinarizer, crop }"), "single-code VideoFrame posts must include the worker crop");
+assert.ok(source.includes("highVideoFrameBlocked = true"), "VideoFrame transfer failures must fall back to createImageBitmap without disabling the bitmap path");
 assert.ok(!source.includes("createImageBitmap(full.bitmap"), "locked single-code must crop inside the worker, not with a second main-thread ImageBitmap");
 assert.ok(!source.includes("await cropBitmapToSource"), "ROI geometry must not await a main-thread bitmap crop");
 assert.ok(source.includes("crop = { x: next.x, y: next.y, w: next.w, h: next.h, dw: next.width, dh: next.height }"), "locked single-code must send the ROI crop to the worker");
@@ -171,7 +174,7 @@ assert.ok(!source.includes("createImageBitmap(video, {"), "ImageBitmap grabs mus
 assert.ok(!source.includes("if (!highMultiLayout && !highScanRoi) return;"), "single-code speed must not wait for an ROI crop before counting bytes");
 assert.ok(source.includes("let swRefreshing = false;"), "service worker updates must reload even when the previous build already recorded a refresh");
 assert.ok(serviceWorker.includes("client.navigate(client.url)"), "new service worker must navigate open pages off a stuck old build");
-assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v63";'), "service worker cache version was not bumped");
+assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v64";'), "service worker cache version was not bumped");
 assert.ok(serviceWorker.includes('path.endsWith(".wasm")'), "service worker must cache WASM/worker files instead of no-store");
 assert.ok(serviceWorker.includes('"./highspeed-protocol.js"') && serviceWorker.includes('"./vendor/decimen/highspeed-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/multi-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/zxing_reader-EOacYbLr.wasm"'), "high-speed receiver assets are not cached");
 assert.equal(mirrorSource, source, "web-receiver app.js drifted from the published root receiver");
