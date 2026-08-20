@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v70";
+  const RECEIVER_BUILD = "v71";
   if ("serviceWorker" in navigator) {
     let swRefreshing = false;
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
@@ -162,6 +162,8 @@
   let highSingleConfirmed = false;
   let startInFlight = false;
   let cameraEndedWhileStarting = false;
+  let lastCameraLiveAt = 0;
+  let cameraWatchTimer = 0;
   const cameraEndedBound = new WeakSet();
   let hideStopTimer = 0;
   let highScanRoi = null;
@@ -243,17 +245,42 @@
     });
   }
 
+  function cameraPreviewLive() {
+    const track = stream?.getVideoTracks?.()[0];
+    if (!track || track.readyState !== "live" || track.muted) return false;
+    if (video.paused || video.ended || video.readyState < 2 || !video.videoWidth) return false;
+    return true;
+  }
+
+  function dropDeadCamera() {
+    if (!stream || startInFlight || document.hidden) return false;
+    const track = stream.getVideoTracks?.()[0];
+    const trackGone = !track || track.readyState !== "live" || track.muted;
+    const stalled = lastCameraLiveAt > 0 && performance.now() - lastCameraLiveAt > 1500;
+    if (!trackGone && !stalled) return false;
+    closeCamera();
+    status.textContent = "摄像头连接已中断，请重新开始";
+    return true;
+  }
+
+  function armCameraWatch() {
+    if (cameraWatchTimer) clearTimeout(cameraWatchTimer);
+    cameraWatchTimer = setTimeout(() => {
+      cameraWatchTimer = 0;
+      if (dropDeadCamera()) return;
+      if (stream) armCameraWatch();
+    }, 500);
+    cameraWatchTimer?.unref?.();
+  }
+
   async function start() {
     if (startInFlight) return;
-    if (stream) {
-      const live = stream.getVideoTracks?.()[0];
-      if (live && live.readyState === "live") return;
-      closeCamera();
-    }
     if (restoring) {
       status.textContent = "正在恢复断点，请稍候";
       return;
     }
+    if (cameraPreviewLive()) return;
+    if (stream) closeCamera();
     startInFlight = true;
     cameraEndedWhileStarting = false;
     startBtn.disabled = true;
@@ -298,6 +325,8 @@
       }
       cameraEndedWhileStarting = false;
       bindCameraEnded(stream);
+      lastCameraLiveAt = performance.now();
+      armCameraWatch();
       if (cameraFreeze) cameraFreeze.hidden = true;
       startHighSpeedWorkers();
       if (highWorkers.length) {
@@ -333,7 +362,7 @@
         bindCameraEnded(activeStream);
         return;
       }
-      if (track.readyState === "live" || (video.readyState >= 2 && video.videoWidth)) {
+      if (track.readyState === "live" && !track.muted && !video.paused && video.readyState >= 2 && video.videoWidth) {
         bindCameraEnded(activeStream);
         return;
       }
@@ -374,6 +403,11 @@
       clearTimeout(hideStopTimer);
       hideStopTimer = 0;
     }
+    if (cameraWatchTimer) {
+      clearTimeout(cameraWatchTimer);
+      cameraWatchTimer = 0;
+    }
+    lastCameraLiveAt = 0;
     clearTimeout(scanTimer);
     scanTimer = 0;
     if (scanFrameCallback && typeof video.cancelVideoFrameCallback === "function") {
@@ -465,6 +499,8 @@
     if (highWorkers.length && typeof video.requestVideoFrameCallback === "function") {
       scanFrameCallback = video.requestVideoFrameCallback(() => {
         scanFrameCallback = 0;
+        if (dropDeadCamera()) return;
+        lastCameraLiveAt = performance.now();
         recordCapturedFrame();
         void scanWithHighSpeedWorkers();
         scheduleScan();
@@ -474,6 +510,8 @@
     if (highWorkers.length) {
       scanTimer = setTimeout(() => {
         scanTimer = 0;
+        if (dropDeadCamera()) return;
+        lastCameraLiveAt = performance.now();
         recordCapturedFrame();
         void scanWithHighSpeedWorkers();
         scheduleScan();
@@ -1324,23 +1362,49 @@
     }
   }
 
-  async function grabQuadTileBitmap(source) {
+  async function grabQuadTileBitmaps(crops) {
+    const region = unionScanCrops(crops);
     const vw = video.videoWidth || 1;
     const vh = video.videoHeight || 1;
-    const x = Math.max(0, Math.min(vw - 1, Math.round(source.x)));
-    const y = Math.max(0, Math.min(vh - 1, Math.round(source.y)));
-    const widthSrc = Math.max(1, Math.min(Math.round(source.width), vw - x));
-    const heightSrc = Math.max(1, Math.min(Math.round(source.height), vh - y));
-    const scale = Math.min(1, HIGH_QUAD_TILE_SIZE / Math.max(widthSrc, heightSrc, 1));
-    const width = Math.max(1, Math.round(widthSrc * scale));
-    const height = Math.max(1, Math.round(heightSrc * scale));
-    const bitmap = await createImageBitmap(video, x, y, widthSrc, heightSrc, {
-      resizeWidth: width,
-      resizeHeight: height,
+    const x = Math.max(0, Math.min(vw - 1, Math.round(region.x)));
+    const y = Math.max(0, Math.min(vh - 1, Math.round(region.y)));
+    const widthSrc = Math.max(1, Math.min(Math.round(region.width), vw - x));
+    const heightSrc = Math.max(1, Math.min(Math.round(region.height), vh - y));
+    const longestTile = crops.reduce((max, crop) => Math.max(max, crop.width, crop.height), 1);
+    const atlasScale = Math.min(1, HIGH_QUAD_TILE_SIZE / longestTile, HIGH_ACQUIRE_SIZE / Math.max(widthSrc, heightSrc));
+    const atlasW = Math.max(1, Math.round(widthSrc * atlasScale));
+    const atlasH = Math.max(1, Math.round(heightSrc * atlasScale));
+    const atlas = await createImageBitmap(video, x, y, widthSrc, heightSrc, {
+      resizeWidth: atlasW,
+      resizeHeight: atlasH,
       resizeQuality: "pixelated",
       colorSpaceConversion: "none"
     });
-    return { bitmap, width, height, source: { x, y, width: widthSrc, height: heightSrc } };
+    try {
+      return await Promise.all(crops.map(async crop => {
+        const cx = Math.max(0, Math.min(atlasW - 1, Math.round((crop.x - x) * atlasScale)));
+        const cy = Math.max(0, Math.min(atlasH - 1, Math.round((crop.y - y) * atlasScale)));
+        const cw = Math.max(1, Math.min(atlasW - cx, Math.round(crop.width * atlasScale)));
+        const ch = Math.max(1, Math.min(atlasH - cy, Math.round(crop.height * atlasScale)));
+        const scale = Math.min(1, HIGH_QUAD_TILE_SIZE / Math.max(cw, ch));
+        const width = Math.max(1, Math.round(cw * scale));
+        const height = Math.max(1, Math.round(ch * scale));
+        const bitmap = await createImageBitmap(atlas, cx, cy, cw, ch, {
+          resizeWidth: width,
+          resizeHeight: height,
+          resizeQuality: "pixelated",
+          colorSpaceConversion: "none"
+        });
+        return {
+          bitmap,
+          width,
+          height,
+          source: { x: x + cx / atlasScale, y: y + cy / atlasScale, width: cw / atlasScale, height: ch / atlasScale }
+        };
+      }));
+    } finally {
+      atlas.close();
+    }
   }
 
   function postBitmapToWorker(slot, bitmap, source, width, height, retryBinarizer) {
@@ -1398,7 +1462,7 @@
     if (!slots.length) return [];
     const jobs = crops.slice(0, slots.length);
     try {
-      const grabbed = await Promise.all(jobs.map(crop => grabQuadTileBitmap(crop)));
+      const grabbed = await grabQuadTileBitmaps(jobs);
       if (!stream) {
         for (const item of grabbed) try { item.bitmap.close(); } catch (_) {}
         return [];

@@ -4,7 +4,7 @@
 
 对外说明只写 [README.md](README.md)。不要在 README 里放版本号、实测 KB/s、Worker / VideoFrame 细节或本文链接。
 
-**交接时点：** 2026-08-20。网页接收端 **v70**。Android APK 冻结 **0.8.12**。发送端是根目录 `sender/` 打出的单文件 HTML，无独立版本号，以 Pages 上的 `sender/dist/airferry-lite-sender.html` 为准。
+**交接时点：** 2026-08-20。网页接收端 **v71**。Android APK 冻结 **0.8.12**。发送端是根目录 `sender/` 打出的单文件 HTML，无独立版本号，以 Pages 上的 `sender/dist/airferry-lite-sender.html` 为准。
 
 ## 1. 项目一句话
 
@@ -29,11 +29,11 @@
 
 | 部件 | 版本 | 对照 |
 |---|---|---|
-| 网页接收端 | **v70** | 单码路径同 v66/v68。四码每格 720 bitmap；v69 同帧补扫已撤。待 Pages 实测 |
+| 网页接收端 | **v71** | 单码路径同 v66/v68。四码每格 720；每批只从 video 读一次再切图。相机死轨要能重新开始 |
 | Android APK | **0.8.12**（versionCode 27） | 未经明确要求不要改。历史峰值 **0.8.8：60 Hz 四码约 193 KB/s** |
 | 发送端 | AFL2 单文件 HTML | 默认 2331 B · 30 FPS · 单码；四码每码上限 **1273 B** |
 
-诊断第一行必须是 `网页：v70`（改版后变成 `网页：vN`）。
+诊断第一行必须是 `网页：v71`（改版后变成 `网页：vN`）。
 
 ## 4. 实测对照（回归用这些，不要用更旧的数）
 
@@ -48,7 +48,7 @@
 
 这是网页单码必须保住的数。采集掉到约 10、忙时丢弃 0，就是主线程取帧把 `requestVideoFrameCallback` 卡住了。
 
-### 四码（对照仍是 v64；v69 已测，v70 流水线）
+### 四码（对照仍是 v64；v69 / v70 已测，v71 减相机读回）
 
 v64 解完对照（720 packed 整幅 2×2，每格大约只有 360 px）：
 
@@ -64,7 +64,15 @@ v69 Pages 实测（2331 B · 30 FPS · 四码 · 全屏，相机 1920×1440 60 F
 - 放近会快：720 每格比 packed 360 更清晰，但同帧补扫 + 等 4 个 Worker 全部解完，把取帧锁了约 80 ms。
 - 界面「平均」慢慢升高是近 3 秒滚动窗口，不是漏帧。
 
-v70：取帧后立刻放行，有空闲 Worker 就发下一格，取消同帧补扫。单码取帧不要动。诊断第一行 `网页：v70`。
+v70 Pages 实测（同上参数，相机 1920×1440 60 FPS）：
+
+- 采集 **45.6** · 分析 69.4 · 有效 **36.7 FPS**
+- 解码 **40.8 ms** · 取帧 bitmap · 扫描 720 · **格 4** · **每帧 0.57**
+- 忙时丢弃 **388** · 实时 **46.5** · 平均 50.9 · 会话 **44.8 KB/s** · 解块 287/1117
+- 会话回到 v64 附近，有效码仍少于 v64（解码约 40 ms vs 10 ms）。
+- 四码每帧对 video 做 4 次 `createImageBitmap` 后，这台机第一次扫描几秒就会闪退；开始扫描可能没反应，要再点一两次。
+
+v71：四码每批只从 video 读一次并集（最长边格缩到 720，atlas 上限 1440），再从 atlas 切格。流水线不变。死轨 / mute / 1.5 s 无帧则 `closeCamera` 并重新点亮开始按钮。单码取帧不要动。诊断第一行 `网页：v71`。
 
 ### 怎么读诊断
 
@@ -117,9 +125,9 @@ v70：取帧后立刻放行，有空闲 Worker 就发下一格，取消同帧补
 3. 锁定后：`createImageBitmap(video, x, y, widthSrc, heightSrc, { resize 720 })`。
 4. 失败不要 `captureViaCanvas = true`，不要二次 `createImageBitmap` 裁已经拿到的 bitmap。
 
-### 四码（v69 起改取帧，锁格不变）
+### 四码（v69 起改取帧，锁格不变；v71 起一次读回）
 
-1. `decodeQuadFrame`：对每个格子做 video 源矩形裁到 720，4 个 Worker 并行。不要再把整幅 2×2 压成一张 720 packed 再切。
+1. `grabQuadTileBitmaps`：对当前批次格子求并集，**一次** `createImageBitmap(video, …)`，缩到最长格 720（atlas 不超过 1440），再从 atlas 切格发 Worker。不要每格各读一次 video。不要把整幅 2×2 压成一张 720 packed 再切。
 2. 同帧不再二次补扫。有空闲 Worker 就发下一格，取帧锁在 bitmap 发出去之后立刻放开。不要 `dueRelock`，不要周期性重锁整幅 ROI。
 3. `lockQuadSlots`：至少 **2** 个命中才锁；满 4 格冻结。格 4 之后只用 `followContainedQuadHits`。不要 `rebuildQuadFromHits`，不要再跑全图 `BarcodeDetector`。
 4. 保留 `function tileCenter`。格子里存原始框，只在扫描时 `inflateRect` 一次。
@@ -128,9 +136,11 @@ v70：取帧后立刻放行，有空闲 Worker 就发下一格，取消同帧补
 ### 相机
 
 - Android 不要要 120 FPS、不要 `focusMode: continuous`、不要横屏 `1920×1440`（用 `1440×1920`）。
-- 预览还在（`track.readyState === "live"` 或 `video.readyState >= 2` 且有宽高）时，忽略假 `ended`，用 `WeakSet` 保证每条轨只绑一次。死轨时再点开始会重新 `getUserMedia`。
+- `cameraPreviewLive()`：轨 `live`、未 mute、video 在播且有宽高。开始扫描若预览已死，先 `closeCamera` 再 `getUserMedia`。不要只看 `track.readyState === "live"` 就 return。
+- 假 `ended` 只在轨仍 `live` 且未 mute、video 未暂停且有帧时忽略。`WeakSet` 每条轨只绑一次。
+- 扫描中 mute、轨 ended、或 1.5 s 没有 `requestVideoFrameCallback`：`dropDeadCamera()` → `closeCamera()`，重新点亮开始按钮。页面隐藏时不要当死轨。
+- 不要在 `ended` 上自动重试 getUserMedia。
 - 停止：`freezeCameraPreview()` 把最后一帧画到 `#cameraFreeze`，再 `srcObject = null`，避免闪黑。
-- 不要页面隐藏时自动停摄像头，不要在 `ended` 上自动重试 getUserMedia。
 - `finishing` 时 `closeCamera` 不要清布局字段，否则完成后诊断会变成「单码 · 全图」。
 
 ## 7. Android APK 实现（0.8.12，冻结）
@@ -236,7 +246,7 @@ tests/                          npm test：协议 / 安全 / 运行时针
 
 ## 11. 已知缺口
 
-1. **网页四码** v69 确认 720 每格更清晰，但会话掉到 28.8 KB/s。v70 去掉同帧补扫并流水线取帧。对照仍是 v64 的 45.7 KB/s。不要搬 APK 的 ≥3 命中重排。单码取帧不要顺手改。
+1. **网页四码** v70 会话 **44.8 KB/s**，接近 v64 的 45.7，但有效码 36.7 vs 55，解码仍约 40 ms。v71 先稳住相机（每批一次 video 读回）。不要为速度再加同帧补扫或每格各读 video。不要搬 APK 的 ≥3 命中重排。单码取帧不要顺手改。
 2. AFL2 进度只在内存，刷新即丢。IndexedDB 只服务 AFL1。
 3. 文件上限 64 MiB。
 4. 本地 `origin/main` 和 GitHub `main` 的 SHA 偶尔对不齐（API 推送），以 GitHub API 的 ref 为准。
@@ -247,4 +257,4 @@ MIT。第三方见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。只使用 
 
 ---
 
-当前网页 **v70**，APK **0.8.12**。网页单码实时 **65 KB/s**（路径未改）。四码对照仍是 v64 会话 **45.7 KB/s**；v69 实测会话 **28.8 KB/s**。以 Pages 诊断第一行 `网页：v70` 为准。
+当前网页 **v71**，APK **0.8.12**。网页单码实时 **65 KB/s**（路径未改）。四码对照仍是 v64 会话 **45.7 KB/s**；v70 实测会话 **44.8 KB/s**。以 Pages 诊断第一行 `网页：v71` 为准。

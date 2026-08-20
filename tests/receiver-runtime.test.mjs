@@ -31,6 +31,8 @@ const protocol = {
 };
 
 const track = {
+  readyState: "live",
+  muted: false,
   stop() {},
   addEventListener(type, callback) {
     if (type === "ended") trackEnded = callback;
@@ -181,6 +183,8 @@ assert.equal(parseCalls, 2, "an already received data frame was parsed again");
 assert.equal(widthWrites + heightWrites, writesAfterData, "canvas dimensions were rewritten for an unchanged frame size");
 assert.equal(typeof trackEnded, "function", "camera track interruption was not monitored");
 
+video.paused = false;
+video.ended = false;
 trackEnded();
 assert.notEqual(video.srcObject, null, "ended must not close the camera while the preview still has a frame");
 video.readyState = 0;
