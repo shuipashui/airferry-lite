@@ -62,6 +62,12 @@
 - 界面「平均」是近 3 秒滚动；诊断里另有整段会话平均。会话平均低于实时，是因为锁格 / 锁 ROI 之前的瞄准段也算进去。
 - 理论速度 = `每码字节 × 码数 × FPS`，喷泉码大约再加 15% 帧。四码 30 FPS、每码 1253 B 时屏幕上限约 `1253 × 4 × 30 ≈ 147 KB/s`。网页四码还远低于这个上限，卡在每相机帧大约只打中 1 个码。
 
+### APK（0.8.12，同一台红米）
+
+- CameraX 分析流约 **60 FPS**（最新帧）。120/240/480 是高速录像管道，不能给 ImageAnalysis。
+- 诊断里「每帧」是每相机帧打中的码数，0.8.x 四码大约 **2.6–3+**。网页同一指标大约 1.2，不要拿来直接比。
+- 历史峰值 **0.8.8：60 Hz 四码约 193 KB/s**。当前冻结 **0.8.12**，不要为网页实验去改。
+
 ## 5. 发送端实现
 
 源码：`sender/app.js`、`sender/styles.css`、`sender/template.html`。产物：`sender/dist/airferry-lite-sender.html`。CI 要求产物可复现，改源码后必须 `node sender/build.mjs`。
@@ -116,21 +122,67 @@
 - 不要页面隐藏时自动停摄像头，不要在 `ended` 上自动重试 getUserMedia。
 - `finishing` 时 `closeCamera` 不要清布局字段，否则完成后诊断会变成「单码 · 全图」。
 
-## 7. 架构
+## 7. Android APK 实现（0.8.12，冻结）
+
+源码：`android-receiver/app/src/main/java/com/airferrylite/receiver/`。构建：`android-receiver/build-local.ps1`，Java 17，SDK 35。`versionName 0.8.12` / `versionCode 27`。未经明确要求不要改。
+
+APK 比网页快，主要不是锁格算法更聪明，而是：**同一帧 Y 平面上原生 zxing-cpp 能扫多个码，CameraX 按最新帧丢旧帧，没有浏览器 `createImageBitmap` 整帧读回。** 原版 [AirFerry](https://github.com/UR-SillyB/AirFerry) 只作思路参考。网页不要直接搬 APK 的四码重排。
+
+### 相机
+
+- Preview + `ImageAnalysis`。分析流目标 **1920×1440**、`YUV_420_888`、`STRATEGY_KEEP_ONLY_LATEST`。
+- 优先固定 AE 档 60 / 90 / 120；这台红米分析流实际大约 60 FPS。诊断会单独列出「高速录像能力」，那条管道不能拿来扫码。
+- 网页端不要对 Android `getUserMedia` 要 120 FPS 或横屏 1920×1440；APK 的 1920×1440 是 CameraX 分析分辨率，和网页预览约束不是一回事。
+
+### 解码
+
+- `NativeQrDecoder`：zxing-cpp JNI **`readYBuffer`**，直接吃 CameraX Y 平面，**rotation 0**。Kotlin 包装的 `ImageProxy.read()` 会旋转，这台机上已经证明不能用。
+- `tryHarder` / `tryRotate` / `tryInvert` / `tryDownscale` 全关。先 `LOCAL_AVERAGE`，空再 `GLOBAL_HISTOGRAM`。
+- `pixelStride == 1` 且 direct buffer 时零拷贝裁区域；否则打包装进 direct `ByteBuffer`。
+- `LumaScaler` 是旧 Java ZXing 缩图残留，**热路径不用**。不要为了 cpp 再开一轮主线程缩 Y。
+
+### 单码 / 四码怎么切换
+
+帧头 AFL2 `0x0d` / `0x0f` 表示四码布局；或者一帧里 ≥2 个传输码，就锁多码。否则确认单码，`maxSymbols = 1`，只扫跟踪 ROI（没有 ROI 则画面中心方块）。未确认前 `maxSymbols = 4`，避免一上来就把四码当成单码。
+
+### 四码扫描（`QrFrameAnalyzer`）
+
+同一张 `ImageProxy` 上，4 个 `NativeQrDecoder` + 固定线程池：
+
+1. 已有 `trackedTiles`：四个裁块**并行**扫，命中中心落在格子里就算该格有了。
+2. 还不满 4：对当前 ROI 做 **18% 重叠象限**串行补扫（码很少对齐相机中线）。
+3. 仍不满：把空的独占象限放大 1.28×，开 binarizer 重试。
+4. **≥3 个命中**时 `ScanLayout.tilesFromHits` 按 midX / midY 排成 2×2，作为下一帧的 `trackedTiles`。
+
+ROI：4 个命中用点包围盒 ×1.40；3 个命中和上一帧并集；更少则退回中心方块。连续空扫会胀 ROI，满 8 次 miss 放弃跟踪。连续 2 次空扫清掉 `trackedTiles`。
+
+**不要把第 4 步搬进网页。** 网页 WASM 每相机帧常常只有 1 个命中，按 mid 重排会把还没锁住的格子打乱，诊断里没有「格 4」。网页继续用 `lockQuadSlots`（≥2 命中）+ 格 4 后 `followContainedQuadHits`。
+
+### 组包
+
+- `HighSpeedAssembler`：AFL2 LT + gzip 解压 + SHA-256。进度只在内存，杀进程即丢。
+- `TransferAssembler`：旧 AFL1 文本帧。
+- 文件上限同样 64 MiB。
+
+## 8. 架构
 
 ```text
 sender/                         浏览器发送：测刷新率、lookahead、画 QR
   dist/airferry-lite-sender.html  提交用的单文件产物
 index.html + app.js + sw.js     GitHub Pages 网页接收端（根目录即线上）
 web-receiver/                   根目录接收端镜像，必须 byte-identical
-android-receiver/               Kotlin + CameraX + zxing-cpp
+android-receiver/               Kotlin + CameraX + zxing-cpp（0.8.12 冻结）
+  QrFrameAnalyzer.kt            最新帧、四格并行、重叠象限补扫
+  NativeQrDecoder.kt            Y 平面 readYBuffer，rotation 0
+  ScanLayout.kt                 ROI / tilesFromHits（网页不要搬）
+  HighSpeedAssembler.kt         AFL2 LT + gzip
 shared/ + highspeed-protocol.js AFL1 / AFL2
 vendor/decimen/                 WASM Worker 与 zxing wasm
 third_party/decimen-v0.3/       MIT 源，不要混入后续 AGPL Decimen
 tests/                          npm test：协议 / 安全 / 运行时针
 ```
 
-## 8. 不要做（已验证会掉速或黑屏）
+## 9. 不要做（已验证会掉速或黑屏）
 
 测试针在 `tests/receiver-safety.test.mjs`，不要为了新功能删掉这些断言，除非行为真的改了并有实测。
 
@@ -152,6 +204,7 @@ tests/                          npm test：协议 / 安全 / 运行时针
 - 不要按相机中线切 2×2，不要先把整幅 2×2 缩到 720 再切，不要把并排两个码当成完整 2×2。
 - 不要用稀疏 WASM 命中 `rebuildQuadFromHits` 重排 2×2（会打乱未锁住的格子，诊断里没有格 4）。
 - 网页不要搬 APK 的「≥3 命中按 midX/midY 重排」：WASM 每帧常常只有 1 个命中。
+- APK 不要改回 `ImageProxy.read()`（会旋转）。不要把高速录像 session 接到 ImageAnalysis。不要把已不用的 `LumaScaler` 接回热路径。
 
 **其它**
 
@@ -160,7 +213,7 @@ tests/                          npm test：协议 / 安全 / 运行时针
 - 不要 60 Hz 屏上 120 FPS 发送。
 - 不要 commit `.env`、密钥、`.tools/`。不要改 git config，不要 `--force` 推 `main`。`protocol.js` 若只有 CRLF 脏改，不要提交。
 
-## 9. 怎么改网页、怎么上线
+## 10. 怎么改网页、怎么上线
 
 1. 改根目录 `app.js` / `index.html` / `sw.js`（发送端则改 `sender/` 再 `node sender/build.mjs`）。
 2. 接收端：升 `RECEIVER_BUILD`、标题、`CACHE_NAME`、**`index.html` 里 `app.js?v=`**、`tests/receiver-safety.test.mjs` 里的版本针。不要再用 `sessionStorage === RECEIVER_BUILD` 跳过刷新。
@@ -169,12 +222,6 @@ tests/                          npm test：协议 / 安全 / 运行时针
 5. commit 后 `git push origin HEAD`。GitHub 不通时对当前 `main` 做 tree 补丁，不要假设本地 `origin/main` 等于 GitHub。
 6. `gh api repos/shuipashui/airferry-lite/pages/builds` 等到 `built`。
 7. 拉 `https://shuipashui.github.io/airferry-lite/app.js?v=N` 确认 `RECEIVER_BUILD`。Chrome 若一直停在旧版，是旧 Service Worker；新 SW 激活时会强制打开页面。仍不对就清掉该站数据。
-
-## 10. Android
-
-- 构建：`android-receiver/build-local.ps1`，Java 17，SDK 35。
-- 分析流目标 1920×1440、最新帧。不要为网页实验去改 0.8.12。
-- 原版 [AirFerry](https://github.com/UR-SillyB/AirFerry) 只作思路参考，不要把其扫描策略直接搬进网页端。
 
 ## 11. 已知缺口
 
@@ -189,4 +236,4 @@ MIT。第三方见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。只使用 
 
 ---
 
-当前网页 **v68**，APK **0.8.12**。单码对照：ROI bitmap、采集 52、实时 **65 KB/s**。四码对照：格 4、解完、会话 **45.7 KB/s**。以 Pages 诊断第一行 `网页：v68` 为准。
+当前网页 **v68**，APK **0.8.12**。网页单码实时 **65 KB/s**、四码会话 **45.7 KB/s**。APK 四码峰值约 **193 KB/s**（0.8.8）。以 Pages 诊断第一行 `网页：v68` 为准。
