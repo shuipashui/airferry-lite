@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v69";
+  const RECEIVER_BUILD = "v70";
   if ("serviceWorker" in navigator) {
     let swRefreshing = false;
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
@@ -1371,11 +1371,30 @@
     });
   }
 
-  async function scanQuadCrops(crops, retryBinarizer) {
+  function idleHighWorkerSlots() {
     const slots = [];
-    for (let index = 0; index < highWorkers.length && slots.length < crops.length; index += 1) {
+    for (let index = 0; index < highWorkers.length; index += 1) {
       if (!highWorkerBusy[index] && highWorkerReady[index]) slots.push(index);
     }
+    return slots;
+  }
+
+  function pickQuadCrops(count) {
+    const inferred = inferMissingQuadTiles(highTrackedTiles).filter(Boolean).map(tile => clampScanRegion(inflateRect(tile, HIGH_TILE_PAD)));
+    const region = inferred.length >= 3 ? unionScanCrops(inferred) : chooseQuadRegion();
+    const all = inferred.length >= 3 ? inferred : overlappingQuadrants(region);
+    if (!all.length || count <= 0) return { crops: [], region };
+    if (all.length <= count) return { crops: all, region };
+    const crops = [];
+    for (let index = 0; index < count; index += 1) {
+      crops.push(all[highQuadCursor % all.length]);
+      highQuadCursor += 1;
+    }
+    return { crops, region };
+  }
+
+  async function scanQuadCrops(crops, retryBinarizer) {
+    const slots = idleHighWorkerSlots();
     if (!slots.length) return [];
     const jobs = crops.slice(0, slots.length);
     try {
@@ -1384,9 +1403,11 @@
         for (const item of grabbed) try { item.bitmap.close(); } catch (_) {}
         return [];
       }
-      const parts = await Promise.all(grabbed.map((item, index) =>
+      const pending = grabbed.map((item, index) =>
         postBitmapToWorker(slots[index], item.bitmap, item.source, item.width, item.height, retryBinarizer)
-      ));
+      );
+      highGrabInFlight = false;
+      const parts = await Promise.all(pending);
       const hits = [];
       for (const list of parts) hits.push(...list);
       return hits;
@@ -1398,38 +1419,21 @@
   }
 
   function decodeQuadFrame() {
-    if (highGrabInFlight || highWorkerBusy.some(Boolean)) {
+    if (highGrabInFlight) {
       workerBusyDrops += 1;
       return;
     }
-    if (!highWorkerReady.some(Boolean)) return;
+    const slots = idleHighWorkerSlots();
+    if (!slots.length) {
+      workerBusyDrops += 1;
+      return;
+    }
     highGrabInFlight = true;
     void (async () => {
       try {
-        const inferred = inferMissingQuadTiles(highTrackedTiles).filter(Boolean).map(tile => clampScanRegion(inflateRect(tile, HIGH_TILE_PAD)));
-        const region = inferred.length >= 3 ? unionScanCrops(inferred) : chooseQuadRegion();
-        const hits = [];
-        const seen = new Set();
-        const add = list => {
-          for (const hit of list || []) {
-            const key = transferHitKey(hit);
-            if (key) {
-              if (seen.has(key)) continue;
-              seen.add(key);
-            }
-            hits.push(hit);
-          }
-        };
-        const crops = inferred.length >= 3 ? inferred : overlappingQuadrants(region);
-        add(await scanQuadCrops(crops, false));
-        if (transferCount(hits) < 4) {
-          const exclusive = exclusiveQuadrants(region);
-          const retries = exclusive.map(tile => {
-            if (tileCovered(tile, hits)) return null;
-            return clampScanRegion(inflateRect(tile, 1.28));
-          }).filter(Boolean);
-          if (retries.length) add(await scanQuadCrops(retries, true));
-        }
+        const { crops } = pickQuadCrops(slots.length);
+        if (!crops.length) return;
+        const hits = await scanQuadCrops(crops, false);
         rememberQuadHits(hits);
       } finally {
         highGrabInFlight = false;
