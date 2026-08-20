@@ -29,6 +29,7 @@ assert.ok(senderStyles.includes("96vmin") || senderStyles.includes("100vmin"), "
 const senderApp = fs.readFileSync(new URL("../sender/app.js", import.meta.url), "utf8");
 assert.ok(senderApp.includes("QUIET_MODULES = 2"), "single-code QR quiet zone should stay tight so modules can use the canvas");
 assert.ok(senderApp.includes("QUAD_QUIET_MODULES = 4"), "quad codes need a spec quiet zone so adjacent finders do not merge");
-assert.ok(senderApp.includes("size * 0.04"), "quad codes need extra white gap between the four tiles");
+assert.ok(senderStyles.includes("body.quad-send #qrCanvas") && senderStyles.includes("96vmin"), "quad file QR must use the original 96vmin canvas");
+assert.ok(!senderApp.includes("size * 0.04"), "quad tiles should fill the original 2x2 canvas instead of shrinking for an extra gutter");
 assert.ok(senderApp.includes("offsetY, side, side)"), "file QR must fill the canvas instead of leaving unused white from integer cell size");
 console.log("QR density tests ok");

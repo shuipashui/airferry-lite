@@ -148,6 +148,12 @@
     progressBar.style.width = "0%";
     overlay.classList.remove("hidden");
     lastPatterns = null;
+    document.documentElement.classList.remove("quad-send");
+    document.body.classList.remove("quad-send");
+    const viewer = canvas.closest(".viewer");
+    if (viewer) viewer.classList.remove("quad");
+    canvas.style.width = "";
+    canvas.style.height = "";
     clearCanvas();
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
   });
@@ -332,6 +338,21 @@
   function syncCanvasSize() {
     const viewer = canvas.closest(".viewer") || canvas.parentElement;
     if (!viewer) return;
+    const quad = lastPatterns && lastPatterns.length === 4;
+    document.documentElement.classList.toggle("quad-send", quad);
+    document.body.classList.toggle("quad-send", quad);
+    viewer.classList.toggle("quad", quad);
+    if (quad) {
+      canvas.style.width = "";
+      canvas.style.height = "";
+      const rect = canvas.getBoundingClientRect();
+      const side = Math.max(256, Math.floor(Math.min(rect.width, rect.height)));
+      if (canvas.width !== side || canvas.height !== side) {
+        canvas.width = side;
+        canvas.height = side;
+      }
+      return;
+    }
     const style = getComputedStyle(viewer);
     const padX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
     const padY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
@@ -359,22 +380,13 @@
       context.fillRect(0, 0, size, size);
       const quad = patterns.length === 4;
       const columns = quad ? 2 : 1;
-      const gap = quad ? Math.max(16, Math.round(size * 0.04)) : 0;
-      const tileWidth = (size - gap) / columns;
-      const tileHeight = (size - gap) / columns;
+      const tileWidth = size / columns;
+      const tileHeight = size / columns;
       const quiet = quad ? QUAD_QUIET_MODULES : QUIET_MODULES;
       patterns.forEach((pattern, index) => {
         const col = index % columns;
         const row = Math.floor(index / columns);
-        drawPatternTile(
-          context,
-          pattern,
-          col * (tileWidth + gap),
-          row * (tileHeight + gap),
-          tileWidth,
-          tileHeight,
-          quiet
-        );
+        drawPatternTile(context, pattern, col * tileWidth, row * tileHeight, tileWidth, tileHeight, quiet);
       });
     } catch (error) {
       stop();
@@ -461,8 +473,7 @@
     const frameRate = Number(fps.value);
     const header = H?.HEADER_LEN || HEADER_LEN;
     const quiet = codes === 4 ? QUAD_QUIET_MODULES : QUIET_MODULES;
-    const gap = codes === 4 ? Math.max(16, Math.round(canvas.width * 0.04)) : 0;
-    const cell = ((canvas.width - gap) / (codes === 4 ? 2 : 1)) / (qrModules(bytes) + quiet * 2);
+    const cell = (canvas.width / (codes === 4 ? 2 : 1)) / (qrModules(bytes) + quiet * 2);
     return {
       codes,
       bytes,
