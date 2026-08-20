@@ -13,7 +13,7 @@
   const fullscreenBtn = el("fullscreenBtn");
   const canvas = el("qrCanvas");
   const overlay = el("overlay");
-  const statusText = el("statusText");
+  const compressText = el("compressText");
   const sessionText = el("sessionText");
   const frameText = el("frameText");
   const progressBar = el("progressBar");
@@ -51,6 +51,7 @@
     prepareBtn.disabled = !file;
     resetBtn.disabled = !file;
     statusText.textContent = file ? "文件已选择" : "等待文件";
+    if (compressText) compressText.textContent = "—";
   }
 
   fileInput.addEventListener("change", () => selectFile(fileInput.files[0]));
@@ -110,8 +111,15 @@
       drawScreen(highQueue[0].patterns);
       overlay.classList.add("hidden");
       renderRateHint();
-      const rate = currentLayout();
-      statusText.textContent = "高速流已生成 · " + (codesPerScreen === 4 ? "四码，每码 " + effectiveFrameBytes + " B " : "单码 ") + (prepared.encoding === "gzip" ? "已压缩 " + Math.max(0, Math.round(prepared.savedBytes / prepared.originalSize * 100)) + "% · " : "未压缩 · ") + "理论 " + formatRate(rate.screen);
+      const gzip = packed.compression === "gzip";
+      const savedPct = gzip ? Math.max(0, Math.round(prepared.savedBytes / prepared.originalSize * 100)) : 0;
+      if (compressText) {
+        compressText.textContent = gzip
+          ? "gzip 已压缩 " + savedPct + "% · 传 " + formatBytes(packed.transmittedSize)
+          : "未压缩 · 原文件发送";
+      }
+      fileLabel.textContent = file.name + " · " + formatBytes(file.size) + (gzip ? " · 已压缩 " + savedPct + "%" : " · 未压缩");
+      statusText.textContent = "二维码流已生成，可开始播放";
       playBtn.disabled = false;
       playBtn.textContent = "开始播放";
       resetBtn.disabled = false;
@@ -134,6 +142,7 @@
     if (fullscreenBtn) fullscreenBtn.disabled = true;
     sessionText.textContent = "—";
     frameText.textContent = "—";
+    if (compressText) compressText.textContent = "—";
     progressBar.style.width = "0%";
     overlay.classList.remove("hidden");
     lastPatterns = null;

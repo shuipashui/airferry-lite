@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v67";
+  const RECEIVER_BUILD = "v68";
   if ("serviceWorker" in navigator) {
     let swRefreshing = false;
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
@@ -17,6 +17,7 @@
   const Storage = window.AirFerryLiteStorage;
   const utf8Decoder = new TextDecoder();
   const video = document.getElementById("video");
+  const cameraFreeze = document.getElementById("cameraFreeze");
   const canvas = document.getElementById("scanCanvas");
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   const quadPackCanvas = document.createElement("canvas");
@@ -297,6 +298,7 @@
       }
       cameraEndedWhileStarting = false;
       bindCameraEnded(stream);
+      if (cameraFreeze) cameraFreeze.hidden = true;
       startHighSpeedWorkers();
       if (highWorkers.length) {
         lastDecodeBackend = "AFL2 WASM Worker";
@@ -356,6 +358,17 @@
     } catch (_) {}
   }
 
+  function freezeCameraPreview() {
+    if (!cameraFreeze || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
+    try {
+      if (cameraFreeze.width !== video.videoWidth) cameraFreeze.width = video.videoWidth;
+      if (cameraFreeze.height !== video.videoHeight) cameraFreeze.height = video.videoHeight;
+      const freezeCtx = cameraFreeze.getContext("2d", { alpha: false });
+      freezeCtx.drawImage(video, 0, 0);
+      cameraFreeze.hidden = false;
+    } catch (_) {}
+  }
+
   function closeCamera() {
     if (hideStopTimer) {
       clearTimeout(hideStopTimer);
@@ -367,6 +380,7 @@
       video.cancelVideoFrameCallback(scanFrameCallback);
     }
     scanFrameCallback = 0;
+    freezeCameraPreview();
     stopHighSpeedWorkers();
     if (stream) stream.getTracks().forEach((track) => track.stop());
     stream = null;
