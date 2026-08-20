@@ -16,8 +16,10 @@ import android.util.Range
 import android.util.Size
 import android.view.Surface
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.ProgressBar
 import android.widget.TextView
+import com.google.android.material.button.MaterialButtonToggleGroup
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -26,6 +28,7 @@ import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.Camera2Interop
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
@@ -38,15 +41,17 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
+@OptIn(ExperimentalCamera2Interop::class)
 class MainActivity : AppCompatActivity() {
     private lateinit var previewView: PreviewView
     private lateinit var statusText: TextView
     private lateinit var fileText: TextView
     private lateinit var speedText: TextView
-    private lateinit var scanText: TextView
     private lateinit var missingText: TextView
     private lateinit var diagnosticsText: TextView
     private lateinit var progress: ProgressBar
+    private lateinit var saveButton: Button
+    private lateinit var fpsGroup: MaterialButtonToggleGroup
     private lateinit var frameAnalyzer: QrFrameAnalyzer
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var protocolExecutor: ExecutorService
@@ -54,7 +59,6 @@ class MainActivity : AppCompatActivity() {
     private val highSpeedAssembler = HighSpeedAssembler()
     private var cameraProvider: ProcessCameraProvider? = null
     private var cameraStarted = false
-    private var lastSavedSession: String? = null
     private var lastHighFrameCount = 0
     private var lastHighUiAt = 0L
     private var speedWindowStartedAt = 0L
@@ -85,6 +89,14 @@ class MainActivity : AppCompatActivity() {
     private var highSpeedCameraFpsLabel = "未开放"
     @Volatile private var latestSpeedLabel = "实时 — · 平均 —"
     @Volatile private var highSpeedSessionActive = false
+    private var requestedFps = 60
+    private var diagnosticsExpanded = false
+    private var fullDiagnostics = ""
+    private var pendingSave: PendingSave? = null
+    private var pendingSession: String? = null
+    private var bindingCamera = false
+
+    private data class PendingSave(val name: String, val mime: String, val bytes: ByteArray)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -105,10 +117,31 @@ class MainActivity : AppCompatActivity() {
         statusText = findViewById(R.id.statusText)
         fileText = findViewById(R.id.fileText)
         speedText = findViewById(R.id.speedText)
-        scanText = findViewById(R.id.scanText)
         missingText = findViewById(R.id.missingText)
         diagnosticsText = findViewById(R.id.diagnosticsText)
         progress = findViewById(R.id.progress)
+        saveButton = findViewById(R.id.saveButton)
+        fpsGroup = findViewById(R.id.fpsGroup)
+        requestedFps = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getInt(PREF_FPS, 60).let {
+            if (it == 30 || it == 120) it else 60
+        }
+        fpsGroup.check(
+            when (requestedFps) {
+                30 -> R.id.fps30
+                120 -> R.id.fps120
+                else -> R.id.fps60
+            }
+        )
+        fpsGroup.addOnButtonCheckedListener { _, checkedId, isChecked ->
+            if (!isChecked) return@addOnButtonCheckedListener
+            val fps = when (checkedId) {
+                R.id.fps30 -> 30
+                R.id.fps120 -> 120
+                else -> 60
+            }
+            if (fps != requestedFps) setRequestedFps(fps)
+        }
+        findViewById<FrameLayout>(R.id.progressHit).setOnClickListener { toggleDiagnostics() }
         cameraExecutor = Executors.newSingleThreadExecutor()
         protocolExecutor = Executors.newSingleThreadExecutor()
         frameAnalyzer = QrFrameAnalyzer(
@@ -135,20 +168,13 @@ class MainActivity : AppCompatActivity() {
             onStats = { stats ->
                 ContextCompat.getMainExecutor(this).execute {
                     lastStats = stats
-                    scanText.text = "采集 %.0f · 分析 %.0f · 有效码 %.0f FPS · 丢帧 %d · %d×%d".format(
-                        stats.captureFps,
-                        stats.analysisFps,
-                        stats.validQrFps,
-                        stats.droppedFrames,
-                        stats.width,
-                        stats.height
-                    )
                     renderDiagnostics()
                 }
             }
         )
         findViewById<Button>(R.id.resetButton).setOnClickListener { resetTransfer() }
         findViewById<Button>(R.id.copyDiagnosticsButton).setOnClickListener { copyDiagnostics() }
+        saveButton.setOnClickListener { savePendingFile() }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), CAMERA_PERMISSION_REQUEST)
         } else {
@@ -171,38 +197,66 @@ class MainActivity : AppCompatActivity() {
         val providerFuture = ProcessCameraProvider.getInstance(this)
         providerFuture.addListener({
             try {
-                val provider = providerFuture.get()
-                cameraProvider = provider
-                val rotation = previewView.display?.rotation ?: Surface.ROTATION_0
-                val preview = Preview.Builder().setTargetRotation(rotation).build().also {
-                    it.surfaceProvider = previewView.surfaceProvider
-                }
-                val fpsRanges = cameraFpsRanges(provider)
-                availableCameraFpsLabel = fpsRanges.joinToString(",") { "${it.lower}-${it.upper}" }.ifBlank { "未知" }
-                highSpeedCameraFpsLabel = cameraHighSpeedFpsRanges(provider)
-                val preferredFps = preferredCameraFpsRange(fpsRanges)
-                val fallbackFps = fallbackCameraFpsRange(fpsRanges, preferredFps)
-                var activeFps = preferredFps
-                var analysis = buildAnalysis(rotation, activeFps)
-                analysis.setAnalyzer(cameraExecutor, frameAnalyzer)
-                provider.unbindAll()
-                try {
-                    provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
-                } catch (preferredError: Exception) {
-                    if (fallbackFps == null || fallbackFps == preferredFps) throw preferredError
-                    provider.unbindAll()
-                    activeFps = fallbackFps
-                    analysis = buildAnalysis(rotation, activeFps)
-                    analysis.setAnalyzer(cameraExecutor, frameAnalyzer)
-                    provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
-                }
-                activeCameraFps = activeFps
-                statusText.text = activeFps?.let { "正在高速扫描 · 相机 ${it.lower}-${it.upper} FPS" } ?: "正在高速扫描"
+                cameraProvider = providerFuture.get()
+                bindCamera()
             } catch (error: Exception) {
                 cameraStarted = false
                 statusText.text = "摄像头启动失败：${error.message ?: "未知错误"}"
             }
         }, ContextCompat.getMainExecutor(this))
+    }
+
+    private fun setRequestedFps(fps: Int) {
+        requestedFps = if (fps == 30 || fps == 120) fps else 60
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putInt(PREF_FPS, requestedFps).apply()
+        if (cameraProvider != null) bindCamera()
+        else statusText.text = "已选 ${requestedFps} FPS，打开相机后生效"
+    }
+
+    private fun bindCamera() {
+        val provider = cameraProvider ?: return
+        if (isDestroyed || bindingCamera) return
+        bindingCamera = true
+        try {
+            val rotation = previewView.display?.rotation ?: Surface.ROTATION_0
+            val preview = Preview.Builder().setTargetRotation(rotation).build().also {
+                it.surfaceProvider = previewView.surfaceProvider
+            }
+            val fpsRanges = cameraFpsRanges(provider)
+            availableCameraFpsLabel = fpsRanges.joinToString(",") { "${it.lower}-${it.upper}" }.ifBlank { "未知" }
+            highSpeedCameraFpsLabel = cameraHighSpeedFpsRanges(provider)
+            val preferredFps = pickFpsRange(fpsRanges, requestedFps)
+            val fallbackFps = pickFpsRange(fpsRanges, if (requestedFps == 120) 60 else 30)
+            var activeFps = preferredFps
+            var fellBack = false
+            var analysis = buildAnalysis(rotation, activeFps)
+            analysis.setAnalyzer(cameraExecutor, frameAnalyzer)
+            provider.unbindAll()
+            try {
+                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+            } catch (preferredError: Exception) {
+                if (fallbackFps == null || fallbackFps == preferredFps) throw preferredError
+                provider.unbindAll()
+                activeFps = fallbackFps
+                analysis = buildAnalysis(rotation, activeFps)
+                analysis.setAnalyzer(cameraExecutor, frameAnalyzer)
+                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                fellBack = true
+            }
+            activeCameraFps = activeFps
+            val boundFps = activeFps
+            statusText.text = if (boundFps != null && (fellBack || requestedFps !in boundFps.lower..boundFps.upper)) {
+                "相机达不到 ${requestedFps} FPS，已落到 ${boundFps.lower}-${boundFps.upper}"
+            } else {
+                boundFps?.let { "正在高速扫描 · 相机 ${it.lower}-${it.upper} FPS" } ?: "正在高速扫描"
+            }
+            renderDiagnostics()
+        } catch (error: Exception) {
+            cameraStarted = false
+            statusText.text = "摄像头启动失败：${error.message ?: "未知错误"}"
+        } finally {
+            bindingCamera = false
+        }
     }
 
     private fun cameraFpsRanges(provider: ProcessCameraProvider): List<Range<Int>> {
@@ -223,18 +277,12 @@ class MainActivity : AppCompatActivity() {
         return ranges.joinToString(",") { "${it.lower}-${it.upper}" } + if (sizes.isBlank()) "" else " @ $sizes"
     }
 
-    private fun preferredCameraFpsRange(ranges: List<Range<Int>>): Range<Int>? {
-        return listOf(120, 90, 60).asSequence()
-            .mapNotNull { target -> ranges.firstOrNull { it.lower == target && it.upper == target } }
-            .firstOrNull()
-            ?: ranges.filter { it.lower <= 120 && it.upper >= 60 }
-                .maxWithOrNull(compareBy<Range<Int>> { it.upper }.thenBy { it.lower })
+    private fun pickFpsRange(ranges: List<Range<Int>>, target: Int): Range<Int>? {
+        return ranges.firstOrNull { it.lower == target && it.upper == target }
+            ?: ranges.filter { target in it.lower..it.upper }.minWithOrNull(compareBy { it.upper - it.lower })
+            ?: ranges.filter { it.upper >= target }.minWithOrNull(compareBy { kotlin.math.abs(it.upper - target) })
             ?: ranges.maxWithOrNull(compareBy<Range<Int>> { it.upper }.thenBy { it.lower })
     }
-
-    private fun fallbackCameraFpsRange(ranges: List<Range<Int>>, preferred: Range<Int>?): Range<Int>? =
-        ranges.firstOrNull { it.lower == 30 && it.upper == 60 }
-            ?: ranges.filter { it != preferred }.maxWithOrNull(compareBy<Range<Int>> { it.upper }.thenBy { it.lower })
 
     private fun buildAnalysis(rotation: Int, fpsRange: Range<Int>?): ImageAnalysis {
         val builder = ImageAnalysis.Builder()
@@ -276,9 +324,9 @@ class MainActivity : AppCompatActivity() {
         val update = assembler.accept(text)
         updateUi(update)
         val meta = update.meta
-        if (update.complete != null && meta != null && lastSavedSession != meta.session) {
-            lastSavedSession = meta.session
-            saveFile(meta, update.complete)
+        val complete = update.complete
+        if (complete != null && meta != null) {
+            offerCompletedFile(meta.session, meta.name, meta.mime, complete)
         }
     }
 
@@ -318,20 +366,13 @@ class MainActivity : AppCompatActivity() {
             }
             statusText.text = when {
                 update.error != null -> update.error
-                file != null -> "接收完成，正在保存"
+                file != null -> "接收完成，点「保存文件」"
                 else -> "高速接收中：$percent%"
             }
             renderDiagnostics()
         }
-        if (file != null && update.session != null && lastSavedSession != "high:${update.session}") {
-            lastSavedSession = "high:${update.session}"
-            val savedName = file.name
-            val savedMime = file.mime
-            val savedBytes = file.bytes
-            val saved = saveFile(savedName, savedMime, savedBytes)
-            ContextCompat.getMainExecutor(this).execute {
-                statusText.text = saved?.let { "已保存到 Download/AirFerry Lite/$it" } ?: "保存失败"
-            }
+        if (file != null && update.session != null) {
+            offerCompletedFile("high:${update.session}", file.name, file.mime, file.bytes)
         }
     }
 
@@ -368,7 +409,7 @@ class MainActivity : AppCompatActivity() {
         progress.progress = percent
         missingText.text = "缺失片段：" + assembler.missing().take(40).joinToString(",").ifBlank { "无" }
         statusText.text = when {
-            update.complete != null -> "接收完成，正在保存"
+            update.complete != null -> "接收完成，点「保存文件」"
             update.error != null -> update.error
             meta != null -> "兼容接收中：$percent%"
             else -> statusText.text
@@ -380,7 +421,9 @@ class MainActivity : AppCompatActivity() {
         protocolExecutor.execute { highSpeedAssembler.reset() }
         highSpeedSessionActive = false
         frameAnalyzer.resetSession()
-        lastSavedSession = null
+        pendingSave = null
+        pendingSession = null
+        saveButton.isEnabled = false
         lastHighUiAt = 0
         resetSpeed()
         decodedQrCount.set(0)
@@ -398,8 +441,7 @@ class MainActivity : AppCompatActivity() {
         updateUi(TransferUpdate(null, 0, 0))
         fileText.text = "等待文件"
         progress.progress = 0
-        speedText.text = "实时 — · 平均 —"
-        scanText.text = "扫描性能：等待取帧"
+        speedText.text = "实时 — · 平均 — · 点进度条看诊断"
         missingText.text = "缺失片段：—"
         statusText.text = "正在高速扫描"
         renderDiagnostics()
@@ -410,9 +452,9 @@ class MainActivity : AppCompatActivity() {
         val stats = lastStats
         val now = SystemClock.elapsedRealtime()
         val highAge = if (highLastFrameAt == 0L) "—" else "${(now - highLastFrameAt).coerceAtLeast(0)} ms"
-        diagnosticsText.text = listOf(
+        val lines = listOf(
             "设备：${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} · App ${BuildConfig.VERSION_NAME}",
-            "相机：${stats?.width ?: "?"}×${stats?.height ?: "?"} · 采集 ${stats?.captureFps?.let { "%.1f".format(it) } ?: "?"} FPS · 目标 ${preferredFpsLabel()}",
+            "相机：${stats?.width ?: "?"}×${stats?.height ?: "?"} · 采集 ${stats?.captureFps?.let { "%.1f".format(it) } ?: "?"} FPS · 选择 $requestedFps · 目标 ${preferredFpsLabel()}",
             "分析流 FPS：$availableCameraFpsLabel",
             "高速录像能力：$highSpeedCameraFpsLabel（CameraX 分析流不可直接使用）",
             "分析：提交 ${stats?.submittedFrames ?: 0} · 完成 ${stats?.analysisFps?.let { "%.1f".format(it) } ?: "0"} FPS · 丢帧 ${stats?.droppedFrames ?: 0}",
@@ -423,7 +465,45 @@ class MainActivity : AppCompatActivity() {
             "高速会话：最近帧 ${highAge} · 接收字节 ${formatBytes(highBytesReceived)} · 速度 ${latestSpeedLabel} · 会话 ${formatRate(sessionAverageBytesPerSecond)}",
             "无效样本：$invalidFrameSample",
             "设备标识：${Build.FINGERPRINT}"
-        ).joinToString("\n")
+        )
+        fullDiagnostics = lines.joinToString("\n")
+        diagnosticsText.text = if (diagnosticsExpanded) {
+            fullDiagnostics
+        } else {
+            listOf(
+                "采集 ${stats?.captureFps?.let { "%.0f".format(it) } ?: "—"} · 分析 ${stats?.analysisFps?.let { "%.0f".format(it) } ?: "—"} · 有效 ${stats?.validQrFps?.let { "%.0f".format(it) } ?: "—"} · ${if (stats?.multiLayout == true) "四码" else "单码"}${perFrameLabel(stats)}",
+                "选择 $requestedFps · 目标 ${preferredFpsLabel()} · 解码 ${stats?.averageDecodeMs?.let { "%.0f ms".format(it) } ?: "—"} · 会话 ${formatRate(sessionAverageBytesPerSecond)}",
+                "点进度条展开完整诊断 · 解块 ${lastHighSolved}/${lastHighTotal}"
+            ).joinToString("\n")
+        }
+    }
+
+    private fun toggleDiagnostics() {
+        diagnosticsExpanded = !diagnosticsExpanded
+        renderDiagnostics()
+    }
+
+    private fun offerCompletedFile(session: String, name: String, mime: String, bytes: ByteArray) {
+        val pending = PendingSave(name, mime, bytes)
+        ContextCompat.getMainExecutor(this).execute {
+            if (pendingSession == session) return@execute
+            pendingSession = session
+            pendingSave = pending
+            saveButton.isEnabled = true
+            fileText.text = "$name · ${formatBytes(bytes.size.toLong())}"
+            progress.progress = 100
+            statusText.text = "接收完成，点「保存文件」"
+        }
+    }
+
+    private fun savePendingFile() {
+        val pending = pendingSave
+        if (pending == null) {
+            statusText.text = "还没有可保存的文件"
+            return
+        }
+        val saved = saveFile(pending.name, pending.mime, pending.bytes)
+        statusText.text = saved?.let { "已保存到 Download/AirFerry Lite/$it" } ?: "保存失败"
     }
 
     private fun perFrameLabel(stats: ScanStats?): String {
@@ -438,7 +518,7 @@ class MainActivity : AppCompatActivity() {
     private fun copyDiagnostics() {
         renderDiagnostics()
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("AirFerry Lite 诊断", diagnosticsText.text))
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("AirFerry Lite 诊断", fullDiagnostics.ifBlank { diagnosticsText.text }))
         statusText.text = "诊断信息已复制"
     }
 
@@ -454,11 +534,6 @@ class MainActivity : AppCompatActivity() {
         rollingIndex = 0
         rollingRates.fill(0.0)
         latestSpeedLabel = "实时 — · 平均 —"
-    }
-
-    private fun saveFile(meta: TransferMeta, bytes: ByteArray) {
-        val saved = saveFile(meta.name, meta.mime, bytes)
-        statusText.text = saved?.let { "已保存到 Download/AirFerry Lite/$it" } ?: "保存失败"
     }
 
     private fun saveFile(name: String, mime: String, bytes: ByteArray): String? {
@@ -502,5 +577,7 @@ class MainActivity : AppCompatActivity() {
         private const val HIGH_SPEED_HEADER_SIZE = 20
         private const val UI_REFRESH_INTERVAL_MS = 100L
         private const val SPEED_REFRESH_INTERVAL_MS = 1000L
+        private const val PREFS_NAME = "airferry-lite"
+        private const val PREF_FPS = "preview_fps"
     }
 }

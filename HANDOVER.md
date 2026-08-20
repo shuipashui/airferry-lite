@@ -4,7 +4,7 @@
 
 对外说明只写 [README.md](README.md)。不要在 README 里放版本号、实测 KB/s、Worker / VideoFrame 细节或本文链接。
 
-**交接时点：** 2026-08-20。网页接收端 **v85**。Android APK 冻结 **0.8.12**。发送端是根目录 `sender/` 打出的单文件 HTML，无独立版本号，以 Pages 上的 `sender/dist/airferry-lite-sender.html` 为准。
+**交接时点：** 2026-08-20。网页接收端 **v85**。Android APK **0.8.13**（界面；分析器仍按 0.8.12 冻结）。发送端是根目录 `sender/` 打出的单文件 HTML，无独立版本号，以 Pages 上的 `sender/dist/airferry-lite-sender.html` 为准。
 
 ## 1. 项目一句话
 
@@ -30,7 +30,7 @@
 | 部件 | 版本 | 对照 |
 |---|---|---|
 | 网页接收端 | **v85** | 预览可选手动 30/60 FPS（默认 60）。单码同 v83。四码仍 33 ms · inflight 1；锁格后 Worker 切格 |
-| Android APK | **0.8.12**（versionCode 27） | 未经明确要求不要改。历史峰值 **0.8.8：60 Hz 四码约 193 KB/s** |
+| Android APK | **0.8.13**（versionCode 28） | 界面：相机 30/60/120、手动保存、诊断折叠。`QrFrameAnalyzer` / `NativeQrDecoder` 仍按 0.8.12 冻结。峰值 **0.8.8：60 Hz 四码约 193 KB/s** |
 | 发送端 | AFL2 单文件 HTML | 默认 2331 B · 30 FPS · 单码；四码每码上限 **1273 B** |
 
 诊断第一行必须是 `网页：v85`（改版后变成 `网页：vN`）。
@@ -111,11 +111,13 @@ v85：界面可选手动 **30 / 60 FPS** 预览（记住 `airferry-lite-preview-
 - 界面「平均」是近 3 秒滚动；诊断里另有整段会话平均。会话平均低于实时，是因为锁格 / 锁 ROI 之前的瞄准段也算进去。
 - 理论速度 = `每码字节 × 码数 × FPS`，喷泉码大约再加 15% 帧。四码 30 FPS、每码 1253 B 时屏幕上限约 `1253 × 4 × 30 ≈ 147 KB/s`。网页现在卡在分析约 15 FPS（1 帧在飞、解码 36 ms），不是卡在每帧只打中 1 个码。
 
-### APK（0.8.12，同一台红米）
+### APK（0.8.13 界面 / 0.8.12 分析器，同一台红米）
 
-- CameraX 分析流约 **60 FPS**（最新帧）。120/240/480 是高速录像管道，不能给 ImageAnalysis。
+- CameraX 分析流约 **60 FPS**（最新帧）。界面可选手动 **30 / 60 / 120**（默认 60，记在 `airferry-lite` / `preview_fps`）。120 只请求 `CONTROL_AE_TARGET_FPS_RANGE`，绑不上就落到 60。120/240/480 **高速录像**管道不能给 ImageAnalysis。
+- 文件收完停在内存，点「保存文件」才写 Download/AirFerry Lite。不要自动保存。
+- 诊断默认 3 行，相机框 `layout_weight=1` 高度不变。点进度条在固定 **72dp** 框里展开全文，框内滚动。复制诊断仍复制全文。
 - 诊断里「每帧」是每相机帧打中的码数，0.8.x 四码大约 **2.6–3+**。网页 v74 同一指标大约 **2.30**，但网页分析只有约 15 FPS，APK 分析约 60，不要直接比 KB/s。
-- 历史峰值 **0.8.8：60 Hz 四码约 193 KB/s**。当前冻结 **0.8.12**，不要为网页实验去改。
+- 历史峰值 **0.8.8：60 Hz 四码约 193 KB/s**。不要为网页实验去改分析器。
 
 ## 5. 发送端实现
 
@@ -179,17 +181,18 @@ v85：界面可选手动 **30 / 60 FPS** 预览（记住 `airferry-lite-preview-
 - 首次安装或替换 Service Worker：`claim` 即可。**不要** `client.navigate`，**不要** `controllerchange` 时 `location.reload()`（每次升版本都会黑屏并把 getUserMedia 掐掉）。HTML 已是 `fetch(no-store)`，进新版页面就是新 JS。若标签页还停在更旧的缓存，手动刷新或清站点数据。
 - install 不要 `cache.addAll` 整个 WASM；Worker 第一次用再缓存。
 
-## 7. Android APK 实现（0.8.12，冻结）
+## 7. Android APK 实现（0.8.13 界面，分析器仍 0.8.12）
 
-源码：`android-receiver/app/src/main/java/com/airferrylite/receiver/`。构建：`android-receiver/build-local.ps1`，Java 17，SDK 35。`versionName 0.8.12` / `versionCode 27`。未经明确要求不要改。
+源码：`android-receiver/app/src/main/java/com/airferrylite/receiver/`。构建：`android-receiver/build-local.ps1`，Java 17，SDK 35。`versionName 0.8.13` / `versionCode 28`。不要改 `QrFrameAnalyzer` / `NativeQrDecoder`，除非明确要求动分析管线。
 
 APK 比网页快，主要不是锁格算法更聪明，而是：**同一帧 Y 平面上原生 zxing-cpp 能扫多个码，CameraX 按最新帧丢旧帧，没有浏览器 `createImageBitmap` 整帧读回。** 原版 [AirFerry](https://github.com/UR-SillyB/AirFerry) 只作思路参考。网页不要直接搬 APK 的四码重排。
 
 ### 相机
 
 - Preview + `ImageAnalysis`。分析流目标 **1920×1440**、`YUV_420_888`、`STRATEGY_KEEP_ONLY_LATEST`。
-- 优先固定 AE 档 60 / 90 / 120；这台红米分析流实际大约 60 FPS。诊断会单独列出「高速录像能力」，那条管道不能拿来扫码。
+- 标题行切换 30 / 60 / 120，重绑分析流并设 `CONTROL_AE_TARGET_FPS_RANGE`。这台红米分析流实际大约 60 FPS；120 可能显示「达不到 / 已落到 60」。诊断会单独列出「高速录像能力」，那条管道不能拿来扫码。
 - 网页端不要对 Android `getUserMedia` 要 120 FPS 或横屏 1920×1440。APK 的 1920×1440 是 CameraX 分析分辨率，和网页预览约束不是一回事。
+- 收完不自动写盘。`offerCompletedFile` 只把字节留在内存并点亮「保存文件」。
 
 ### 解码
 
@@ -228,7 +231,7 @@ sender/                         浏览器发送：测刷新率、lookahead、画
   dist/airferry-lite-sender.html  提交用的单文件产物
 index.html + app.js + sw.js     GitHub Pages 网页接收端（根目录即线上）
 web-receiver/                   根目录接收端镜像，必须 byte-identical
-android-receiver/               Kotlin + CameraX + zxing-cpp（0.8.12 冻结）
+android-receiver/               Kotlin + CameraX + zxing-cpp（0.8.13 界面 / 分析器 0.8.12）
   QrFrameAnalyzer.kt            最新帧、四格并行、重叠象限补扫
   NativeQrDecoder.kt            Y 平面 readYBuffer，rotation 0
   ScanLayout.kt                 ROI / tilesFromHits（网页不要搬）
@@ -271,7 +274,7 @@ tests/                          npm test：协议 / 安全 / 运行时针
 
 **其它**
 
-- 不要 Android 120 FPS 请求 / 横屏 1920×1440 相机约束。不要把对焦锁成 manual/none（v80 对不上焦）。
+- 网页不要 Android 120 FPS 请求 / 横屏 1920×1440 相机约束。APK 0.8.13 可以手动点 120（只改 AE 档，失败回落）；仍不要把高速录像 session 接到 ImageAnalysis。不要把对焦锁成 manual/none（v80 对不上焦）。
 - 不要运行中假 `ended` 立刻 `closeCamera()`（会黑屏）。
 - 不要在 SW `activate` 里 `client.navigate`，不要 `controllerchange` 时 `location.reload()`。
 - 不要 60 Hz 屏上 120 FPS 发送。
@@ -300,4 +303,4 @@ MIT。第三方见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。只使用 
 
 ---
 
-当前网页 **v85**，APK **0.8.12**。预览可选手动 30/60（默认 60）。四码建议 30，单码建议 60。单码对照 v66 **53.8 KB/s**，四码对照 v74 **43.3 KB/s**。不要再锁 AF，不要单码 33 ms 限速，不要 16 ms inflight 2。以 Pages 诊断第一行 `网页：v85` 为准。
+当前网页 **v85**，APK **0.8.13**。网页预览可选手动 30/60（默认 60）。APK 相机 30/60/120（默认 60，不自动保存）。四码建议 30，单码建议 60。单码对照 v66 **53.8 KB/s**，四码对照 v74 **43.3 KB/s**。不要再锁 AF，不要单码 33 ms 限速，不要 16 ms inflight 2。以 Pages 诊断第一行 `网页：v85` 为准。

@@ -1,14 +1,199 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/rootLayout" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:background="@color/af_bg" android:padding="12dp">
-    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="AirFerry Lite" android:textColor="@color/af_text" android:textSize="22sp" android:textStyle="bold" />
-    <TextView android:id="@+id/statusText" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="请对准电脑二维码" android:textColor="@color/af_text" android:paddingTop="4dp" android:paddingBottom="10dp" />
-    <androidx.camera.view.PreviewView android:id="@+id/previewView" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" />
-    <TextView android:id="@+id/fileText" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="等待文件" android:textColor="@color/af_text" android:paddingTop="10dp" />
-    <ProgressBar android:id="@+id/progress" style="?android:attr/progressBarStyleHorizontal" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="100" android:progress="0" android:progressTint="@color/af_accent" />
-    <TextView android:id="@+id/speedText" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="实时 — · 平均 —" android:textColor="@color/af_text" android:paddingTop="6dp" />
-    <TextView android:id="@+id/scanText" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="扫描性能：等待取帧" android:textColor="@color/af_text" android:textSize="12sp" android:paddingTop="4dp" />
-    <TextView android:id="@+id/missingText" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="缺失片段：—" android:textColor="@color/af_text" android:maxLines="2" android:paddingTop="6dp" />
-    <TextView android:id="@+id/diagnosticsText" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="诊断信息：等待取帧" android:textColor="@color/af_text" android:textSize="10sp" android:paddingTop="6dp" />
-    <Button android:id="@+id/copyDiagnosticsButton" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="复制诊断信息" android:layout_marginTop="4dp" />
-    <Button android:id="@+id/resetButton" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="清空并重新接收" android:layout_marginTop="8dp" />
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/rootLayout"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/af_bg"
+    android:padding="12dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="AirFerry Lite"
+            android:textColor="@color/af_text"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingEnd="6dp"
+            android:text="相机"
+            android:textColor="@color/af_muted"
+            android:textSize="12sp" />
+        <com.google.android.material.button.MaterialButtonToggleGroup
+            android:id="@+id/fpsGroup"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            app:selectionRequired="true"
+            app:singleSelection="true">
+            <Button
+                android:id="@+id/fps30"
+                style="?attr/materialButtonOutlinedStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:minWidth="44dp"
+                android:text="30"
+                android:textSize="12sp" />
+            <Button
+                android:id="@+id/fps60"
+                style="?attr/materialButtonOutlinedStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:minWidth="44dp"
+                android:text="60"
+                android:textSize="12sp" />
+            <Button
+                android:id="@+id/fps120"
+                style="?attr/materialButtonOutlinedStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:minWidth="44dp"
+                android:text="120"
+                android:textSize="12sp" />
+        </com.google.android.material.button.MaterialButtonToggleGroup>
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/statusText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:paddingTop="4dp"
+        android:paddingBottom="8dp"
+        android:text="请对准电脑二维码"
+        android:textColor="@color/af_text" />
+
+    <androidx.camera.view.PreviewView
+        android:id="@+id/previewView"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingTop="8dp">
+        <TextView
+            android:id="@+id/fileText"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="等待文件"
+            android:textColor="@color/af_text" />
+        <Button
+            android:id="@+id/saveButton"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:enabled="false"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:minWidth="88dp"
+            android:text="保存文件"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <FrameLayout
+        android:id="@+id/progressHit"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:clickable="true"
+        android:focusable="true"
+        android:minHeight="28dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp">
+        <ProgressBar
+            android:id="@+id/progress"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="10dp"
+            android:max="100"
+            android:progress="0"
+            android:progressTint="@color/af_accent" />
+    </FrameLayout>
+
+    <TextView
+        android:id="@+id/speedText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:text="实时 — · 平均 — · 点进度条看诊断"
+        android:textColor="@color/af_text"
+        android:textSize="12sp" />
+
+    <TextView
+        android:id="@+id/missingText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:paddingTop="2dp"
+        android:text="缺失片段：—"
+        android:textColor="@color/af_text"
+        android:textSize="12sp" />
+
+    <ScrollView
+        android:id="@+id/diagnosticsScroll"
+        android:layout_width="match_parent"
+        android:layout_height="72dp"
+        android:layout_marginTop="6dp"
+        android:background="@color/af_panel"
+        android:fadeScrollbars="false"
+        android:fillViewport="true"
+        android:padding="6dp"
+        android:scrollbars="vertical">
+        <TextView
+            android:id="@+id/diagnosticsText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="诊断：点进度条展开 · 等待取帧"
+            android:textColor="@color/af_text"
+            android:textIsSelectable="true"
+            android:textSize="10sp" />
+    </ScrollView>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:paddingTop="6dp">
+        <Button
+            android:id="@+id/copyDiagnosticsButton"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_marginEnd="6dp"
+            android:layout_weight="1"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:text="复制诊断"
+            android:textSize="12sp" />
+        <Button
+            android:id="@+id/resetButton"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:text="清空重收"
+            android:textSize="12sp" />
+    </LinearLayout>
 </LinearLayout>
