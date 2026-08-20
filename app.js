@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v79";
+  const RECEIVER_BUILD = "v80";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -165,6 +165,7 @@
   let lastCameraLiveAt = 0;
   const cameraEndedBound = new WeakSet();
   let hideStopTimer = 0;
+  let androidFocusTimer = 0;
   let highScanRoi = null;
   let highTrackedTiles = null;
   let lastHitBox = 0;
@@ -361,10 +362,29 @@
       cameraFrameRate = Number(settings?.frameRate) || 0;
       const capabilities = track.getCapabilities?.();
       cameraCapabilities = capabilities || null;
-      if (capabilities?.focusMode?.includes("continuous") && !/Android/i.test(navigator.userAgent || "")) {
+      const androidCam = /Android/i.test(navigator.userAgent || "");
+      if (capabilities?.focusMode?.includes("continuous") && !androidCam) {
         track.applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(() => {});
       }
+      if (androidCam) lockAndroidPreview(track, capabilities);
     } catch (_) {}
+  }
+
+  function lockAndroidPreview(track, capabilities) {
+    if (androidFocusTimer) clearTimeout(androidFocusTimer);
+    const modes = capabilities || {};
+    const pick = (list, names) => names.find(name => list?.includes(name));
+    androidFocusTimer = setTimeout(() => {
+      androidFocusTimer = 0;
+      if (!stream || stream.getVideoTracks?.()[0] !== track) return;
+      const advanced = {};
+      const focus = pick(modes.focusMode, ["manual", "none", "single-shot"]);
+      const exposure = pick(modes.exposureMode, ["manual", "none", "once"]);
+      if (focus) advanced.focusMode = focus;
+      if (exposure) advanced.exposureMode = exposure;
+      if (!Object.keys(advanced).length) return;
+      track.applyConstraints({ advanced: [advanced] }).catch(() => {});
+    }, 600);
   }
 
   function freezeCameraPreview() {
@@ -382,6 +402,10 @@
     if (hideStopTimer) {
       clearTimeout(hideStopTimer);
       hideStopTimer = 0;
+    }
+    if (androidFocusTimer) {
+      clearTimeout(androidFocusTimer);
+      androidFocusTimer = 0;
     }
     lastCameraLiveAt = 0;
     clearTimeout(scanTimer);
@@ -661,15 +685,6 @@
     const now = performance.now();
     for (let index = 0; index < highWorkers.length; index += 1) {
       if (highWorkerBusy[index] && now - highWorkerStartedAt[index] > HIGH_WORKER_TIMEOUT) restartHighSpeedWorker(index);
-    }
-    if (barcodeDetector && !highLocateLock && now - lastNativeLocate > HIGH_QUAD_ACQUIRE_MS) {
-      const lockedTiles = (highTrackedTiles || []).filter(Boolean).length;
-      const needSingle = !highMultiLayout && (!highScanRoi || highScanMisses >= 3);
-      const needQuadAcquire = highMultiLayout && lockedTiles < 2;
-      if (needSingle || needQuadAcquire) {
-        lastNativeLocate = now;
-        void locateQuadWithNative();
-      }
     }
     if (highMultiLayout) {
       decodeQuadFrame();
