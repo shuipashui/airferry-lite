@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v61";
+  const RECEIVER_BUILD = "v62";
   if ("serviceWorker" in navigator) {
     let swRefreshing = false;
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
@@ -66,6 +66,7 @@
   const HIGH_QUAD_ACQUIRE_MS = 100;
   const HIGH_QUAD_TILE_MISS_LIMIT = 6;
   const HIGH_QUAD_FROZEN_MISS_LIMIT = 24;
+  const HIGH_SINGLE_INFLIGHT = 2;
 
   let stream = null;
   let scanTimer = 0;
@@ -158,6 +159,7 @@
   let highQuadCursor = 0;
   let highSingleConfirmed = false;
   let startInFlight = false;
+  let cameraEndedWhileStarting = false;
   let hideStopTimer = 0;
   let highScanRoi = null;
   let highTrackedTiles = null;
@@ -245,11 +247,14 @@
       return;
     }
     startInFlight = true;
+    cameraEndedWhileStarting = false;
     startBtn.disabled = true;
     try {
       await setupDetector();
       const androidCam = /Android/i.test(navigator.userAgent || "");
-      const camera = { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1440 } };
+      const camera = androidCam
+        ? { facingMode: { ideal: "environment" }, width: { ideal: 1440 }, height: { ideal: 1920 } }
+        : { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1440 } };
       if (!androidCam) {
         try {
           stream = await navigator.mediaDevices.getUserMedia({
@@ -267,6 +272,24 @@
       }
       lastUsedLuma = false;
       lumaUnavailable = false;
+      resetScanStats();
+      configureCameraTrack(stream);
+      video.playsInline = true;
+      video.muted = true;
+      video.srcObject = stream;
+      await waitForCameraVideo();
+      try {
+        await video.play();
+      } catch (playErr) {
+        if (playErr && playErr.name === "AbortError") await video.play();
+        else throw playErr;
+      }
+      const liveTrack = stream.getVideoTracks?.()[0];
+      if (cameraEndedWhileStarting && (!liveTrack || liveTrack.readyState === "ended")) {
+        throw new Error("CameraEnded");
+      }
+      cameraEndedWhileStarting = false;
+      bindCameraEnded(stream);
       startHighSpeedWorkers();
       if (highWorkers.length) {
         lastDecodeBackend = "AFL2 WASM Worker";
@@ -276,37 +299,38 @@
         lastWorkerCount = 0;
       }
       if (!highWorkers.length && !barcodeDetector && typeof window.jsQR !== "function") throw new Error("DecoderUnavailable");
-      resetScanStats();
-      configureCameraTrack(stream);
-      video.srcObject = stream;
-      await waitForCameraVideo();
-      try {
-        await video.play();
-      } catch (playErr) {
-        if (playErr && playErr.name === "AbortError") await video.play();
-        else throw playErr;
-      }
       hint.classList.add("hidden");
       stopBtn.disabled = false;
       status.textContent = highWorkers.length ? "正在高速扫描" : barcodeDetector ? "正在快速扫描" : "正在扫描";
       scheduleScan();
     } catch (err) {
       closeCamera();
-      status.textContent = err.message === "DecoderUnavailable" ? "二维码解码器加载失败" : err.name === "NotAllowedError" ? "摄像头权限被拒绝" : "摄像头不可用";
+      status.textContent = err.message === "DecoderUnavailable" ? "二维码解码器加载失败" : err.message === "CameraEnded" ? "摄像头连接已中断，请重新开始" : err.name === "NotAllowedError" ? "摄像头权限被拒绝" : "摄像头不可用";
       hint.textContent = err.message === "DecoderUnavailable" ? "请检查网络后刷新页面" : "请在 HTTPS 页面中允许摄像头权限";
     } finally {
       startInFlight = false;
     }
   }
 
-  function configureCameraTrack(activeStream) {
+  function bindCameraEnded(activeStream) {
     const track = activeStream.getVideoTracks()[0];
     if (!track) return;
     track.addEventListener("ended", () => {
       if (stream !== activeStream) return;
+      if (startInFlight) {
+        cameraEndedWhileStarting = true;
+        return;
+      }
+      if (track.readyState === "live") return;
       closeCamera();
       status.textContent = "摄像头连接已中断，请重新开始";
     }, { once: true });
+  }
+
+  function configureCameraTrack(activeStream) {
+    const track = activeStream.getVideoTracks()[0];
+    if (!track) return;
+    bindCameraEnded(activeStream);
     try {
       const settings = track.getSettings?.();
       cameraSettings = settings || null;
@@ -571,6 +595,7 @@
       return;
     }
     if (highGrabInFlight) return;
+    if (highWorkerBusy.filter(Boolean).length >= HIGH_SINGLE_INFLIGHT) return;
     const slot = highWorkerBusy.findIndex((busy, index) => !busy && highWorkerReady[index]);
     if (slot < 0) {
       workerBusyDrops += 1;
@@ -1198,19 +1223,6 @@
     highTrackedTiles = next;
   }
 
-  function rebuildQuadFromHits(hits) {
-    const tiles = [];
-    for (const hit of hits) {
-      const tile = transferHitTile(hit);
-      if (tile) tiles.push(tile);
-    }
-    if (tiles.length < 3) return false;
-    highTrackedTiles = inferMissingQuadTiles(slotTilesByCluster(tiles));
-    highTileProven = (highTrackedTiles || []).map(tile => !!tile);
-    highQuadFrozen = (highTrackedTiles || []).filter(Boolean).length >= 4;
-    return true;
-  }
-
   function rememberQuadHits(hits) {
     const transferHits = hits.filter(hit => transferHitKey(hit));
     if (!transferHits.length) {
@@ -1259,9 +1271,7 @@
       else highScanRoi = next;
     }
     if (highMultiLayout && transferHits.length) {
-      if (transferHits.length >= 3 && rebuildQuadFromHits(transferHits)) {
-        // APK-style: rebuild the 2×2 from this frame when at least three codes hit.
-      } else if (highQuadFrozen) {
+      if (highQuadFrozen) {
         followContainedQuadHits(transferHits);
       } else {
         const tiles = [];
@@ -1338,6 +1348,16 @@
     return { bitmap, width, height, vw, vh };
   }
 
+  function grabMaxSideForSource(source) {
+    const vw = video.videoWidth || 1;
+    const vh = video.videoHeight || 1;
+    const full = source.x <= 1 && source.y <= 1 && source.x + source.width >= vw - 1 && source.y + source.height >= vh - 1;
+    if (full) return HIGH_ACQUIRE_SIZE;
+    const roiLong = Math.max(source.width, source.height, 64);
+    const scaled = Math.ceil(Math.max(vw, vh, 1) * HIGH_TILE_SIZE / roiLong);
+    return Math.max(HIGH_TILE_SIZE, Math.min(HIGH_ACQUIRE_SIZE, scaled));
+  }
+
   function cropBitmapToSource(full, source, scanSize) {
     const rect = clampBitmapRect(
       source.x * full.width / full.vw,
@@ -1378,7 +1398,7 @@
         let bitmap;
         let crop = null;
         if (!tile && !highMultiLayout) {
-          const full = await grabFullVideoBitmap(HIGH_ACQUIRE_SIZE);
+          const full = await grabFullVideoBitmap(grabMaxSideForSource(source));
           bitmap = full.bitmap;
           width = full.width;
           height = full.height;
