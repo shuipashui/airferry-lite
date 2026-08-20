@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v75";
+  const RECEIVER_BUILD = "v76";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -65,7 +65,7 @@
   const HIGH_QUAD_FROZEN_MISS_LIMIT = 24;
   const HIGH_SINGLE_INFLIGHT = 4;
   const HIGH_QUAD_INFLIGHT = 2;
-  const HIGH_QUAD_GRAB_MS = 16;
+  const HIGH_QUAD_GRAB_MS = 33;
 
   let stream = null;
   let scanTimer = 0;
@@ -266,7 +266,7 @@
       await setupDetector();
       const androidCam = /Android/i.test(navigator.userAgent || "");
       const camera = androidCam
-        ? { facingMode: { ideal: "environment" }, width: { ideal: 1440 }, height: { ideal: 1920 } }
+        ? { facingMode: { ideal: "environment" }, width: { ideal: 1440 }, height: { ideal: 1920 }, frameRate: { ideal: 30, max: 30 } }
         : { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1440 } };
       if (!androidCam) {
         try {
@@ -280,7 +280,7 @@
         }
       }
       if (!stream) {
-        cameraRequestedFps = 60;
+        cameraRequestedFps = androidCam ? 30 : 60;
         stream = await navigator.mediaDevices.getUserMedia({ video: camera, audio: false });
       }
       lastUsedLuma = false;

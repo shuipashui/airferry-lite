@@ -4,7 +4,7 @@
 
 对外说明只写 [README.md](README.md)。不要在 README 里放版本号、实测 KB/s、Worker / VideoFrame 细节或本文链接。
 
-**交接时点：** 2026-08-20。网页接收端 **v75**。Android APK 冻结 **0.8.12**。发送端是根目录 `sender/` 打出的单文件 HTML，无独立版本号，以 Pages 上的 `sender/dist/airferry-lite-sender.html` 为准。
+**交接时点：** 2026-08-20。网页接收端 **v76**。Android APK 冻结 **0.8.12**。发送端是根目录 `sender/` 打出的单文件 HTML，无独立版本号，以 Pages 上的 `sender/dist/airferry-lite-sender.html` 为准。
 
 ## 1. 项目一句话
 
@@ -29,11 +29,11 @@
 
 | 部件 | 版本 | 对照 |
 |---|---|---|
-| 网页接收端 | **v75** | 取帧同 v74。Android 预览改回 60 FPS，`HIGH_QUAD_INFLIGHT = 2`。对照仍是 v74 会话 **43.3 KB/s** |
+| 网页接收端 | **v76** | 取帧同 v74。Android 预览回到 30 FPS。四码 `HIGH_QUAD_INFLIGHT = 2`、间隔 33 ms。对照仍是 v74 会话 **43.3 KB/s** |
 | Android APK | **0.8.12**（versionCode 27） | 未经明确要求不要改。历史峰值 **0.8.8：60 Hz 四码约 193 KB/s** |
 | 发送端 | AFL2 单文件 HTML | 默认 2331 B · 30 FPS · 单码；四码每码上限 **1273 B** |
 
-诊断第一行必须是 `网页：v75`（改版后变成 `网页：vN`）。
+诊断第一行必须是 `网页：v76`（改版后变成 `网页：vN`）。
 
 ## 4. 实测对照（回归用这些，不要用更旧的数）
 
@@ -46,7 +46,7 @@
 - 采集 **51.9** · 有效 **30.9** · 解码 **37.6 ms** · 取帧 **bitmap**
 - 实时 **65.0 KB/s** · 会话 **53.8 KB/s**
 
-这是网页单码在 **60 FPS 预览** 下必须保住的数。v73–v74 把 Android 预览锁在 30 FPS，单码没重新测。v75 预览改回 60。采集掉到约 10、忙时丢弃 0，就是主线程取帧把 `requestVideoFrameCallback` 卡住了。
+这是网页单码在 **60 FPS 预览** 下必须保住的数。v73–v74、v76 把 Android 预览锁在 30 FPS 以对准 30 FPS 发送。采集掉到约 10、忙时丢弃 0，就是主线程取帧把 `requestVideoFrameCallback` 卡住了。
 
 ### 四码（当前对照是 v74）
 
@@ -59,14 +59,21 @@ v74 Pages 实测（2331 B · 30 FPS · 四码 · 全屏，相机 1920×1440 **30
 
 v64 解完对照（当时 60 FPS 预览，720 packed luma 切四格，解码约 10 ms）：解完 **1117/1117** · 采集 39 · 有效 55 · 会话 **45.7 KB/s**。v74 会话已经回到这个量级，不要为了追 10 ms 解码退回主线程 `getImageData`。
 
-v75：取帧不变。Android 不再 `frameRate max 30`，让相机会到 60 FPS；四码 `HIGH_QUAD_INFLIGHT = 2`、取帧间隔 16 ms，让第二个 Worker 也干活。若相机又闪退或页面又卡，退回 v74 的 30 FPS + inflight 1。诊断第一行 `网页：v75`。
+v75 Pages 实测（同上参数，但预览 **60 FPS**、inflight 2、间隔 16 ms）：
+
+- 四码：采集 55.0 · 分析 40.0 · 有效 **5.0 FPS** · 每帧 **0.26** · 会话 **11.8 KB/s** · 又卡
+- 单码：采集 46.1 · 分析 39.3 · 有效 0.0 · 扫描 **1440 全图** · 解码 72.4 ms · 会话 **28.6 KB/s**
+- 60 FPS 相机会拍到 30 FPS 发送的换帧间隙，WASM 打不中；主线程还要按 40–55 次/秒抠 720/1440。不要再要 60 FPS 预览。
+
+v76：预览回到 **30 FPS**（和 v74 一样）。四码仍 `HIGH_QUAD_INFLIGHT = 2`，但取帧间隔 **33 ms**，只让第二个 Worker 吃满 30 FPS，不再按 16 ms 连抠。单码取帧不要动。若又卡，把 inflight 退回 1。诊断第一行 `网页：v76`。
 
 不要再走的路（都已 Pages 打过）：
 
 - v69 / v70：每格对 `video` 做 `createImageBitmap`（720 或四次并行）。会话可以到 44.8，但这台机会闪退。
 - v71：1440 atlas 再切格 + 1.5 s 无帧看门狗。更卡，还会误关相机。
 - v72：主线程 `getImageData` 720 packed。卡。
-- v73：取帧已经和 v74 一样、不卡，但新 SW `navigate` + `reload` 让刚进页面黑几秒、相机打不开。第一次会话只有 **26.6 KB/s**，不要当对照。
+- v73：SW `navigate` + `reload` 让刚进页面黑屏。不要强制刷新。
+- v75：Android 60 FPS 预览。四码每帧掉到 0.26、会话 11.8、又卡。不要再要 60 FPS 预览。
 
 ### 怎么读诊断
 
@@ -122,7 +129,7 @@ v75：取帧不变。Android 不再 `frameRate max 30`，让相机会到 60 FPS�
 ### 四码（锁格不变；v73 一张图进 Worker）
 
 1. `grabQuadPackedBitmap`：对 2×2 并集 **一次** `createImageBitmap(video, …, { resize 720 })`，把 bitmap 交给 **1 个** Worker，`maxSymbols: 4`。不要在页面线程 `getImageData` / `rgbaToLuma`。不要每格各读 video，不要 1440 atlas。
-2. 同时最多 `HIGH_QUAD_INFLIGHT = 2` 帧在飞，取帧间隔 `HIGH_QUAD_GRAB_MS = 16`。不要每格各读 video，不要把 4 个 720 从 `video` 并行抠出来。v74 对照是 inflight 1 + 30 FPS。
+2. 同时最多 `HIGH_QUAD_INFLIGHT = 2` 帧在飞，取帧间隔 `HIGH_QUAD_GRAB_MS = 33`。不要 60 FPS 预览，不要 16 ms 连抠。不要每格各读 video。
 3. 同帧不再二次补扫。不要 `dueRelock`，不要周期性重锁整幅 ROI。
 4. `lockQuadSlots`：至少 **2** 个命中才锁；满 4 格冻结。格 4 之后只用 `followContainedQuadHits`。不要 `rebuildQuadFromHits`。四码布局确定后不要再 `BarcodeDetector.detect(video)`。
 5. 保留 `function tileCenter`。格子里存原始框，只在扫描时 `inflateRect` 一次。
@@ -130,7 +137,7 @@ v75：取帧不变。Android 不再 `frameRate max 30`，让相机会到 60 FPS�
 
 ### 相机
 
-- Android 不要要 120 FPS、不要 `focusMode: continuous`、不要横屏 `1920×1440`（用 `1440×1920`）。不要再加 `frameRate: { max: 30 }`，除非 v75 证明 60 FPS 又把这台机打崩。Android 只开 **2** 个 WASM Worker。
+- Android 预览请求 **30 FPS**（`frameRate: { ideal: 30, max: 30 }`），不要 60、不要 120、不要 `focusMode: continuous`、不要横屏 `1920×1440`（用 `1440×1920`）。Android 只开 **2** 个 WASM Worker。v75 证明 60 FPS 预览会对不准 30 FPS 发送，又卡又慢。
 - `cameraPreviewLive()`：轨 `live`、未 mute、video 在播且有宽高；1.5 s 没有新的视频帧则视为死预览。开始扫描若预览已死，先 `closeCamera` 再 `getUserMedia`。不要只看 `track.readyState === "live"` 就 return。
 - 扫描中开始按钮保持可点。不要因为主线程卡了就自动 `closeCamera`（v71 的 `dropDeadCamera` 会把活相机杀掉）。
 - 假 `ended` 只在轨仍 `live` 且未 mute、video 未暂停且有帧时忽略。`WeakSet` 每条轨只绑一次。
@@ -247,7 +254,7 @@ tests/                          npm test：协议 / 安全 / 运行时针
 
 ## 11. 已知缺口
 
-1. **网页四码** 对照仍是 v74 会话 **43.3 KB/s**（30 FPS · inflight 1 · 每帧 2.30）。v75 试 60 FPS 预览 + inflight 2。不要再加每格 video 读回，不要退回主线程 `getImageData`。若 v75 闪退或又卡，退回 v74。不要搬 APK 的 ≥3 命中重排。单码取帧不要顺手改。
+1. **网页四码** 对照仍是 v74 会话 **43.3 KB/s**（30 FPS · inflight 1 · 每帧 2.30）。v75 的 60 FPS 预览已否定。v76 是 30 FPS + inflight 2。不要再加每格 video 读回，不要退回主线程 `getImageData`。若 v76 又卡，inflight 退回 1。不要搬 APK 的 ≥3 命中重排。单码取帧不要顺手改。
 2. AFL2 进度只在内存，刷新即丢。IndexedDB 只服务 AFL1。
 3. 文件上限 64 MiB。
 4. 本地 `origin/main` 和 GitHub `main` 的 SHA 偶尔对不齐（API 推送），以 GitHub API 的 ref 为准。
@@ -258,4 +265,4 @@ MIT。第三方见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。只使用 
 
 ---
 
-当前网页 **v75**，APK **0.8.12**。四码对照仍是 v74 会话 **43.3 KB/s**。以 Pages 诊断第一行 `网页：v75` 为准。
+当前网页 **v76**，APK **0.8.12**。四码对照仍是 v74 会话 **43.3 KB/s**。v75 的 60 FPS 预览不要再走。以 Pages 诊断第一行 `网页：v76` 为准。
