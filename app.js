@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v60";
+  const RECEIVER_BUILD = "v61";
   if ("serviceWorker" in navigator) {
     let swRefreshing = false;
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
@@ -1147,6 +1147,70 @@
     return hits;
   }
 
+  function transferHitTile(hit) {
+    const mapped = mappedCorners(hit, hit.origin || { x: 0, y: 0, srcW: 1, srcH: 1, outW: 1, outH: 1 });
+    if (mapped.length < 2) return null;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const point of mapped) {
+      minX = Math.min(minX, point.x);
+      minY = Math.min(minY, point.y);
+      maxX = Math.max(maxX, point.x);
+      maxY = Math.max(maxY, point.y);
+    }
+    return {
+      x: minX,
+      y: minY,
+      width: Math.max(64, maxX - minX),
+      height: Math.max(64, maxY - minY)
+    };
+  }
+
+  function slotContainingHit(hit) {
+    const center = hitCenter(hit);
+    if (!center || !highTrackedTiles) return -1;
+    let owner = -1;
+    for (let index = 0; index < 4; index += 1) {
+      const tile = highTrackedTiles[index];
+      if (!tile) continue;
+      const scan = inflateRect(tile, HIGH_TILE_PAD);
+      if (center.x >= scan.x && center.x < scan.x + scan.width && center.y >= scan.y && center.y < scan.y + scan.height) {
+        if (owner >= 0) return -1;
+        owner = index;
+      }
+    }
+    return owner;
+  }
+
+  function followContainedQuadHits(hits) {
+    if (!highTrackedTiles) return;
+    const next = highTrackedTiles.slice();
+    const claimed = [false, false, false, false];
+    for (const hit of hits) {
+      const tile = transferHitTile(hit);
+      const slot = slotContainingHit(hit);
+      if (!tile || slot < 0 || claimed[slot]) continue;
+      claimed[slot] = true;
+      next[slot] = tile;
+    }
+    highTrackedTiles = next;
+  }
+
+  function rebuildQuadFromHits(hits) {
+    const tiles = [];
+    for (const hit of hits) {
+      const tile = transferHitTile(hit);
+      if (tile) tiles.push(tile);
+    }
+    if (tiles.length < 3) return false;
+    highTrackedTiles = inferMissingQuadTiles(slotTilesByCluster(tiles));
+    highTileProven = (highTrackedTiles || []).map(tile => !!tile);
+    highQuadFrozen = (highTrackedTiles || []).filter(Boolean).length >= 4;
+    return true;
+  }
+
   function rememberQuadHits(hits) {
     const transferHits = hits.filter(hit => transferHitKey(hit));
     if (!transferHits.length) {
@@ -1194,30 +1258,20 @@
       else if (transferHits.length >= 3) highScanRoi = unionHighScanRoi(highScanRoi || next, next);
       else highScanRoi = next;
     }
-    if (highMultiLayout && transferHits.length && !highQuadFrozen) {
-      const tiles = [];
-      for (const hit of transferHits) {
-        const mapped = mappedCorners(hit, hit.origin || { x: 0, y: 0, srcW: 1, srcH: 1, outW: 1, outH: 1 });
-        if (mapped.length < 2) continue;
-        let minX = Infinity;
-        let minY = Infinity;
-        let maxX = -Infinity;
-        let maxY = -Infinity;
-        for (const point of mapped) {
-          minX = Math.min(minX, point.x);
-          minY = Math.min(minY, point.y);
-          maxX = Math.max(maxX, point.x);
-          maxY = Math.max(maxY, point.y);
+    if (highMultiLayout && transferHits.length) {
+      if (transferHits.length >= 3 && rebuildQuadFromHits(transferHits)) {
+        // APK-style: rebuild the 2×2 from this frame when at least three codes hit.
+      } else if (highQuadFrozen) {
+        followContainedQuadHits(transferHits);
+      } else {
+        const tiles = [];
+        for (const hit of transferHits) {
+          const tile = transferHitTile(hit);
+          if (tile) tiles.push(tile);
         }
-        tiles.push({
-          x: minX,
-          y: minY,
-          width: Math.max(64, maxX - minX),
-          height: Math.max(64, maxY - minY)
-        });
+        if (tiles.length >= 2) lockQuadSlots(tiles, false);
+        if (transferHits.length >= 4 && (highTrackedTiles || []).filter(Boolean).length >= 4) highQuadFrozen = true;
       }
-      if (tiles.length >= 2) lockQuadSlots(tiles, false);
-      if (transferHits.length >= 4 && (highTrackedTiles || []).filter(Boolean).length >= 4) highQuadFrozen = true;
     }
   }
 
@@ -1284,7 +1338,7 @@
     return { bitmap, width, height, vw, vh };
   }
 
-  async function cropBitmapToSource(full, source, scanSize) {
+  function cropBitmapToSource(full, source, scanSize) {
     const rect = clampBitmapRect(
       source.x * full.width / full.vw,
       source.y * full.height / full.vh,
@@ -1296,19 +1350,7 @@
     const outScale = Math.min(1, scanSize / Math.max(rect.w, rect.h, 1));
     const width = Math.max(1, Math.round(rect.w * outScale));
     const height = Math.max(1, Math.round(rect.h * outScale));
-    try {
-      const bitmap = await createImageBitmap(full.bitmap, rect.x, rect.y, rect.w, rect.h, {
-        resizeWidth: width,
-        resizeHeight: height,
-        resizeQuality: "pixelated",
-        colorSpaceConversion: "none"
-      });
-      full.bitmap.close();
-      return { bitmap, width, height };
-    } catch (error) {
-      try { full.bitmap.close(); } catch (_) {}
-      throw error;
-    }
+    return { x: rect.x, y: rect.y, w: rect.w, h: rect.h, width, height };
   }
 
   async function postHighSpeedRegion(slot, source, maxSymbols, retryBinarizer, tile) {
@@ -1327,24 +1369,25 @@
     let width = Math.max(1, Math.round(source.width * scale));
     let height = Math.max(1, Math.round(source.height * scale));
     lastPostedScanSize = Math.max(width, height);
+    let postedBitmap = null;
     try {
       const id = ++highFrameId;
       highDecodeMeta.set(id, { x: source.x, y: source.y, srcW: source.width, srcH: source.height, outW: width, outH: height });
       const useBitmap = !captureViaCanvas && typeof createImageBitmap === "function" && typeof OffscreenCanvas === "function";
       if (useBitmap) {
         let bitmap;
+        let crop = null;
         if (!tile && !highMultiLayout) {
           const full = await grabFullVideoBitmap(HIGH_ACQUIRE_SIZE);
+          bitmap = full.bitmap;
+          width = full.width;
+          height = full.height;
           const cropped = source.x > 1 || source.y > 1 || source.x + source.width < full.vw - 1 || source.y + source.height < full.vh - 1;
           if (cropped) {
-            const next = await cropBitmapToSource(full, source, scanSize);
-            bitmap = next.bitmap;
+            const next = cropBitmapToSource(full, source, scanSize);
+            crop = { x: next.x, y: next.y, w: next.w, h: next.h, dw: next.width, dh: next.height };
             width = next.width;
             height = next.height;
-          } else {
-            bitmap = full.bitmap;
-            width = full.width;
-            height = full.height;
           }
         } else {
           bitmap = await createImageBitmap(video, source.x, source.y, source.width, source.height, {
@@ -1354,6 +1397,7 @@
             colorSpaceConversion: "none"
           });
         }
+        postedBitmap = bitmap;
         lastPostedScanSize = Math.max(width, height);
         const meta = highDecodeMeta.get(id);
         if (meta) {
@@ -1361,7 +1405,7 @@
           meta.outH = height;
           meta.postedAt = performance.now();
         }
-        highWorkers[slot].postMessage({ id, bitmap, maxSymbols, retryBinarizer }, [bitmap]);
+        highWorkers[slot].postMessage({ id, bitmap, maxSymbols, retryBinarizer, crop }, [bitmap]);
         return true;
       }
       if (canvas.width !== width || canvas.height !== height) {
@@ -1385,6 +1429,7 @@
     } catch (_) {
       captureViaCanvas = true;
       highDecodeMeta.delete(highFrameId);
+      try { postedBitmap?.close(); } catch (_) {}
       restartHighSpeedWorker(slot);
       return false;
     }
