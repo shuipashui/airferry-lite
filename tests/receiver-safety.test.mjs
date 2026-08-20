@@ -55,7 +55,7 @@ for (const needle of [
   ,"const HIGH_QUAD_PACKED_SIZE = 720;"
   ,">= 4 ? 4 : 2"
   ,"!/Android/i.test(navigator.userAgent || \"\")"
-  ,"const RECEIVER_BUILD = \"v76\";"
+  ,"const RECEIVER_BUILD = \"v77\";"
   ,"function grabLumaRegion"
   ,"function cropLuma"
   ,"function downscaleLuma"
@@ -78,7 +78,7 @@ for (const needle of [
   ,"function slotContainingHit"
   ,"function grabMaxSideForSource"
   ,"const HIGH_SINGLE_INFLIGHT = 4;"
-  ,"const HIGH_QUAD_INFLIGHT = 2;"
+  ,"const HIGH_QUAD_INFLIGHT = 1;"
   ,"const HIGH_QUAD_GRAB_MS = 33;"
   ,"function chooseQuadRegion"
   ,"function readCropsFromPacked"
@@ -148,7 +148,8 @@ for (const needle of [
   ,"elapsed < 1000"
   ," · 每帧 "
 ]) assert.ok(source.includes(needle), "missing receiver guard: " + needle);
-assert.ok(indexHtml.includes("app.js?v=76"), "index.html must cache-bust app.js with the current receiver build");
+assert.ok(indexHtml.includes("app.js?v=77"), "index.html must cache-bust app.js with the current receiver build");
+assert.ok(indexHtml.includes('href="vendor/decimen/zxing_reader-EOacYbLr.wasm"'), "the page must preload WASM so the first scan can decode immediately");
 assert.ok(indexHtml.includes('id="cameraFreeze"'), "stop must freeze the last preview frame instead of flashing black");
 assert.ok(!source.includes("highMultiLayout || !highSingleConfirmed"), "single-code acquire must not be replaced by quadrant crops");
 assert.ok(!source.includes("dueRelock"), "quad must not fall back to overlapping quadrants after empty misses");
@@ -167,7 +168,8 @@ assert.ok(source.includes("highGrabInFlight = false") && source.includes("return
 assert.ok(source.includes("highWorkerBusy.filter(Boolean).length >= HIGH_QUAD_INFLIGHT"), "quad must cap overlapping 720 video bitmaps");
 assert.ok(!source.includes("if (highGrabInFlight || highWorkerBusy.some(Boolean))"), "quad must not wait for every worker before grabbing the next camera frame");
 assert.ok(!source.includes("scanQuadCrops(retries, true)"), "quad must not hold the camera frame for a second decode pass");
-assert.ok(source.includes("frameRate: { ideal: 30, max: 30 }"), "Android preview must stay at 30 FPS to match the sender and avoid 60 FPS stutter");
+assert.ok(source.includes("正在加载解码器"), "the first scan must wait for WASM instead of dropping frames silently");
+assert.ok(source.includes("  startHighSpeedWorkers();\n})();") || source.includes("  startHighSpeedWorkers();\r\n})();"), "WASM workers must warm up before the camera starts");
 assert.ok(source.includes("cameraRequestedFps = androidCam ? 30 : 60;"), "Android camera diagnostics must report the 30 FPS request");
 assert.ok(!source.includes("function grabQuadTileBitmaps"), "v71 atlas crops from a 1440 video snapshot made this phone stutter");
 assert.ok(!source.includes("function grabQuadTileBitmap"), "quad must not issue one createImageBitmap per tile from the live video");
@@ -210,7 +212,7 @@ assert.ok(!source.includes("location.reload()"), "the receiver must not reload i
 assert.ok(serviceWorker.includes("self.clients.claim()"), "the new service worker must still take over open pages");
 assert.ok(!serviceWorker.includes("client.navigate(client.url)"), "activating the worker must not navigate the page and kill getUserMedia");
 assert.ok(serviceWorker.includes("ASSETS.filter((path) => !path.endsWith(\".wasm\"))") || serviceWorker.includes("ASSETS.filter(path => !path.endsWith(\".wasm\"))"), "install must not wait to download WASM before the page can open the camera");
-assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v76";'), "service worker cache version was not bumped");
+assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v77";'), "service worker cache version was not bumped");
 assert.ok(serviceWorker.includes('path.endsWith(".wasm")'), "service worker must cache WASM/worker files instead of no-store");
 assert.ok(serviceWorker.includes('"./highspeed-protocol.js"') && serviceWorker.includes('"./vendor/decimen/highspeed-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/multi-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/zxing_reader-EOacYbLr.wasm"'), "high-speed receiver assets are not cached");
 assert.equal(mirrorSource, source, "web-receiver app.js drifted from the published root receiver");

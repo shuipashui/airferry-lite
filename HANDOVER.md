@@ -4,7 +4,7 @@
 
 对外说明只写 [README.md](README.md)。不要在 README 里放版本号、实测 KB/s、Worker / VideoFrame 细节或本文链接。
 
-**交接时点：** 2026-08-20。网页接收端 **v76**。Android APK 冻结 **0.8.12**。发送端是根目录 `sender/` 打出的单文件 HTML，无独立版本号，以 Pages 上的 `sender/dist/airferry-lite-sender.html` 为准。
+**交接时点：** 2026-08-20。网页接收端 **v77**。Android APK 冻结 **0.8.12**。发送端是根目录 `sender/` 打出的单文件 HTML，无独立版本号，以 Pages 上的 `sender/dist/airferry-lite-sender.html` 为准。
 
 ## 1. 项目一句话
 
@@ -29,11 +29,11 @@
 
 | 部件 | 版本 | 对照 |
 |---|---|---|
-| 网页接收端 | **v76** | 取帧同 v74。Android 预览回到 30 FPS。四码 `HIGH_QUAD_INFLIGHT = 2`、间隔 33 ms。对照仍是 v74 会话 **43.3 KB/s** |
+| 网页接收端 | **v77** | 四码回到 v74：30 FPS · inflight 1。页面加载就预热 WASM。对照仍是 v74 会话 **43.3 KB/s** |
 | Android APK | **0.8.12**（versionCode 27） | 未经明确要求不要改。历史峰值 **0.8.8：60 Hz 四码约 193 KB/s** |
 | 发送端 | AFL2 单文件 HTML | 默认 2331 B · 30 FPS · 单码；四码每码上限 **1273 B** |
 
-诊断第一行必须是 `网页：v76`（改版后变成 `网页：vN`）。
+诊断第一行必须是 `网页：v77`（改版后变成 `网页：vN`）。
 
 ## 4. 实测对照（回归用这些，不要用更旧的数）
 
@@ -46,7 +46,7 @@
 - 采集 **51.9** · 有效 **30.9** · 解码 **37.6 ms** · 取帧 **bitmap**
 - 实时 **65.0 KB/s** · 会话 **53.8 KB/s**
 
-这是网页单码在 **60 FPS 预览** 下必须保住的数。v73–v74、v76 把 Android 预览锁在 30 FPS 以对准 30 FPS 发送。采集掉到约 10、忙时丢弃 0，就是主线程取帧把 `requestVideoFrameCallback` 卡住了。
+这是网页单码在 **60 FPS 预览** 下必须保住的数。v73–v74、v76–v77 把 Android 预览锁在 30 FPS 以对准 30 FPS 发送。采集掉到约 10、忙时丢弃 0，就是主线程取帧把 `requestVideoFrameCallback` 卡住了。
 
 ### 四码（当前对照是 v74）
 
@@ -65,7 +65,13 @@ v75 Pages 实测（同上参数，但预览 **60 FPS**、inflight 2、间隔 16 
 - 单码：采集 46.1 · 分析 39.3 · 有效 0.0 · 扫描 **1440 全图** · 解码 72.4 ms · 会话 **28.6 KB/s**
 - 60 FPS 相机会拍到 30 FPS 发送的换帧间隙，WASM 打不中；主线程还要按 40–55 次/秒抠 720/1440。不要再要 60 FPS 预览。
 
-v76：预览回到 **30 FPS**（和 v74 一样）。四码仍 `HIGH_QUAD_INFLIGHT = 2`，但取帧间隔 **33 ms**，只让第二个 Worker 吃满 30 FPS，不再按 16 ms 连抠。单码取帧不要动。若又卡，把 inflight 退回 1。诊断第一行 `网页：v76`。
+v76 Pages 实测（30 FPS 预览 + inflight 2 + 间隔 33 ms）：
+
+- 采集 **30.0** · 分析 21.3 · 有效 **18.4 FPS** · 解码 **71.3 ms** · **每帧 0.66**
+- 实时 27.7 · 平均 27.6 · 会话 **17.5 KB/s** · 格 4 · 还是有点卡
+- 两个 720 bitmap 并行把解码从 36 ms 拖到 71 ms，命中率也掉了。单码速度回来了。刚开始几秒相机正常但完全扫不到码（WASM 还在编译）。
+
+v77：inflight 退回 **1**（回到 v74 取帧）。页面一打开就预热 Worker，并 preload WASM，避免开头几秒空转。不要 60 FPS 预览，不要 inflight 2。诊断第一行 `网页：v77`。
 
 不要再走的路（都已 Pages 打过）：
 
@@ -117,7 +123,7 @@ v76：预览回到 **30 FPS**（和 v74 一样）。四码仍 `HIGH_QUAD_INFLIGH
 
 根目录 `index.html` + `app.js` + `sw.js` 即 GitHub Pages。`web-receiver/` 是 byte-identical 镜像（换行除外），改完必跑 `node sync-receiver.mjs`。
 
-高速路径：`requestVideoFrameCallback` → `scanWithHighSpeedWorkers`。Worker 忙则丢最新帧，不排队。先 `play()` 和 `scheduleScan()` 让预览出来，再起 WASM Worker。Android 2 个，桌面最多 4 个。
+高速路径：`requestVideoFrameCallback` → `scanWithHighSpeedWorkers`。Worker 忙则丢最新帧，不排队。页面加载就预热 WASM Worker，点开始时不要再等编译。Android 2 个，桌面最多 4 个。
 
 ### 单码（不要改这条取帧）
 
@@ -129,7 +135,7 @@ v76：预览回到 **30 FPS**（和 v74 一样）。四码仍 `HIGH_QUAD_INFLIGH
 ### 四码（锁格不变；v73 一张图进 Worker）
 
 1. `grabQuadPackedBitmap`：对 2×2 并集 **一次** `createImageBitmap(video, …, { resize 720 })`，把 bitmap 交给 **1 个** Worker，`maxSymbols: 4`。不要在页面线程 `getImageData` / `rgbaToLuma`。不要每格各读 video，不要 1440 atlas。
-2. 同时最多 `HIGH_QUAD_INFLIGHT = 2` 帧在飞，取帧间隔 `HIGH_QUAD_GRAB_MS = 33`。不要 60 FPS 预览，不要 16 ms 连抠。不要每格各读 video。
+2. 同时只允许 `HIGH_QUAD_INFLIGHT = 1` 帧在飞，取帧间隔 `HIGH_QUAD_GRAB_MS = 33`。v76 的 inflight 2 把解码拖到 71 ms、每帧掉到 0.66，不要再开。不要 60 FPS 预览。页面加载时预热 Worker。
 3. 同帧不再二次补扫。不要 `dueRelock`，不要周期性重锁整幅 ROI。
 4. `lockQuadSlots`：至少 **2** 个命中才锁；满 4 格冻结。格 4 之后只用 `followContainedQuadHits`。不要 `rebuildQuadFromHits`。四码布局确定后不要再 `BarcodeDetector.detect(video)`。
 5. 保留 `function tileCenter`。格子里存原始框，只在扫描时 `inflateRect` 一次。
@@ -254,7 +260,7 @@ tests/                          npm test：协议 / 安全 / 运行时针
 
 ## 11. 已知缺口
 
-1. **网页四码** 对照仍是 v74 会话 **43.3 KB/s**（30 FPS · inflight 1 · 每帧 2.30）。v75 的 60 FPS 预览已否定。v76 是 30 FPS + inflight 2。不要再加每格 video 读回，不要退回主线程 `getImageData`。若 v76 又卡，inflight 退回 1。不要搬 APK 的 ≥3 命中重排。单码取帧不要顺手改。
+1. **网页四码** 对照仍是 v74 会话 **43.3 KB/s**（30 FPS · inflight 1 · 每帧 2.30）。v75 60 FPS 和 v76 inflight 2 都更慢更卡，不要再走。不要再加每格 video 读回，不要退回主线程 `getImageData`。不要搬 APK 的 ≥3 命中重排。单码取帧不要顺手改。
 2. AFL2 进度只在内存，刷新即丢。IndexedDB 只服务 AFL1。
 3. 文件上限 64 MiB。
 4. 本地 `origin/main` 和 GitHub `main` 的 SHA 偶尔对不齐（API 推送），以 GitHub API 的 ref 为准。
@@ -265,4 +271,4 @@ MIT。第三方见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。只使用 
 
 ---
 
-当前网页 **v76**，APK **0.8.12**。四码对照仍是 v74 会话 **43.3 KB/s**。v75 的 60 FPS 预览不要再走。以 Pages 诊断第一行 `网页：v76` 为准。
+当前网页 **v77**，APK **0.8.12**。四码对照仍是 v74 会话 **43.3 KB/s**。v75 的 60 FPS 和 v76 的 inflight 2 不要再走。以 Pages 诊断第一行 `网页：v77` 为准。

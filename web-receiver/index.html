@@ -7,11 +7,12 @@
   <link rel="manifest" href="manifest.webmanifest">
   <title>AirFerry Lite - 手机接收端</title>
   <link rel="stylesheet" href="styles.css">
+  <link rel="preload" href="vendor/decimen/zxing_reader-EOacYbLr.wasm" as="fetch" crossorigin>
   <style>.diagnostics pre{white-space:pre-wrap;word-break:break-word;color:#c3e3d6;font:11px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;margin:10px 0 0;max-height:220px;overflow:auto}</style>
 </head>
 <body>
   <main class="app">
-    <header><div class="mark">AF</div><div><h1>AirFerry Lite</h1><p>手机网页接收端 v76</p></div><a id="openSender" class="jump small" href="sender/dist/airferry-lite-sender.html">打开发送端</a></header>
+    <header><div class="mark">AF</div><div><h1>AirFerry Lite</h1><p>手机网页接收端 v77</p></div><a id="openSender" class="jump small" href="sender/dist/airferry-lite-sender.html">打开发送端</a></header>
     <section class="camera-card">
       <video id="video" playsinline muted></video>
       <canvas id="cameraFreeze" class="camera-freeze" hidden></canvas>
@@ -39,6 +40,6 @@
   <script src="receiver-storage.js"></script>
   <script src="protocol.js"></script>
   <script src="highspeed-protocol.js"></script>
-  <script src="app.js?v=76"></script>
+  <script src="app.js?v=77"></script>
 </body>
 </html>

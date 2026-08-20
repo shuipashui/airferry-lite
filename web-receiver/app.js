@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v76";
+  const RECEIVER_BUILD = "v77";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -64,7 +64,7 @@
   const HIGH_QUAD_TILE_MISS_LIMIT = 6;
   const HIGH_QUAD_FROZEN_MISS_LIMIT = 24;
   const HIGH_SINGLE_INFLIGHT = 4;
-  const HIGH_QUAD_INFLIGHT = 2;
+  const HIGH_QUAD_INFLIGHT = 1;
   const HIGH_QUAD_GRAB_MS = 33;
 
   let stream = null;
@@ -319,7 +319,7 @@
         lastWorkerCount = 0;
       }
       if (!highWorkers.length && !barcodeDetector && typeof window.jsQR !== "function") throw new Error("DecoderUnavailable");
-      status.textContent = highWorkers.length ? "正在高速扫描" : barcodeDetector ? "正在快速扫描" : "正在扫描";
+      status.textContent = highWorkerReady.some(Boolean) ? "正在高速扫描" : highWorkers.length ? "正在加载解码器" : barcodeDetector ? "正在快速扫描" : "正在扫描";
     } catch (err) {
       closeCamera();
       status.textContent = err.message === "DecoderUnavailable" ? "二维码解码器加载失败" : err.message === "CameraEnded" ? "摄像头连接已中断，请重新开始" : err.name === "NotAllowedError" ? "摄像头权限被拒绝" : "摄像头不可用";
@@ -537,6 +537,7 @@
       if (highWorkers[index] !== worker) return;
       if (event.data?.id === -1) {
         highWorkerReady[index] = true;
+        if (stream && status.textContent === "正在加载解码器") status.textContent = "正在高速扫描";
         return;
       }
       const startedAt = highWorkerStartedAt[index];
@@ -583,7 +584,7 @@
   }
 
   function restartHighSpeedWorker(index) {
-    if (!stream || !highWorkers.length) return;
+    if (!highWorkers.length) return;
     highWorkers[index]?.terminate();
     workerRestarts += 1;
     try {
@@ -2595,4 +2596,6 @@
   function formatBytes(n) {
     return n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB";
   }
+
+  startHighSpeedWorkers();
 })();
