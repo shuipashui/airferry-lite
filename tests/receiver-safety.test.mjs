@@ -55,7 +55,7 @@ for (const needle of [
   ,"const HIGH_QUAD_PACKED_SIZE = 720;"
   ,">= 4 ? 4 : 2"
   ,"!/Android/i.test(navigator.userAgent || \"\")"
-  ,"const RECEIVER_BUILD = \"v72\";"
+  ,"const RECEIVER_BUILD = \"v73\";"
   ,"function grabLumaRegion"
   ,"function cropLuma"
   ,"function downscaleLuma"
@@ -67,6 +67,7 @@ for (const needle of [
   ,"function grabPackedRegion"
   ,"function unionScanCrops"
   ,"function decodeQuadFrame"
+  ,"function grabQuadPackedBitmap"
   ,"function scanQuadCrops"
   ,"function postBitmapToWorker"
   ,"function idleHighWorkerSlots"
@@ -77,6 +78,8 @@ for (const needle of [
   ,"function slotContainingHit"
   ,"function grabMaxSideForSource"
   ,"const HIGH_SINGLE_INFLIGHT = 4;"
+  ,"const HIGH_QUAD_INFLIGHT = 1;"
+  ,"const HIGH_QUAD_GRAB_MS = 33;"
   ,"function chooseQuadRegion"
   ,"function readCropsFromPacked"
   ,"function tileCovered"
@@ -145,23 +148,26 @@ for (const needle of [
   ,"elapsed < 1000"
   ," · 每帧 "
 ]) assert.ok(source.includes(needle), "missing receiver guard: " + needle);
-assert.ok(indexHtml.includes("app.js?v=72"), "index.html must cache-bust app.js with the current receiver build");
+assert.ok(indexHtml.includes("app.js?v=73"), "index.html must cache-bust app.js with the current receiver build");
 assert.ok(indexHtml.includes('id="cameraFreeze"'), "stop must freeze the last preview frame instead of flashing black");
 assert.ok(!source.includes("highMultiLayout || !highSingleConfirmed"), "single-code acquire must not be replaced by quadrant crops");
 assert.ok(!source.includes("dueRelock"), "quad must not fall back to overlapping quadrants after empty misses");
 assert.ok(!source.includes("HIGH_MULTI_FULL_DECODE_EVERY"), "quad must not periodic-relock the whole ROI");
-assert.ok(source.includes("highMultiLayout && locked < 4"), "native locate must stop once four tiles are locked");
+assert.ok(source.includes("!highMultiLayout && (!highScanRoi || highScanMisses >= 3)"), "native locate is only for unlocked single-code ROI");
+assert.ok(!source.includes("highMultiLayout && locked < 4"), "quad must not keep BarcodeDetector.detect(video) running after layout is known");
 assert.ok(source.includes("tiles.length === 1 && !highMultiLayout"), "single-code acquire must use BarcodeDetector to lock an ROI before V34 WASM searches 1440");
 assert.ok(source.includes("if (full) return HIGH_TRACK_SIZE;"), "unlocked single-code full frames must acquire at 960, not 1440");
 assert.ok(source.includes("if (!finishing)"), "completed transfers must keep layout diagnostics after the camera stops");
 assert.ok(!source.includes("HIGH_QUAD_TRACK_MS"), "locked quad must not keep running full-frame BarcodeDetector");
 assert.ok(!source.includes("}, HIGH_TILE_PAD));"), "tracked quad boxes must not be stored with the scan pad");
-assert.ok(source.includes("if (highMultiLayout) return grabBitmapPacked(source);"), "quad must snapshot the 2x2 once at 720 packed, like v64");
+assert.ok(source.includes("if (highMultiLayout) return grabBitmapPacked(source);"), "packed luma remains a fallback if ImageBitmap grab fails");
 assert.ok(source.includes("add(await scanQuadCrops(crops, false));") || source.includes("const hits = await scanQuadCrops(crops, false);"), "quad must keep the v70 pipeline around scanQuadCrops");
-assert.ok(source.includes("const packed = await grabPackedRegion(unionScanCrops(jobs));"), "quad must grab one packed luma region instead of four video bitmaps");
-assert.ok(source.includes("highGrabInFlight = false") && source.includes("const parts = await Promise.all(pending);"), "quad must release the camera grab before waiting for WASM decode");
+assert.ok(source.includes("const grabbed = await grabQuadPackedBitmap(region);"), "quad must snapshot the 2x2 once and post the bitmap, not getImageData on the page");
+assert.ok(source.includes("highGrabInFlight = false") && source.includes("return pending;"), "quad must release the camera grab before waiting for WASM decode");
+assert.ok(source.includes("highWorkerBusy.filter(Boolean).length >= HIGH_QUAD_INFLIGHT"), "quad must not keep multiple live-video bitmaps in flight");
 assert.ok(!source.includes("if (highGrabInFlight || highWorkerBusy.some(Boolean))"), "quad must not wait for every worker before grabbing the next camera frame");
 assert.ok(!source.includes("scanQuadCrops(retries, true)"), "quad must not hold the camera frame for a second decode pass");
+assert.ok(source.includes("frameRate: { ideal: 30, max: 30 }"), "Android preview must cap at 30 FPS so 1440p 60 FPS plus WASM does not freeze Chrome");
 assert.ok(!source.includes("function grabQuadTileBitmaps"), "v71 atlas crops from a 1440 video snapshot made this phone stutter");
 assert.ok(!source.includes("function grabQuadTileBitmap"), "quad must not issue one createImageBitmap per tile from the live video");
 assert.ok(!source.includes("function dropDeadCamera"), "a stalled decode must not stop the camera track");
@@ -199,7 +205,7 @@ assert.ok(!source.includes("createImageBitmap(video, {"), "ImageBitmap grabs mus
 assert.ok(!source.includes("if (!highMultiLayout && !highScanRoi) return;"), "single-code speed must not wait for an ROI crop before counting bytes");
 assert.ok(source.includes("let swRefreshing = false;"), "service worker updates must reload even when the previous build already recorded a refresh");
 assert.ok(serviceWorker.includes("client.navigate(client.url)"), "new service worker must navigate open pages off a stuck old build");
-assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v72";'), "service worker cache version was not bumped");
+assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v73";'), "service worker cache version was not bumped");
 assert.ok(serviceWorker.includes('path.endsWith(".wasm")'), "service worker must cache WASM/worker files instead of no-store");
 assert.ok(serviceWorker.includes('"./highspeed-protocol.js"') && serviceWorker.includes('"./vendor/decimen/highspeed-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/multi-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/zxing_reader-EOacYbLr.wasm"'), "high-speed receiver assets are not cached");
 assert.equal(mirrorSource, source, "web-receiver app.js drifted from the published root receiver");

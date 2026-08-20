@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v72";
+  const RECEIVER_BUILD = "v73";
   if ("serviceWorker" in navigator) {
     let swRefreshing = false;
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
@@ -51,7 +51,9 @@
   const MAX_FILE_SIZE = 64 * 1024 * 1024;
   const MAX_CHUNKS = 200000;
   const MAX_CHUNK_SIZE = 4096;
-  const HIGH_SPEED_WORKERS = (navigator.hardwareConcurrency || 4) >= 4 ? 4 : 2;
+  const HIGH_SPEED_WORKERS = /Android/i.test(navigator.userAgent || "")
+    ? 2
+    : ((navigator.hardwareConcurrency || 4) >= 4 ? 4 : 2);
   const HIGH_WORKER_TIMEOUT = 2500;
   const HIGH_ACQUIRE_SIZE = 1440;
   const HIGH_TRACK_SIZE = 960;
@@ -64,10 +66,12 @@
   const HIGH_QUAD_OVERLAP = 0.18;
   const HIGH_LOCATE_EVERY = 5;
   const HIGH_TILE_PAD = 1.35;
-  const HIGH_QUAD_ACQUIRE_MS = 100;
+  const HIGH_QUAD_ACQUIRE_MS = 400;
   const HIGH_QUAD_TILE_MISS_LIMIT = 6;
   const HIGH_QUAD_FROZEN_MISS_LIMIT = 24;
   const HIGH_SINGLE_INFLIGHT = 4;
+  const HIGH_QUAD_INFLIGHT = 1;
+  const HIGH_QUAD_GRAB_MS = 33;
 
   let stream = null;
   let scanTimer = 0;
@@ -155,6 +159,7 @@
   let lastUsedLuma = false;
   let lumaUnavailable = false;
   let highGrabInFlight = false;
+  let lastQuadGrabAt = 0;
   let lastNativeLocate = 0;
   let highTileProven = [false, false, false, false];
   let highQuadFrozen = false;
@@ -267,7 +272,7 @@
       await setupDetector();
       const androidCam = /Android/i.test(navigator.userAgent || "");
       const camera = androidCam
-        ? { facingMode: { ideal: "environment" }, width: { ideal: 1440 }, height: { ideal: 1920 } }
+        ? { facingMode: { ideal: "environment" }, width: { ideal: 1440 }, height: { ideal: 1920 }, frameRate: { ideal: 30, max: 30 } }
         : { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1440 } };
       if (!androidCam) {
         try {
@@ -281,7 +286,7 @@
         }
       }
       if (!stream) {
-        cameraRequestedFps = 60;
+        cameraRequestedFps = androidCam ? 30 : 60;
         stream = await navigator.mediaDevices.getUserMedia({ video: camera, audio: false });
       }
       lastUsedLuma = false;
@@ -625,11 +630,9 @@
     for (let index = 0; index < highWorkers.length; index += 1) {
       if (highWorkerBusy[index] && now - highWorkerStartedAt[index] > HIGH_WORKER_TIMEOUT) restartHighSpeedWorker(index);
     }
-    const locked = highTrackedTiles ? highTrackedTiles.filter(Boolean).length : 0;
     if (barcodeDetector && !highLocateLock && now - lastNativeLocate > HIGH_QUAD_ACQUIRE_MS) {
-      const needQuad = highMultiLayout && locked < 4;
       const needSingle = !highMultiLayout && (!highScanRoi || highScanMisses >= 3);
-      if (needQuad || needSingle) {
+      if (needSingle) {
         lastNativeLocate = now;
         void locateQuadWithNative();
       }
@@ -1337,7 +1340,35 @@
     }
   }
 
-  function postBitmapToWorker(slot, bitmap, source, width, height, retryBinarizer) {
+  async function grabQuadPackedBitmap(source) {
+    const vw = video.videoWidth || 0;
+    const vh = video.videoHeight || 0;
+    const x = Math.max(0, Math.min(vw - 1, Math.round(source.x)));
+    const y = Math.max(0, Math.min(vh - 1, Math.round(source.y)));
+    const widthIn = Math.max(1, Math.round(source.width));
+    const heightIn = Math.max(1, Math.round(source.height));
+    const widthSrc = Math.max(1, Math.min(widthIn, vw - x));
+    const heightSrc = Math.max(1, Math.min(heightIn, vh - y));
+    const scale = Math.min(1, HIGH_QUAD_PACKED_SIZE / Math.max(widthSrc, heightSrc, 1));
+    const width = Math.max(1, Math.round(widthSrc * scale));
+    const height = Math.max(1, Math.round(heightSrc * scale));
+    const bitmap = await createImageBitmap(video, x, y, widthSrc, heightSrc, {
+      resizeWidth: width,
+      resizeHeight: height,
+      resizeQuality: "pixelated",
+      colorSpaceConversion: "none"
+    });
+    lastCapturePath = "bitmap";
+    lastUsedLuma = false;
+    return {
+      bitmap,
+      width,
+      height,
+      source: { x, y, width: widthSrc, height: heightSrc }
+    };
+  }
+
+  function postBitmapToWorker(slot, bitmap, source, width, height, retryBinarizer, maxSymbols) {
     highWorkerBusy[slot] = true;
     highWorkerStartedAt[slot] = performance.now();
     lastPostedScanSize = Math.max(width, height);
@@ -1353,7 +1384,13 @@
       outH: height,
       postedAt: performance.now()
     });
-    highWorkers[slot].postMessage({ id, bitmap, maxSymbols: 1, retryBinarizer, crop: null }, [bitmap]);
+    highWorkers[slot].postMessage({
+      id,
+      bitmap,
+      maxSymbols: Math.max(1, Math.min(4, maxSymbols || 1)),
+      retryBinarizer,
+      crop: null
+    }, [bitmap]);
     return new Promise(resolve => {
       const timer = setTimeout(() => {
         if (!highJobWaiters.has(id)) return;
@@ -1390,25 +1427,38 @@
   async function scanQuadCrops(crops, retryBinarizer) {
     const slots = idleHighWorkerSlots();
     if (!slots.length) return [];
-    const jobs = crops.slice(0, slots.length);
-    const packed = await grabPackedRegion(unionScanCrops(jobs));
-    if (!packed || !stream) return [];
-    const pending = [];
-    let slotIndex = 0;
-    for (const crop of jobs) {
-      if (slotIndex >= slots.length) break;
-      const cropped = cropLuma(packed, crop);
-      if (!cropped) continue;
-      const sized = downscaleLuma(cropped.lum, cropped.width, cropped.height, HIGH_QUAD_TILE_SIZE);
-      pending.push(postLumaToWorker(slots[slotIndex], sized, cropped.source, 1, retryBinarizer));
-      slotIndex += 1;
+    const region = unionScanCrops(crops);
+    try {
+      const grabbed = await grabQuadPackedBitmap(region);
+      if (!grabbed || !stream) {
+        try { grabbed?.bitmap.close(); } catch (_) {}
+        return [];
+      }
+      const pending = postBitmapToWorker(
+        slots[0],
+        grabbed.bitmap,
+        grabbed.source,
+        grabbed.width,
+        grabbed.height,
+        retryBinarizer,
+        4
+      );
+      highGrabInFlight = false;
+      return pending;
+    } catch (_) {
+      const packed = await grabPackedRegion(region);
+      if (!packed || !stream) return [];
+      const sized = downscaleLuma(packed.lum, packed.width, packed.height, HIGH_QUAD_PACKED_SIZE);
+      const pending = postLumaToWorker(
+        slots[0],
+        sized,
+        { x: packed.x, y: packed.y, width: packed.regionW, height: packed.regionH },
+        4,
+        retryBinarizer
+      );
+      highGrabInFlight = false;
+      return pending;
     }
-    highGrabInFlight = false;
-    if (!pending.length) return [];
-    const parts = await Promise.all(pending);
-    const hits = [];
-    for (const list of parts) hits.push(...list);
-    return hits;
   }
 
   function decodeQuadFrame() {
@@ -1416,15 +1466,22 @@
       workerBusyDrops += 1;
       return;
     }
+    if (highWorkerBusy.filter(Boolean).length >= HIGH_QUAD_INFLIGHT) {
+      workerBusyDrops += 1;
+      return;
+    }
+    const now = performance.now();
+    if (lastQuadGrabAt && now - lastQuadGrabAt < HIGH_QUAD_GRAB_MS) return;
     const slots = idleHighWorkerSlots();
     if (!slots.length) {
       workerBusyDrops += 1;
       return;
     }
     highGrabInFlight = true;
+    lastQuadGrabAt = now;
     void (async () => {
       try {
-        const { crops } = pickQuadCrops(slots.length);
+        const { crops } = pickQuadCrops(4);
         if (!crops.length) return;
         const hits = await scanQuadCrops(crops, false);
         rememberQuadHits(hits);

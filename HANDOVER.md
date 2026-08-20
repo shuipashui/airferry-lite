@@ -4,7 +4,7 @@
 
 对外说明只写 [README.md](README.md)。不要在 README 里放版本号、实测 KB/s、Worker / VideoFrame 细节或本文链接。
 
-**交接时点：** 2026-08-20。网页接收端 **v72**。Android APK 冻结 **0.8.12**。发送端是根目录 `sender/` 打出的单文件 HTML，无独立版本号，以 Pages 上的 `sender/dist/airferry-lite-sender.html` 为准。
+**交接时点：** 2026-08-20。网页接收端 **v73**。Android APK 冻结 **0.8.12**。发送端是根目录 `sender/` 打出的单文件 HTML，无独立版本号，以 Pages 上的 `sender/dist/airferry-lite-sender.html` 为准。
 
 ## 1. 项目一句话
 
@@ -29,11 +29,11 @@
 
 | 部件 | 版本 | 对照 |
 |---|---|---|
-| 网页接收端 | **v72** | 单码路径同 v66/v68。四码回到 v64 的 720 packed 一次读回 + v70 流水线。不要 1440 atlas，不要每格读 video |
+| 网页接收端 | **v73** | 单码路径同 v66/v68。四码：一张 720 bitmap 交给 1 个 Worker（maxSymbols 4），主线程不再 getImageData。Android 预览 30 FPS、Worker 2 |
 | Android APK | **0.8.12**（versionCode 27） | 未经明确要求不要改。历史峰值 **0.8.8：60 Hz 四码约 193 KB/s** |
 | 发送端 | AFL2 单文件 HTML | 默认 2331 B · 30 FPS · 单码；四码每码上限 **1273 B** |
 
-诊断第一行必须是 `网页：v72`（改版后变成 `网页：vN`）。
+诊断第一行必须是 `网页：v73`（改版后变成 `网页：vN`）。
 
 ## 4. 实测对照（回归用这些，不要用更旧的数）
 
@@ -48,7 +48,7 @@
 
 这是网页单码必须保住的数。采集掉到约 10、忙时丢弃 0，就是主线程取帧把 `requestVideoFrameCallback` 卡住了。
 
-### 四码（对照仍是 v64；v69–v71 已测，v72 收回 packed）
+### 四码（对照仍是 v64；v69–v72 已测，v73 把像素搬出主线程）
 
 v64 解完对照（720 packed 整幅 2×2，每格大约只有 360 px）：
 
@@ -74,7 +74,9 @@ v70 Pages 实测（同上参数，相机 1920×1440 60 FPS）：
 
 v71 Pages：1440 atlas 再切四格，主线程更卡；1.5 s 无帧会 `closeCamera`，卡顿时把还活着的相机也关掉。相机问题和 v70 一样，并且更卡。这条路径不要再走。
 
-v72：四码主路径回到 **一张 720 packed luma**（和 v64 一样，每格大约 360 px），取帧锁在派给 Worker 之后立刻放开（v70 流水线）。不要每格 `createImageBitmap(video)`，不要 1440 atlas。开始按钮扫描中保持可点；预览死后点开始会重新 `getUserMedia`。不要用看门狗自动关相机。单码取帧不要动。诊断第一行 `网页：v72`。
+v72 Pages：720 packed 后在**页面线程** `getImageData` + 转 luma，流水线按相机 60 FPS 跑，主线程仍然卡；锁格阶段还对 `video` 跑 `BarcodeDetector`。不要再走。
+
+v73：四码主路径是 **一张 720 ImageBitmap 直接交给 1 个 Worker**（`maxSymbols: 4`），像素提取在 Worker 里做。同时只允许 1 帧在飞，取帧间隔 ≥ 33 ms。Android 预览请求 **30 FPS**，只开 **2 个 Worker**。四码布局确定后不要再 `BarcodeDetector.detect(video)`。单码取帧不要动。诊断第一行 `网页：v73`。
 
 ### 怎么读诊断
 
@@ -127,16 +129,18 @@ v72：四码主路径回到 **一张 720 packed luma**（和 v64 一样，每格
 3. 锁定后：`createImageBitmap(video, x, y, widthSrc, heightSrc, { resize 720 })`。
 4. 失败不要 `captureViaCanvas = true`，不要二次 `createImageBitmap` 裁已经拿到的 bitmap。
 
-### 四码（锁格不变；取帧回到 v64 packed + v70 流水线）
+### 四码（锁格不变；v73 一张图进 Worker）
 
-1. `scanQuadCrops`：对当前批次格子求并集，**一次** `grabBitmapPacked` 成 720 luma，再 `cropLuma` 切格发给空闲 Worker。不要每格各读一次 video，不要 1440 atlas 再切图。
-2. 同帧不再二次补扫。有空闲 Worker 就发下一格，取帧锁在 luma 发出去之后立刻放开。不要 `dueRelock`，不要周期性重锁整幅 ROI。
-3. `lockQuadSlots`：至少 **2** 个命中才锁；满 4 格冻结。格 4 之后只用 `followContainedQuadHits`。不要 `rebuildQuadFromHits`，不要再跑全图 `BarcodeDetector`。
-4. 保留 `function tileCenter`。格子里存原始框，只在扫描时 `inflateRect` 一次。
+1. `grabQuadPackedBitmap`：对 2×2 并集 **一次** `createImageBitmap(video, …, { resize 720 })`，把 bitmap 交给 **1 个** Worker，`maxSymbols: 4`。不要在页面线程 `getImageData` / `rgbaToLuma`。不要每格各读 video，不要 1440 atlas。
+2. 同时只允许 `HIGH_QUAD_INFLIGHT = 1` 帧在飞，取帧间隔 `HIGH_QUAD_GRAB_MS = 33`。不要为了吞吐把 60 FPS 预览每帧都抠像素。
+3. 同帧不再二次补扫。不要 `dueRelock`，不要周期性重锁整幅 ROI。
+4. `lockQuadSlots`：至少 **2** 个命中才锁；满 4 格冻结。格 4 之后只用 `followContainedQuadHits`。不要 `rebuildQuadFromHits`。四码布局确定后不要再 `BarcodeDetector.detect(video)`。
+5. 保留 `function tileCenter`。格子里存原始框，只在扫描时 `inflateRect` 一次。
+6. packed luma 只作 ImageBitmap 失败时的回退。
 
 ### 相机
 
-- Android 不要要 120 FPS、不要 `focusMode: continuous`、不要横屏 `1920×1440`（用 `1440×1920`）。
+- Android 预览请求 **30 FPS**（`frameRate: { ideal: 30, max: 30 }`），不要 120、不要 `focusMode: continuous`、不要横屏 `1920×1440`（用 `1440×1920`）。Android 只开 **2** 个 WASM Worker。
 - `cameraPreviewLive()`：轨 `live`、未 mute、video 在播且有宽高；1.5 s 没有新的视频帧则视为死预览。开始扫描若预览已死，先 `closeCamera` 再 `getUserMedia`。不要只看 `track.readyState === "live"` 就 return。
 - 扫描中开始按钮保持可点。不要因为主线程卡了就自动 `closeCamera`（v71 的 `dropDeadCamera` 会把活相机杀掉）。
 - 假 `ended` 只在轨仍 `live` 且未 mute、video 未暂停且有帧时忽略。`WeakSet` 每条轨只绑一次。
@@ -154,7 +158,7 @@ APK 比网页快，主要不是锁格算法更聪明，而是：**同一帧 Y �
 
 - Preview + `ImageAnalysis`。分析流目标 **1920×1440**、`YUV_420_888`、`STRATEGY_KEEP_ONLY_LATEST`。
 - 优先固定 AE 档 60 / 90 / 120；这台红米分析流实际大约 60 FPS。诊断会单独列出「高速录像能力」，那条管道不能拿来扫码。
-- 网页端不要对 Android `getUserMedia` 要 120 FPS 或横屏 1920×1440；APK 的 1920×1440 是 CameraX 分析分辨率，和网页预览约束不是一回事。
+- 网页端不要对 Android `getUserMedia` 要 120 FPS 或横屏 1920×1440；网页 Android 预览上限 **30 FPS**。APK 的 1920×1440 是 CameraX 分析分辨率，和网页预览约束不是一回事。
 
 ### 解码
 
@@ -224,8 +228,9 @@ tests/                          npm test：协议 / 安全 / 运行时针
 - 不要删 `tileCenter`（格 1 时对 `undefined` 取中心，卡死）。
 - 不要 nearest-neighbor nudge、不要 `dueRelock`、不要格 4 后再跑全图 BarcodeDetector。
 - 不要按相机中线切 2×2，不要把并排两个码当成完整 2×2。
-- 不要每格对 video 做 `createImageBitmap`，不要 1440 atlas 再切格（这台机会卡、闪退）。整幅 2×2 一次 720 packed luma 再切是 v64/v72 主路径。
+- 不要每格对 video 做 `createImageBitmap`，不要 1440 atlas 再切格，不要在页面线程对 720 packed 做 `getImageData`。一张 720 bitmap 进 Worker、`maxSymbols: 4` 是 v73 主路径。
 - 不要用 1.5 s 无帧看门狗自动 `closeCamera`。
+- 不要在四码扫描中继续 `BarcodeDetector.detect(video)`（和 `createImageBitmap` 抢相机）。
 - 不要用稀疏 WASM 命中 `rebuildQuadFromHits` 重排 2×2（会打乱未锁住的格子，诊断里没有格 4）。
 - 网页不要搬 APK 的「≥3 命中按 midX/midY 重排」：WASM 每帧常常只有 1 个命中。
 - APK 不要改回 `ImageProxy.read()`（会旋转）。不要把高速录像 session 接到 ImageAnalysis。不要把已不用的 `LumaScaler` 接回热路径。
@@ -249,7 +254,7 @@ tests/                          npm test：协议 / 安全 / 运行时针
 
 ## 11. 已知缺口
 
-1. **网页四码** 对照仍是 v64 会话 **45.7 KB/s**。v69–v71 的每格 720 / 1440 atlas 更卡或闪退，不要再走。v72 收回 packed 720 + 流水线。不要搬 APK 的 ≥3 命中重排。单码取帧不要顺手改。
+1. **网页四码** 对照仍是 v64 会话 **45.7 KB/s**。v69–v72 的每格 720 / atlas / 主线程 getImageData 更卡或闪退，不要再走。v73 把像素搬进 Worker。不要搬 APK 的 ≥3 命中重排。单码取帧不要顺手改。
 2. AFL2 进度只在内存，刷新即丢。IndexedDB 只服务 AFL1。
 3. 文件上限 64 MiB。
 4. 本地 `origin/main` 和 GitHub `main` 的 SHA 偶尔对不齐（API 推送），以 GitHub API 的 ref 为准。
@@ -260,4 +265,4 @@ MIT。第三方见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。只使用 
 
 ---
 
-当前网页 **v72**，APK **0.8.12**。网页单码实时 **65 KB/s**（路径未改）。四码对照仍是 v64 会话 **45.7 KB/s**。以 Pages 诊断第一行 `网页：v72` 为准。
+当前网页 **v73**，APK **0.8.12**。网页单码实时 **65 KB/s**（路径未改，但 Android 预览改 30 FPS 后要重新测）。四码对照仍是 v64 会话 **45.7 KB/s**。以 Pages 诊断第一行 `网页：v73` 为准。
