@@ -327,8 +327,18 @@
   }
 
   function syncCanvasSize() {
-    const rect = canvas.getBoundingClientRect();
-    const side = Math.max(256, Math.floor(Math.min(rect.width, rect.height)));
+    const viewer = canvas.closest(".viewer") || canvas.parentElement;
+    if (!viewer) return;
+    const style = getComputedStyle(viewer);
+    const padX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+    const padY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+    const avail = Math.min(
+      Math.max(0, viewer.clientWidth - padX),
+      Math.max(0, viewer.clientHeight - padY)
+    );
+    const side = Math.max(256, Math.floor(avail));
+    canvas.style.width = side + "px";
+    canvas.style.height = side + "px";
     if (canvas.width !== side || canvas.height !== side) {
       canvas.width = side;
       canvas.height = side;
@@ -473,7 +483,10 @@
   });
   qrMode.addEventListener("change", syncFpsToLayout);
   if (typeof ResizeObserver === "function") {
-    new ResizeObserver(() => { if (lastPatterns) drawScreen(lastPatterns); }).observe(canvas.parentElement || canvas);
+    new ResizeObserver(() => {
+      if (lastPatterns) drawScreen(lastPatterns);
+      renderRateHint();
+    }).observe(canvas.closest(".viewer") || canvas.parentElement || canvas);
   }
   receiverUrl.href = RECEIVER_URL;
   receiverUrl.textContent = RECEIVER_URL;
