@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v77";
+  const RECEIVER_BUILD = "v78";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -627,8 +627,10 @@
       if (highWorkerBusy[index] && now - highWorkerStartedAt[index] > HIGH_WORKER_TIMEOUT) restartHighSpeedWorker(index);
     }
     if (barcodeDetector && !highLocateLock && now - lastNativeLocate > HIGH_QUAD_ACQUIRE_MS) {
+      const lockedTiles = (highTrackedTiles || []).filter(Boolean).length;
       const needSingle = !highMultiLayout && (!highScanRoi || highScanMisses >= 3);
-      if (needSingle) {
+      const needQuadAcquire = highMultiLayout && lockedTiles < 2;
+      if (needSingle || needQuadAcquire) {
         lastNativeLocate = now;
         void locateQuadWithNative();
       }
@@ -1291,6 +1293,7 @@
     if (quadFrame || transferHits.length >= 2) {
       highMultiLayout = true;
       highSingleConfirmed = false;
+      if (transferHits.length < 2 && (highTrackedTiles || []).filter(Boolean).length < 2) highScanRoi = null;
     } else {
       highSingleConfirmed = true;
     }
@@ -1319,7 +1322,7 @@
       });
       if (transferHits.length >= 4) highScanRoi = next;
       else if (transferHits.length >= 3) highScanRoi = unionHighScanRoi(highScanRoi || next, next);
-      else highScanRoi = next;
+      else if (transferHits.length >= 2) highScanRoi = next;
     }
     if (highMultiLayout && transferHits.length) {
       if (highQuadFrozen) {
@@ -1767,6 +1770,10 @@
     const view = Math.min(video.videoWidth, video.videoHeight);
     const box = Math.max(maxX - minX, maxY - minY, 64);
     lastHitBox = box;
+    if (highMultiLayout && codes.length < 2 && (highTrackedTiles || []).filter(Boolean).length < 2) {
+      highScanRoi = null;
+      return;
+    }
     const close = !highMultiLayout && box >= view * HIGH_CLOSE_BOX_RATIO;
     const pad = highMultiLayout
       ? (codes.length >= 4 ? 1.35 : codes.length >= 2 ? 2.15 : 3.8)
