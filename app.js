@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v84";
+  const RECEIVER_BUILD = "v85";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -31,6 +31,8 @@
   const scanRateText = document.getElementById("scanRateText");
   const missingEl = document.getElementById("missing");
   const hint = document.getElementById("cameraHint");
+  const fps30Btn = document.getElementById("fps30");
+  const fps60Btn = document.getElementById("fps60");
   const result = document.getElementById("result");
   const resultInfo = document.getElementById("resultInfo");
   const download = document.getElementById("download");
@@ -127,8 +129,14 @@
   let validQrFrames = 0;
   let sessionDecodedFrames = 0;
   let sessionValidCodes = 0;
+  const PREVIEW_FPS_KEY = "airferry-lite-preview-fps";
+  let previewFps = 60;
+  try {
+    const stored = Number(localStorage.getItem(PREVIEW_FPS_KEY));
+    if (stored === 30 || stored === 60) previewFps = stored;
+  } catch (_) {}
   let cameraFrameRate = 0;
-  let cameraRequestedFps = 120;
+  let cameraRequestedFps = previewFps;
   let cameraSettings = null;
   let cameraCapabilities = null;
   let workerBusyDrops = 0;
@@ -179,6 +187,9 @@
   startBtn.onclick = start;
   stopBtn.onclick = stop;
   resetBtn.onclick = reset;
+  fps30Btn?.addEventListener("click", () => { void setPreviewFps(30); });
+  fps60Btn?.addEventListener("click", () => { void setPreviewFps(60); });
+  syncPreviewFpsButtons();
   copyMissing.onclick = copyMissingIndexes;
   copyDiagnostics?.addEventListener("click", copyDiagnosticsText);
   copyDiagnosticsCard?.addEventListener("click", copyDiagnosticsText);
@@ -267,10 +278,11 @@
     try {
       await setupDetector();
       const androidCam = /Android/i.test(navigator.userAgent || "");
+      const previewFpsCap = previewFps === 30 ? 30 : 60;
       const camera = androidCam
-        ? { facingMode: { ideal: "environment" }, width: { ideal: 1440 }, height: { ideal: 1920 }, frameRate: { ideal: 60, max: 60 } }
+        ? { facingMode: { ideal: "environment" }, width: { ideal: 1440 }, height: { ideal: 1920 }, frameRate: { ideal: previewFpsCap, max: previewFpsCap } }
         : { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1440 } };
-      if (!androidCam) {
+      if (!androidCam && previewFpsCap >= 60) {
         try {
           stream = await navigator.mediaDevices.getUserMedia({
             video: { ...camera, frameRate: { ideal: 120 } },
@@ -282,8 +294,11 @@
         }
       }
       if (!stream) {
-        cameraRequestedFps = 60;
-        stream = await navigator.mediaDevices.getUserMedia({ video: camera, audio: false });
+        cameraRequestedFps = previewFpsCap;
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: androidCam ? camera : { ...camera, frameRate: { ideal: previewFpsCap, max: previewFpsCap } },
+          audio: false
+        });
       }
       lastUsedLuma = false;
       lumaUnavailable = false;
@@ -366,6 +381,40 @@
         track.applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(() => {});
       }
     } catch (_) {}
+  }
+
+  function syncPreviewFpsButtons() {
+    const selected = previewFps === 30 ? 30 : 60;
+    if (fps30Btn) fps30Btn.classList.toggle("primary", selected === 30);
+    if (fps60Btn) fps60Btn.classList.toggle("primary", selected === 60);
+  }
+
+  async function setPreviewFps(next) {
+    const fps = next === 30 ? 30 : 60;
+    previewFps = fps;
+    try { localStorage.setItem(PREVIEW_FPS_KEY, String(fps)); } catch (_) {}
+    syncPreviewFpsButtons();
+    cameraRequestedFps = fps;
+    renderDiagnostics();
+    if (!stream || startInFlight) {
+      status.textContent = fps === 30 ? "已选 30 FPS 预览（四码）" : "已选 60 FPS 预览（单码）";
+      return;
+    }
+    const track = stream.getVideoTracks?.()[0];
+    if (!track || typeof track.applyConstraints !== "function") {
+      status.textContent = "已记住 " + fps + " FPS，请停止后重新开始扫描";
+      return;
+    }
+    try {
+      await track.applyConstraints({ frameRate: { ideal: fps, max: fps } });
+      configureCameraTrack(stream);
+      const actual = cameraFrameRate || 0;
+      status.textContent = actual && Math.abs(actual - fps) > 8
+        ? "已请求 " + fps + " FPS，实际 " + actual.toFixed(0) + "，可停止后重开相机"
+        : "相机已切到 " + fps + " FPS";
+    } catch (_) {
+      status.textContent = "此相机无法热切换帧率，请停止后重新开始扫描";
+    }
   }
 
   function freezeCameraPreview() {
@@ -2541,7 +2590,8 @@
     diagnosticsEl.textContent = [
       "网页：" + RECEIVER_BUILD + " · Worker " + (highWorkers.length || lastWorkerCount) + " · 原生定位 " + (barcodeDetector ? "开" : "关"),
       "相机：" + (settings.width || video.videoWidth || "?") + "×" + (settings.height || video.videoHeight || "?") +
-        " · 实际/报告 " + (cameraFrameRate || settings.frameRate || "?") + " FPS · 请求上限 " + cameraRequestedFps,
+        " · 实际/报告 " + (cameraFrameRate || settings.frameRate || "?") + " FPS · 请求上限 " + cameraRequestedFps +
+        " · 选择 " + (previewFps === 30 ? 30 : 60),
       "相机能力：FPS " + fpsRange + " · facingMode " + (settings.facingMode || "未知"),
       "实时：采集 " + lastCaptureFps.toFixed(1) + " · 分析 " + lastDecodeFps.toFixed(1) + " · 有效码 " + lastValidFps.toFixed(1) + " FPS",
       "解码：" + backend + " · 取帧 " + lastCapturePath + " · Worker " + workerCount + " · 平均 " + avgDecode +

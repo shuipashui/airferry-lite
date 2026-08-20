@@ -4,7 +4,7 @@
 
 对外说明只写 [README.md](README.md)。不要在 README 里放版本号、实测 KB/s、Worker / VideoFrame 细节或本文链接。
 
-**交接时点：** 2026-08-20。网页接收端 **v84**。Android APK 冻结 **0.8.12**。发送端是根目录 `sender/` 打出的单文件 HTML，无独立版本号，以 Pages 上的 `sender/dist/airferry-lite-sender.html` 为准。
+**交接时点：** 2026-08-20。网页接收端 **v85**。Android APK 冻结 **0.8.12**。发送端是根目录 `sender/` 打出的单文件 HTML，无独立版本号，以 Pages 上的 `sender/dist/airferry-lite-sender.html` 为准。
 
 ## 1. 项目一句话
 
@@ -29,11 +29,11 @@
 
 | 部件 | 版本 | 对照 |
 |---|---|---|
-| 网页接收端 | **v84** | 预览 60 FPS。单码同 v83。四码仍 33 ms · inflight 1；锁格后 Worker 按格裁 720，每格 maxSymbols 1 |
+| 网页接收端 | **v85** | 预览可选手动 30/60 FPS（默认 60）。单码同 v83。四码仍 33 ms · inflight 1；锁格后 Worker 切格 |
 | Android APK | **0.8.12**（versionCode 27） | 未经明确要求不要改。历史峰值 **0.8.8：60 Hz 四码约 193 KB/s** |
 | 发送端 | AFL2 单文件 HTML | 默认 2331 B · 30 FPS · 单码；四码每码上限 **1273 B** |
 
-诊断第一行必须是 `网页：v84`（改版后变成 `网页：vN`）。
+诊断第一行必须是 `网页：v85`（改版后变成 `网页：vN`）。
 
 ## 4. 实测对照（回归用这些，不要用更旧的数）
 
@@ -94,6 +94,8 @@ v82 Pages 实测（单码也 33 ms、Android inflight 1）：采集 58 · 分析
 v83 Pages 实测（单码取帧同 v81，不限 33 ms）：**解完 606/606。** 采集 40.4 · 分析 36.5 · 有效 **21.7 FPS** · 解码 30.5 ms · **每帧 0.51** · 实时 **48.8** · 平均 47.8 · 会话 **45.5 KB/s** · 重复 42。从 v82 的 23 KB/s 恢复到 v81 量级（48.1），仍低于 v66 的 53.8。每帧仍约 0.5，差在分析/有效码次数，不是命中率。
 
 v84：四码锁格后不再对整张 720 做 `maxSymbols: 4`。仍只从相机抠一张 720，Worker 里按格 `cropImageData`，每格 `maxSymbols: 1`。瞄准未锁格时仍整图 `maxSymbols: 4`。单码不动。诊断四码锁定后应有 `切格`。不要因此把 inflight 打成 2 或间隔打成 16 ms。
+
+v85：界面可选手动 **30 / 60 FPS** 预览（记住 `airferry-lite-preview-fps`）。默认 60。四码建议 30（对照 v74），单码建议 60（对照 v66/v83）。只改 `getUserMedia` / `applyConstraints` 的 `frameRate`，不要跟着改 `HIGH_QUAD_GRAB_MS` 或单码 inflight。热切换失败就停止后重开。诊断第一行 `网页：v85`。
 
 不要再走的路（都已 Pages 打过）：
 
@@ -167,7 +169,7 @@ v84：四码锁格后不再对整张 720 做 `maxSymbols: 4`。仍只从相机�
 
 ### 相机
 
-- Android 预览请求 **60 FPS**（`frameRate: { ideal: 60, max: 60 }`），不要 120、不要横屏 `1920×1440`（用 `1440×1920`）。不要锁 `manual/none/single-shot` 对焦（v80 对不上焦）。不要对 Android 强开 `focusMode: continuous` 约束，让相机自己对焦。Android 只开 **2** 个 WASM Worker，错开启动。Stop 不要 terminate。v75 翻车是 16 ms + inflight 2，不是 60 FPS 预览。
+- Android 预览由界面选择 **30 或 60 FPS**（`frameRate: { ideal: previewFpsCap, max: previewFpsCap }`），默认 **60**。不要 120、不要横屏 `1920×1440`（用 `1440×1920`）。四码建议 30，单码建议 60。不要锁 `manual/none/single-shot` 对焦（v80 对不上焦）。不要对 Android 强开 `focusMode: continuous` 约束，让相机自己对焦。Android 只开 **2** 个 WASM Worker，错开启动。Stop 不要 terminate。v75 翻车是 16 ms + inflight 2，不是 60 FPS 预览。不要因为切了 30/60 就改四码 33 ms 或单码 inflight。
 - `cameraPreviewLive()`：轨 `live`、未 mute、video 在播且有宽高；1.5 s 没有新的视频帧则视为死预览。开始扫描若预览已死，先 `closeCamera` 再 `getUserMedia`。不要只看 `track.readyState === "live"` 就 return。
 - 扫描中开始按钮保持可点。不要因为主线程卡了就自动 `closeCamera`（v71 的 `dropDeadCamera` 会把活相机杀掉）。
 - 假 `ended` 只在轨仍 `live` 且未 mute、video 未暂停且有帧时忽略。`WeakSet` 每条轨只绑一次。
@@ -298,4 +300,4 @@ MIT。第三方见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。只使用 
 
 ---
 
-当前网页 **v84**，APK **0.8.12**。预览 60 FPS。单码实测会话 **45.5 KB/s**（解完 606/606）。四码锁格后 Worker 切格；对照 v74 **43.3 KB/s** / 每帧 **2.30**。不要再锁 AF，不要单码 33 ms 限速，不要 16 ms inflight 2。以 Pages 诊断第一行 `网页：v84` 为准。
+当前网页 **v85**，APK **0.8.12**。预览可选手动 30/60（默认 60）。四码建议 30，单码建议 60。单码对照 v66 **53.8 KB/s**，四码对照 v74 **43.3 KB/s**。不要再锁 AF，不要单码 33 ms 限速，不要 16 ms inflight 2。以 Pages 诊断第一行 `网页：v85` 为准。
