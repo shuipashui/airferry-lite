@@ -4,7 +4,7 @@
 
 对外说明只写 [README.md](README.md)。不要在 README 里放版本号、实测 KB/s、Worker / VideoFrame 细节或本文链接。
 
-**交接时点：** 2026-08-20。网页接收端 **v82**。Android APK 冻结 **0.8.12**。发送端是根目录 `sender/` 打出的单文件 HTML，无独立版本号，以 Pages 上的 `sender/dist/airferry-lite-sender.html` 为准。
+**交接时点：** 2026-08-20。网页接收端 **v83**。Android APK 冻结 **0.8.12**。发送端是根目录 `sender/` 打出的单文件 HTML，无独立版本号，以 Pages 上的 `sender/dist/airferry-lite-sender.html` 为准。
 
 ## 1. 项目一句话
 
@@ -29,11 +29,11 @@
 
 | 部件 | 版本 | 对照 |
 |---|---|---|
-| 网页接收端 | **v82** | 预览 60 FPS。单码取帧 33 ms、Android inflight 1。对照单码 v66 实时 **65.0** / 会话 **53.8 KB/s**，四码 v74 **43.3 KB/s** |
+| 网页接收端 | **v83** | 预览 60 FPS。单码回到 v81 取帧（inflight 4，不限 33 ms）。四码仍 33 ms · inflight 1 |
 | Android APK | **0.8.12**（versionCode 27） | 未经明确要求不要改。历史峰值 **0.8.8：60 Hz 四码约 193 KB/s** |
 | 发送端 | AFL2 单文件 HTML | 默认 2331 B · 30 FPS · 单码；四码每码上限 **1273 B** |
 
-诊断第一行必须是 `网页：v82`（改版后变成 `网页：vN`）。
+诊断第一行必须是 `网页：v83`（改版后变成 `网页：vN`）。
 
 ## 4. 实测对照（回归用这些，不要用更旧的数）
 
@@ -89,7 +89,9 @@ v81 Pages 实测（60 FPS 预览，不锁 AF，四码仍 33 ms inflight 1）：*
 - 单码：采集 59.0 · 分析 43.0 · 有效 25.0 · 解码 29.0 ms · **每帧 0.54** · 实时 **53.8** · 会话 **48.1 KB/s** · 解完 606/606
 - 单码没到 v66 的 65 KB/s：60 FPS 预览按相机帧连抠，一半扫在 30 FPS 发送的换帧间隙上，重复 55、每帧 0.54。
 
-v82：单码也 33 ms 取一帧，Android `HIGH_SINGLE_INFLIGHT = 1`。不要再 16 ms 连抠，不要锁 AF。诊断第一行 `网页：v82`。
+v82 Pages 实测（单码也 33 ms、Android inflight 1）：采集 58 · 分析 **20.0** · 有效 **9.0 FPS** · 每帧仍 0.51 · 实时 **22.5** · 会话 **23.2 KB/s**。限速没有把每帧打上去，只是少扫了，变慢。不要再给单码加 33 ms 间隔。
+
+v83：单码取帧退回 v81（`HIGH_SINGLE_INFLIGHT = 4`，不限 33 ms）。四码仍 33 ms · inflight 1。不要锁 AF。诊断第一行 `网页：v83`。
 
 不要再走的路（都已 Pages 打过）：
 
@@ -148,8 +150,7 @@ v82：单码也 33 ms 取一帧，Android `HIGH_SINGLE_INFLIGHT = 1`。不要再
 1. 未锁定：整幅 `createImageBitmap(video, 0, 0, vw, vh, { resize 960 })`。
 2. WASM 锁 ROI。不要在高速扫描时对 `video` 做 `BarcodeDetector.detect`（和预览抢相机，这台机会糊、会卡）。
 3. 锁定后：`createImageBitmap(video, x, y, widthSrc, heightSrc, { resize 720 })`。
-4. Android 一次只飞 1 帧，取帧间隔 `HIGH_SINGLE_GRAB_MS = 33`，对齐 30 FPS 发送。不要按 60 FPS 相机连抠。
-5. 失败不要 `captureViaCanvas = true`，不要二次 `createImageBitmap` 裁已经拿到的 bitmap。
+4. 失败不要 `captureViaCanvas = true`，不要二次 `createImageBitmap` 裁已经拿到的 bitmap。不要给单码加 33 ms 间隔（v82 有效码从 25 掉到 9）。
 
 ### 四码（锁格不变；v73 一张图进 Worker）
 
@@ -244,7 +245,7 @@ tests/                          npm test：协议 / 安全 / 运行时针
 - 不要 `createImageBitmap(video, { resize })` 不带源矩形。
 - 不要锁码后再在主线程裁一次图。瞄准快、锁码慢，就是多了这一次。
 - 不要因 `lastHitBox >= 700` 把单码全图压到 720。
-- 不要切竖屏中心方块，不要 `probeMulti`。
+- 不要给单码加 33 ms 取帧间隔或把 Android inflight 打成 1（v82：有效码 25→9，会话 48→23 KB/s）。
 
 **四码锁格**
 
@@ -282,7 +283,7 @@ tests/                          npm test：协议 / 安全 / 运行时针
 
 ## 11. 已知缺口
 
-1. **网页四码** 对照仍是 v74 会话 **43.3 KB/s**（inflight 1 · 每帧 2.30）。预览已回到 60 FPS，但取帧仍 33 ms。v75 的 16 ms inflight 2、v76 inflight 2、v77 过早关定位、v78 用原生框冻格、v79 扫描中 `detect(video)`、v80 锁 AF，都不要再走。不要再加每格 video 读回，不要退回主线程 `getImageData`。不要搬 APK 的 ≥3 命中重排。单码取帧不要顺手改。
+1. **网页四码 100 KB/s**：2331 B · 30 FPS · 四码每码 1253 B，屏幕上限约 `1253 × 4 × 30 ≈ 147 KB/s`，所以 100 KB/s 在发送侧够得着，但网页现在 35–43 KB/s。要 100 KB/s 必须约 **82 个唯一码/秒**，也就是几乎每一发帧打中 **2.7 / 4** 个码。v74 最好是分析 15 × 每帧 2.30 ≈ 35 码/秒（43 KB/s）。v81 解码已经 29 ms，但每帧只有 1.36。这台机上为提分析率走过的路都翻了：16 ms + inflight 2（卡、每帧 0.26）、每格 `createImageBitmap`（闪退）、主线程 `getImageData`（卡）。APK 0.8.8 能到 **193 KB/s**，靠的是 CameraX 最新帧 Y 平面 + 原生 zxing-cpp 约 60 FPS 分析，网页没有这条管线。开源对照：Decimen 父实验 ~128 KB/s 是 120 Hz 屏 + 更密帧 + 叠码；[RaptorQR](https://github.com/infrost/RaptorQR) 标 183–254 KB/s 用 RaptorQ（后来的 AGPL Decimen 同系，**不能搬**）和四码并行，短文件数字会偏乐观；[QRFerry](https://github.com/deedy/qr-data-transfer) 明确避开四码格、改双通道交替，因为四码获取成本高。网页要到 100 KB/s，下一步只能是 **提高 720 并集里每帧命中（回到 v74 的 2.3）** 或 **换发送侧**（60 FPS 四码，但这台 60 Hz 屏容易拖影），不要再 16 ms 连抠。单码取帧不要顺手改。
 2. AFL2 进度只在内存，刷新即丢。IndexedDB 只服务 AFL1。
 3. 文件上限 64 MiB。
 4. 本地 `origin/main` 和 GitHub `main` 的 SHA 偶尔对不齐（API 推送），以 GitHub API 的 ref 为准。
@@ -293,4 +294,4 @@ MIT。第三方见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。只使用 
 
 ---
 
-当前网页 **v82**，APK **0.8.12**。预览 60 FPS，单码/四码取帧都是 33 ms。单码对照 v66 实时 **65.0 KB/s**，四码对照 v74 **43.3 KB/s**。不要再锁 AF，不要 16 ms 连抠。以 Pages 诊断第一行 `网页：v82` 为准。
+当前网页 **v83**，APK **0.8.12**。预览 60 FPS。单码取帧同 v81（inflight 4）。四码 33 ms · inflight 1。单码对照 v66 实时 **65.0 KB/s**，四码对照 v74 **43.3 KB/s**。不要再锁 AF，不要单码 33 ms 限速。以 Pages 诊断第一行 `网页：v83` 为准。
