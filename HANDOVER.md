@@ -4,7 +4,7 @@
 
 对外说明只写 [README.md](README.md)。不要在 README 里放版本号、实测 KB/s、Worker / VideoFrame 细节或本文链接。
 
-**交接时点：** 2026-08-20。网页接收端 **v68**。Android APK 冻结 **0.8.12**。发送端是根目录 `sender/` 打出的单文件 HTML，无独立版本号，以 Pages 上的 `sender/dist/airferry-lite-sender.html` 为准。
+**交接时点：** 2026-08-20。网页接收端 **v69**。Android APK 冻结 **0.8.12**。发送端是根目录 `sender/` 打出的单文件 HTML，无独立版本号，以 Pages 上的 `sender/dist/airferry-lite-sender.html` 为准。
 
 ## 1. 项目一句话
 
@@ -29,11 +29,11 @@
 
 | 部件 | 版本 | 对照 |
 |---|---|---|
-| 网页接收端 | **v68** | 单码实时约 **65 KB/s**；四码解完、会话约 **46 KB/s** |
+| 网页接收端 | **v69** | 单码路径同 v66/v68。四码改为每格 720 源矩形 + 同帧补扫。待 Pages 实测 |
 | Android APK | **0.8.12**（versionCode 27） | 未经明确要求不要改。历史峰值 **0.8.8：60 Hz 四码约 193 KB/s** |
 | 发送端 | AFL2 单文件 HTML | 默认 2331 B · 30 FPS · 单码；四码每码上限 **1273 B** |
 
-诊断第一行必须是 `网页：v68`（改版后变成 `网页：vN`）。
+诊断第一行必须是 `网页：v69`（改版后变成 `网页：vN`）。
 
 ## 4. 实测对照（回归用这些，不要用更旧的数）
 
@@ -48,13 +48,16 @@
 
 这是网页单码必须保住的数。采集掉到约 10、忙时丢弃 0，就是主线程取帧把 `requestVideoFrameCallback` 卡住了。
 
-### 四码（当前锁格/解码路径，v64 那次解完）
+### 四码（对照仍是 v64；v69 起按格取帧，待测）
+
+v64 解完对照（720 packed 整幅 2×2，每格大约只有 360 px）：
 
 - 解完 **1117/1117** · **格 4**
 - 采集 **39** · 有效 **55** · 解码约 **10 ms**
 - 实时 **71.8** · 平均 **73.2** · 会话 **45.7 KB/s**
+- 每相机帧大约 **1.2** 个码。瓶颈是整幅压到 720 再切，不是锁格。
 
-不要为了单码去改这条四码路径。
+v69 目标：每格 `createImageBitmap(video, x, y, w, h, { resize 720 })`，同帧对未打中的格再扫一次（binarizer 重试）。锁格仍是 `lockQuadSlots` + `followContainedQuadHits`。单码取帧不要动。Pages 诊断第一行 `网页：v69`。若采集掉到约 12、忙时丢弃 0，就是 4 次源矩形把 rVFC 卡住了，回退策略再议。
 
 ### 怎么读诊断
 
@@ -104,15 +107,16 @@
 
 1. 未锁定：整幅 `createImageBitmap(video, 0, 0, vw, vh, { resize 960 })`。
 2. `BarcodeDetector` 锁 ROI。
-3. 锁定后：`createImageBitmap(video, x, y, widthSrc, heightSrc, { resize 720 })`，和四码 packed 同一套 API。
+3. 锁定后：`createImageBitmap(video, x, y, widthSrc, heightSrc, { resize 720 })`。
 4. 失败不要 `captureViaCanvas = true`，不要二次 `createImageBitmap` 裁已经拿到的 bitmap。
 
-### 四码（不要改这条锁格）
+### 四码（v69 起改取帧，锁格不变）
 
-1. `decodeQuadFrame`：packed bitmap → 4 个 Worker。
-2. `lockQuadSlots`：至少 **2** 个命中才锁；满 4 格冻结（`highQuadFrozen`）。
-3. 格 4 之后只用 `followContainedQuadHits`（命中中心必须唯一落在某个窗口里）。不要 `rebuildQuadFromHits`，不要再跑全图 `BarcodeDetector`。
+1. `decodeQuadFrame`：对每个格子做 video 源矩形裁到 720，4 个 Worker 并行。不要再把整幅 2×2 压成一张 720 packed 再切。
+2. 同帧若不足 4 个传输码，对未覆盖的独占象限放大 1.28× 再扫（`retryBinarizer`）。这不是 `dueRelock`，不要周期性重锁整幅 ROI。
+3. `lockQuadSlots`：至少 **2** 个命中才锁；满 4 格冻结。格 4 之后只用 `followContainedQuadHits`。不要 `rebuildQuadFromHits`，不要再跑全图 `BarcodeDetector`。
 4. 保留 `function tileCenter`。格子里存原始框，只在扫描时 `inflateRect` 一次。
+5. packed + luma 只作 `createImageBitmap` 失败时的回退。
 
 ### 相机
 
@@ -225,7 +229,7 @@ tests/                          npm test：协议 / 安全 / 运行时针
 
 ## 11. 已知缺口
 
-1. 网页四码每相机帧大约只打中 1 个码，会话约 46 KB/s，离屏幕上限约 147 KB/s 还远。不要靠改锁格去「优化」。
+1. **网页四码** v69 起按格 720 取帧，目标是把每帧命中从约 1.2 抬向 APK 的 2.6–3+。对照仍是 v64 的 45.7 KB/s。不要搬 APK 的 ≥3 命中重排。单码取帧不要顺手改。
 2. AFL2 进度只在内存，刷新即丢。IndexedDB 只服务 AFL1。
 3. 文件上限 64 MiB。
 4. 本地 `origin/main` 和 GitHub `main` 的 SHA 偶尔对不齐（API 推送），以 GitHub API 的 ref 为准。
@@ -236,4 +240,4 @@ MIT。第三方见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。只使用 
 
 ---
 
-当前网页 **v68**，APK **0.8.12**。网页单码实时 **65 KB/s**、四码会话 **45.7 KB/s**。APK 四码峰值约 **193 KB/s**（0.8.8）。以 Pages 诊断第一行 `网页：v68` 为准。
+当前网页 **v69**，APK **0.8.12**。网页单码实时 **65 KB/s**（路径未改）。四码对照仍是 v64 会话 **45.7 KB/s**；v69 待 Pages 实测。APK 四码峰值约 **193 KB/s**（0.8.8）。以 Pages 诊断第一行 `网页：v69` 为准。

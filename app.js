@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v68";
+  const RECEIVER_BUILD = "v69";
   if ("serviceWorker" in navigator) {
     let swRefreshing = false;
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
@@ -1324,6 +1324,79 @@
     }
   }
 
+  async function grabQuadTileBitmap(source) {
+    const vw = video.videoWidth || 1;
+    const vh = video.videoHeight || 1;
+    const x = Math.max(0, Math.min(vw - 1, Math.round(source.x)));
+    const y = Math.max(0, Math.min(vh - 1, Math.round(source.y)));
+    const widthSrc = Math.max(1, Math.min(Math.round(source.width), vw - x));
+    const heightSrc = Math.max(1, Math.min(Math.round(source.height), vh - y));
+    const scale = Math.min(1, HIGH_QUAD_TILE_SIZE / Math.max(widthSrc, heightSrc, 1));
+    const width = Math.max(1, Math.round(widthSrc * scale));
+    const height = Math.max(1, Math.round(heightSrc * scale));
+    const bitmap = await createImageBitmap(video, x, y, widthSrc, heightSrc, {
+      resizeWidth: width,
+      resizeHeight: height,
+      resizeQuality: "pixelated",
+      colorSpaceConversion: "none"
+    });
+    return { bitmap, width, height, source: { x, y, width: widthSrc, height: heightSrc } };
+  }
+
+  function postBitmapToWorker(slot, bitmap, source, width, height, retryBinarizer) {
+    highWorkerBusy[slot] = true;
+    highWorkerStartedAt[slot] = performance.now();
+    lastPostedScanSize = Math.max(width, height);
+    lastCapturePath = "bitmap";
+    lastUsedLuma = false;
+    const id = ++highFrameId;
+    highDecodeMeta.set(id, {
+      x: source.x,
+      y: source.y,
+      srcW: source.width,
+      srcH: source.height,
+      outW: width,
+      outH: height,
+      postedAt: performance.now()
+    });
+    highWorkers[slot].postMessage({ id, bitmap, maxSymbols: 1, retryBinarizer, crop: null }, [bitmap]);
+    return new Promise(resolve => {
+      const timer = setTimeout(() => {
+        if (!highJobWaiters.has(id)) return;
+        highJobWaiters.delete(id);
+        highWorkerBusy[slot] = false;
+        resolve([]);
+      }, HIGH_WORKER_TIMEOUT);
+      highJobWaiters.set(id, { resolve, timer });
+    });
+  }
+
+  async function scanQuadCrops(crops, retryBinarizer) {
+    const slots = [];
+    for (let index = 0; index < highWorkers.length && slots.length < crops.length; index += 1) {
+      if (!highWorkerBusy[index] && highWorkerReady[index]) slots.push(index);
+    }
+    if (!slots.length) return [];
+    const jobs = crops.slice(0, slots.length);
+    try {
+      const grabbed = await Promise.all(jobs.map(crop => grabQuadTileBitmap(crop)));
+      if (!stream) {
+        for (const item of grabbed) try { item.bitmap.close(); } catch (_) {}
+        return [];
+      }
+      const parts = await Promise.all(grabbed.map((item, index) =>
+        postBitmapToWorker(slots[index], item.bitmap, item.source, item.width, item.height, retryBinarizer)
+      ));
+      const hits = [];
+      for (const list of parts) hits.push(...list);
+      return hits;
+    } catch (_) {
+      const packed = await grabPackedRegion(unionScanCrops(jobs));
+      if (!packed) return [];
+      return readCropsFromPacked(packed, jobs, retryBinarizer);
+    }
+  }
+
   function decodeQuadFrame() {
     if (highGrabInFlight || highWorkerBusy.some(Boolean)) {
       workerBusyDrops += 1;
@@ -1335,12 +1408,10 @@
       try {
         const inferred = inferMissingQuadTiles(highTrackedTiles).filter(Boolean).map(tile => clampScanRegion(inflateRect(tile, HIGH_TILE_PAD)));
         const region = inferred.length >= 3 ? unionScanCrops(inferred) : chooseQuadRegion();
-        const packed = await grabPackedRegion(region);
-        if (!stream || !packed) return;
         const hits = [];
         const seen = new Set();
         const add = list => {
-          for (const hit of list) {
+          for (const hit of list || []) {
             const key = transferHitKey(hit);
             if (key) {
               if (seen.has(key)) continue;
@@ -1350,7 +1421,15 @@
           }
         };
         const crops = inferred.length >= 3 ? inferred : overlappingQuadrants(region);
-        add(await readCropsFromPacked(packed, crops, false));
+        add(await scanQuadCrops(crops, false));
+        if (transferCount(hits) < 4) {
+          const exclusive = exclusiveQuadrants(region);
+          const retries = exclusive.map(tile => {
+            if (tileCovered(tile, hits)) return null;
+            return clampScanRegion(inflateRect(tile, 1.28));
+          }).filter(Boolean);
+          if (retries.length) add(await scanQuadCrops(retries, true));
+        }
         rememberQuadHits(hits);
       } finally {
         highGrabInFlight = false;
