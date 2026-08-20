@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v64";
+  const RECEIVER_BUILD = "v65";
   if ("serviceWorker" in navigator) {
     let swRefreshing = false;
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
@@ -151,6 +151,12 @@
   let lastWorkerCount = 0;
   let captureViaCanvas = false;
   let highVideoFrameBlocked = false;
+  let highCaptureTrack = null;
+  let highCaptureReader = null;
+  let highCaptureFrame = null;
+  let highCapturePumping = false;
+  let highCaptureFailed = false;
+  let lastCapturePath = "—";
   let lastUsedLuma = false;
   let lumaUnavailable = false;
   let highGrabInFlight = false;
@@ -565,6 +571,59 @@
     highJobWaiters.clear();
   }
 
+  function takeCaptureFrame() {
+    const frame = highCaptureFrame;
+    highCaptureFrame = null;
+    return frame || null;
+  }
+
+  function stopCapturePump() {
+    highCapturePumping = false;
+    try { highCaptureReader?.cancel(); } catch (_) {}
+    highCaptureReader = null;
+    try { highCaptureFrame?.close(); } catch (_) {}
+    highCaptureFrame = null;
+    try { highCaptureTrack?.stop(); } catch (_) {}
+    highCaptureTrack = null;
+  }
+
+  async function pumpCaptureFrames() {
+    while (highCapturePumping && highCaptureReader) {
+      try {
+        const { value, done } = await highCaptureReader.read();
+        if (done || !highCapturePumping) {
+          try { value?.close(); } catch (_) {}
+          break;
+        }
+        try { highCaptureFrame?.close(); } catch (_) {}
+        highCaptureFrame = value;
+      } catch (_) {
+        break;
+      }
+    }
+  }
+
+  function startCapturePump() {
+    if (highCaptureReader || highCaptureFailed || highMultiLayout || !stream) return;
+    if (typeof MediaStreamTrackProcessor !== "function") {
+      highCaptureFailed = true;
+      return;
+    }
+    const live = stream.getVideoTracks()[0];
+    if (!live || live.readyState !== "live") return;
+    try {
+      highCaptureTrack = live.clone();
+      const processor = new MediaStreamTrackProcessor({ track: highCaptureTrack });
+      highCaptureReader = processor.readable.getReader();
+      highCapturePumping = true;
+      lastCapturePath = "MST";
+      void pumpCaptureFrames();
+    } catch (_) {
+      stopCapturePump();
+      highCaptureFailed = true;
+    }
+  }
+
   function stopHighSpeedWorkers() {
     clearJobWaiters();
     for (const worker of highWorkers) worker?.terminate();
@@ -572,6 +631,7 @@
     highWorkerBusy = [];
     highWorkerReady = [];
     highWorkerStartedAt = [];
+    stopCapturePump();
   }
 
   function disableHighSpeedWorkers() {
@@ -599,11 +659,16 @@
       }
     }
     if (highMultiLayout) {
+      stopCapturePump();
       decodeQuadFrame();
       return;
     }
+    startCapturePump();
     if (highGrabInFlight) return;
-    if (highWorkerBusy.filter(Boolean).length >= HIGH_SINGLE_INFLIGHT) return;
+    if (highWorkerBusy.filter(Boolean).length >= HIGH_SINGLE_INFLIGHT) {
+      workerBusyDrops += 1;
+      return;
+    }
     const slot = highWorkerBusy.findIndex((busy, index) => !busy && highWorkerReady[index]);
     if (slot < 0) {
       workerBusyDrops += 1;
@@ -1406,48 +1471,70 @@
       const id = ++highFrameId;
       highDecodeMeta.set(id, { x: source.x, y: source.y, srcW: source.width, srcH: source.height, outW: width, outH: height });
       const useBitmap = !captureViaCanvas && typeof createImageBitmap === "function" && typeof OffscreenCanvas === "function";
-      if (useBitmap && !tile && !highMultiLayout && !highVideoFrameBlocked && typeof VideoFrame === "function") {
+      if (useBitmap && !tile && !highMultiLayout) {
         try {
-          postedFrame = new VideoFrame(video);
-          const vw = postedFrame.displayWidth || video.videoWidth;
-          const vh = postedFrame.displayHeight || video.videoHeight;
-          const sx = vw / Math.max(1, video.videoWidth || vw);
-          const sy = vh / Math.max(1, video.videoHeight || vh);
-          const mapped = {
-            x: source.x * sx,
-            y: source.y * sy,
-            width: source.width * sx,
-            height: source.height * sy
-          };
-          const full = { width: vw, height: vh, vw, vh };
-          const cropped = mapped.x > 1 || mapped.y > 1 || mapped.x + mapped.width < vw - 1 || mapped.y + mapped.height < vh - 1;
-          let crop;
-          if (cropped) {
-            const next = cropBitmapToSource(full, mapped, scanSize);
-            crop = { x: next.x, y: next.y, w: next.w, h: next.h, dw: next.width, dh: next.height };
-            width = next.width;
-            height = next.height;
-          } else {
-            const maxSide = HIGH_TRACK_SIZE;
-            const outScale = Math.min(1, maxSide / Math.max(vw, vh, 1));
-            width = Math.max(1, Math.round(vw * outScale));
-            height = Math.max(1, Math.round(vh * outScale));
-            crop = { x: 0, y: 0, w: vw, h: vh, dw: width, dh: height };
+          if (highCaptureReader) {
+            postedFrame = takeCaptureFrame();
+            if (!postedFrame) {
+              highWorkerBusy[slot] = false;
+              highWorkerStartedAt[slot] = 0;
+              highDecodeMeta.delete(id);
+              return false;
+            }
+          } else if (!highVideoFrameBlocked && typeof VideoFrame === "function") {
+            postedFrame = new VideoFrame(video);
           }
-          lastPostedScanSize = Math.max(width, height);
-          const frameMeta = highDecodeMeta.get(id);
-          if (frameMeta) {
-            frameMeta.outW = width;
-            frameMeta.outH = height;
-            frameMeta.postedAt = performance.now();
+          if (postedFrame) {
+            const vis = postedFrame.visibleRect;
+            const visX = vis?.x || 0;
+            const visY = vis?.y || 0;
+            const vw = postedFrame.displayWidth || vis?.width || video.videoWidth;
+            const vh = postedFrame.displayHeight || vis?.height || video.videoHeight;
+            const sx = vw / Math.max(1, video.videoWidth || vw);
+            const sy = vh / Math.max(1, video.videoHeight || vh);
+            const mapped = {
+              x: source.x * sx,
+              y: source.y * sy,
+              width: source.width * sx,
+              height: source.height * sy
+            };
+            const full = { width: vw, height: vh, vw, vh };
+            const cropped = mapped.x > 1 || mapped.y > 1 || mapped.x + mapped.width < vw - 1 || mapped.y + mapped.height < vh - 1;
+            let crop;
+            if (cropped) {
+              const next = cropBitmapToSource(full, mapped, scanSize);
+              crop = { x: next.x + visX, y: next.y + visY, w: next.w, h: next.h, dw: next.width, dh: next.height };
+              width = next.width;
+              height = next.height;
+            } else {
+              const maxSide = HIGH_TRACK_SIZE;
+              const outScale = Math.min(1, maxSide / Math.max(vw, vh, 1));
+              width = Math.max(1, Math.round(vw * outScale));
+              height = Math.max(1, Math.round(vh * outScale));
+              crop = { x: visX, y: visY, w: vw, h: vh, dw: width, dh: height };
+            }
+            lastPostedScanSize = Math.max(width, height);
+            const frameMeta = highDecodeMeta.get(id);
+            if (frameMeta) {
+              frameMeta.outW = width;
+              frameMeta.outH = height;
+              frameMeta.postedAt = performance.now();
+            }
+            highWorkers[slot].postMessage({ id, frame: postedFrame, maxSymbols, retryBinarizer, crop }, [postedFrame]);
+            postedFrame = null;
+            lastCapturePath = highCaptureReader ? "MST" : "VideoFrame";
+            return true;
           }
-          highWorkers[slot].postMessage({ id, frame: postedFrame, maxSymbols, retryBinarizer, crop }, [postedFrame]);
-          postedFrame = null;
-          return true;
         } catch (_) {
-          highVideoFrameBlocked = true;
           try { postedFrame?.close(); } catch (_) {}
           postedFrame = null;
+          if (highCaptureReader) {
+            stopCapturePump();
+            highCaptureFailed = true;
+            lastCapturePath = "bitmap";
+          } else {
+            highVideoFrameBlocked = true;
+          }
         }
       }
       if (useBitmap) {
@@ -1475,6 +1562,7 @@
         }
         postedBitmap = bitmap;
         lastPostedScanSize = Math.max(width, height);
+        lastCapturePath = "bitmap";
         const meta = highDecodeMeta.get(id);
         if (meta) {
           meta.outW = width;
@@ -1493,6 +1581,7 @@
       const image = ctx.getImageData(0, 0, width, height);
       const meta = highDecodeMeta.get(id);
       if (meta) meta.postedAt = performance.now();
+      lastCapturePath = "canvas";
       highWorkers[slot].postMessage({
         id,
         buf: image.data.buffer,
@@ -1825,6 +1914,9 @@
     highTileProven = [false, false, false, false];
     highQuadFrozen = false;
     lastUsedLuma = false;
+    lastCapturePath = "—";
+    highCaptureFailed = false;
+    highVideoFrameBlocked = false;
     highDecodeMeta.clear();
     highUniqueFrames = 0;
     highInvalidFrames = 0;
@@ -2358,7 +2450,7 @@
         " · 实际/报告 " + (cameraFrameRate || settings.frameRate || "?") + " FPS · 请求上限 " + cameraRequestedFps,
       "相机能力：FPS " + fpsRange + " · facingMode " + (settings.facingMode || "未知"),
       "实时：采集 " + lastCaptureFps.toFixed(1) + " · 分析 " + lastDecodeFps.toFixed(1) + " · 有效码 " + lastValidFps.toFixed(1) + " FPS",
-      "解码：" + backend + " · Worker " + workerCount + " · 平均 " + avgDecode +
+      "解码：" + backend + " · 取帧 " + lastCapturePath + " · Worker " + workerCount + " · 平均 " + avgDecode +
         " · 扫描 " + currentHighScanSize() + " · 布局 " + (highMultiLayout ? "四码" : "单码") +
         (highScanRoi ? " · ROI" : " · 全图") +
         (highTrackedTiles ? " · 格 " + highTrackedTiles.filter(Boolean).length : "") + perFrameLabel(),
