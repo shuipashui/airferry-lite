@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v62";
+  const RECEIVER_BUILD = "v63";
   if ("serviceWorker" in navigator) {
     let swRefreshing = false;
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
@@ -362,12 +362,18 @@
     scanSequence = 0;
     roiMisses = 0;
     highScanMisses = 0;
-    highMultiLayout = false;
-    highScanRoi = null;
-    highTrackedTiles = null;
-    lastHitBox = 0;
-    highQuadCursor = 0;
-    highSingleConfirmed = false;
+    if (!finishing) {
+      highMultiLayout = false;
+      highScanRoi = null;
+      highTrackedTiles = null;
+      lastHitBox = 0;
+      highQuadCursor = 0;
+      highSingleConfirmed = false;
+      lastPostedScanSize = 0;
+      highTileProven = [false, false, false, false];
+      highQuadFrozen = false;
+      lastUsedLuma = false;
+    }
     highDecodeMeta.clear();
     lastScanStartedAt = -Infinity;
     highBitmapLock = false;
@@ -375,9 +381,6 @@
     highLocateLock = false;
     highLocateTick = 0;
     lastNativeLocate = 0;
-    highTileProven = [false, false, false, false];
-    highQuadFrozen = false;
-    lastUsedLuma = false;
     lumaUnavailable = false;
     startBtn.disabled = false;
     stopBtn.disabled = true;
@@ -586,9 +589,13 @@
       if (highWorkerBusy[index] && now - highWorkerStartedAt[index] > HIGH_WORKER_TIMEOUT) restartHighSpeedWorker(index);
     }
     const locked = highTrackedTiles ? highTrackedTiles.filter(Boolean).length : 0;
-    if (barcodeDetector && !highLocateLock && highMultiLayout && locked < 4 && now - lastNativeLocate > HIGH_QUAD_ACQUIRE_MS) {
-      lastNativeLocate = now;
-      void locateQuadWithNative();
+    if (barcodeDetector && !highLocateLock && now - lastNativeLocate > HIGH_QUAD_ACQUIRE_MS) {
+      const needQuad = highMultiLayout && locked < 4;
+      const needSingle = !highMultiLayout && (!highScanRoi || highScanMisses >= 3);
+      if (needQuad || needSingle) {
+        lastNativeLocate = now;
+        void locateQuadWithNative();
+      }
     }
     if (highMultiLayout) {
       decodeQuadFrame();
@@ -723,6 +730,9 @@
       if (tiles.length >= 2) {
         highMultiLayout = true;
         lockQuadSlots(tiles, true);
+      } else if (tiles.length === 1 && !highMultiLayout) {
+        highScanRoi = clampScanRegion(inflateRect(tiles[0], 1.4));
+        highScanMisses = 0;
       }
     } catch (_) {
     } finally {
@@ -1352,7 +1362,7 @@
     const vw = video.videoWidth || 1;
     const vh = video.videoHeight || 1;
     const full = source.x <= 1 && source.y <= 1 && source.x + source.width >= vw - 1 && source.y + source.height >= vh - 1;
-    if (full) return HIGH_ACQUIRE_SIZE;
+    if (full) return HIGH_TRACK_SIZE;
     const roiLong = Math.max(source.width, source.height, 64);
     const scaled = Math.ceil(Math.max(vw, vh, 1) * HIGH_TILE_SIZE / roiLong);
     return Math.max(HIGH_TILE_SIZE, Math.min(HIGH_ACQUIRE_SIZE, scaled));
@@ -1889,6 +1899,7 @@
       progressText.textContent = "100% (" + highDecoder.k + "/" + highDecoder.k + ")";
       progressBar.style.width = "100%";
       missingEl.textContent = "接收完成";
+      renderDiagnostics();
       closeCamera();
       status.textContent = "接收完成";
     } catch (error) {
