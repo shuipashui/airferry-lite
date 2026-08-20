@@ -26,7 +26,8 @@
   const QR_CACHE_LIMIT = 64;
   const QUAD_MAX_FRAME_BYTES = 1273;
   const HIGH_QUEUE_LIMIT = 8;
-  const QUIET_MODULES = 4;
+  const QUIET_MODULES = 2;
+  const LINK_QUIET_MODULES = 4;
   const COMMON_HZ = [60, 75, 90, 120, 144, 165, 240];
   let file = null;
   let transfer = null;
@@ -368,13 +369,12 @@
 
   function drawPatternTile(context, pattern, x, y, width, height) {
     const tile = rasterize(pattern);
-    const cell = Math.floor(Math.min(width, height) / tile.width);
-    if (cell < 1) return;
-    const used = cell * tile.width;
-    const offsetX = Math.floor(x + (width - used) / 2);
-    const offsetY = Math.floor(y + (height - used) / 2);
+    const side = Math.floor(Math.min(width, height));
+    if (side < 1) return;
+    const offsetX = Math.floor(x + (width - side) / 2);
+    const offsetY = Math.floor(y + (height - side) / 2);
     context.imageSmoothingEnabled = false;
-    context.drawImage(tile, 0, 0, tile.width, tile.height, offsetX, offsetY, used, used);
+    context.drawImage(tile, 0, 0, tile.width, tile.height, offsetX, offsetY, side, side);
   }
 
   function drawLinkQr(text) {
@@ -382,7 +382,7 @@
       const pattern = getQrPattern(text);
       const context = receiverQrCanvas.getContext("2d", { alpha: false });
       context.imageSmoothingEnabled = false;
-      const quiet = QUIET_MODULES;
+      const quiet = LINK_QUIET_MODULES;
       const cell = Math.floor(receiverQrCanvas.width / (pattern.count + quiet * 2));
       const used = cell * (pattern.count + quiet * 2);
       const offset = Math.floor((receiverQrCanvas.width - used) / 2);
@@ -444,7 +444,7 @@
     const bytes = codes === 4 ? Math.min(frameBytes, QUAD_MAX_FRAME_BYTES) : frameBytes;
     const frameRate = Number(fps.value);
     const header = H?.HEADER_LEN || HEADER_LEN;
-    const cell = Math.floor((canvas.width / (codes === 4 ? 2 : 1)) / (qrModules(bytes) + QUIET_MODULES * 2));
+    const cell = (canvas.width / (codes === 4 ? 2 : 1)) / (qrModules(bytes) + QUIET_MODULES * 2);
     return {
       codes,
       bytes,
@@ -459,7 +459,7 @@
     if (!rateHint) return;
     const rate = currentLayout();
     let text = "理论速度：" + formatRate(rate.screen) + "（" + rate.bytes + " B × " + rate.codes + " 码 × " + rate.fps + " FPS）· 载荷约 " + formatRate(rate.payload);
-    if (rate.cell) text += " · 屏上约 " + rate.cell + " px/模块";
+    if (rate.cell) text += " · 屏上约 " + (Math.round(rate.cell * 10) / 10) + " px/模块";
     if (rate.codes === 4 && rate.cell && rate.cell < 4) text += "。模块偏小，请全屏后再播";
     if (rate.codes === 4 && rate.fps >= 60) text += "。60 Hz 屏上四码 60 FPS 容易拖影，改用 30 FPS 通常更快";
     if (rate.codes === 1 && rate.fps > 30) text += "。单码超过 30 FPS 时相机会拍到换码拖影，通常更慢";

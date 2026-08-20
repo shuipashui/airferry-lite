@@ -26,4 +26,7 @@ assert.ok(senderStyles.includes(".overlay.hidden{display:none}"), "generated fil
 assert.ok(senderStyles.includes("overflow:visible") && senderStyles.includes("width:200px;height:200px"), "receiver QR safety area may not be clipped");
 assert.ok(senderStyles.includes("#qrCanvas{") && senderStyles.includes("border-radius:0"), "file QR corners must not clip finder patterns");
 assert.ok(senderStyles.includes("96vmin") || senderStyles.includes("100vmin"), "file QR must use most of the viewport");
+const senderApp = fs.readFileSync(new URL("../sender/app.js", import.meta.url), "utf8");
+assert.ok(senderApp.includes("QUIET_MODULES = 2"), "file QR quiet zone should stay tight so modules can use the canvas");
+assert.ok(senderApp.includes("offsetY, side, side)"), "file QR must fill the canvas instead of leaving unused white from integer cell size");
 console.log("QR density tests ok");
