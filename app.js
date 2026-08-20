@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v78";
+  const RECEIVER_BUILD = "v79";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -49,6 +49,7 @@
     ? 2
     : ((navigator.hardwareConcurrency || 4) >= 4 ? 4 : 2);
   const HIGH_WORKER_TIMEOUT = 2500;
+  const HIGH_WORKER_BOOT_MS = 25000;
   const HIGH_ACQUIRE_SIZE = 1440;
   const HIGH_TRACK_SIZE = 960;
   const HIGH_TILE_SIZE = 720;
@@ -390,7 +391,7 @@
     }
     scanFrameCallback = 0;
     freezeCameraPreview();
-    stopHighSpeedWorkers();
+    pauseHighSpeedJobs();
     if (stream) stream.getTracks().forEach((track) => track.stop());
     stream = null;
     video.srcObject = null;
@@ -515,29 +516,35 @@
   function startHighSpeedWorkers() {
     if (highWorkersDisabled || highWorkers.length) return;
     try {
-      highWorkers = new Array(HIGH_SPEED_WORKERS);
-      highWorkerBusy = new Array(HIGH_SPEED_WORKERS).fill(false);
-      highWorkerReady = new Array(HIGH_SPEED_WORKERS).fill(false);
-      highWorkerStartedAt = new Array(HIGH_SPEED_WORKERS).fill(0);
-      for (let index = 0; index < HIGH_SPEED_WORKERS; index += 1) {
-        startHighSpeedWorker(index);
-      }
+      startHighSpeedWorker(0);
+      watchWorkerBoot();
     } catch (_) {
       disableHighSpeedWorkers();
     }
   }
 
   function startHighSpeedWorker(index) {
+    while (highWorkers.length <= index) {
+      highWorkers.push(null);
+      highWorkerBusy.push(false);
+      highWorkerReady.push(false);
+      highWorkerStartedAt.push(0);
+    }
+    highWorkers[index]?.terminate();
     const worker = new Worker("vendor/decimen/highspeed-decoder-worker.js");
     highWorkers[index] = worker;
     highWorkerBusy[index] = false;
     highWorkerReady[index] = false;
     highWorkerStartedAt[index] = 0;
+    worker.bootAt = performance.now();
     worker.onmessage = event => {
       if (highWorkers[index] !== worker) return;
       if (event.data?.id === -1) {
         highWorkerReady[index] = true;
         if (stream && status.textContent === "正在加载解码器") status.textContent = "正在高速扫描";
+        if (index + 1 < HIGH_SPEED_WORKERS && !highWorkers[index + 1]) {
+          try { startHighSpeedWorker(index + 1); } catch (_) { disableHighSpeedWorkers(); }
+        }
         return;
       }
       const startedAt = highWorkerStartedAt[index];
@@ -594,6 +601,32 @@
     }
   }
 
+  function pauseHighSpeedJobs() {
+    clearJobWaiters();
+    for (let index = 0; index < highWorkerBusy.length; index += 1) {
+      highWorkerBusy[index] = false;
+      highWorkerStartedAt[index] = 0;
+    }
+    highDecodeMeta.clear();
+    highGrabInFlight = false;
+  }
+
+  function recoverStuckHighSpeedWorkers() {
+    const now = performance.now();
+    for (let index = 0; index < highWorkers.length; index += 1) {
+      const worker = highWorkers[index];
+      if (!worker || highWorkerReady[index]) continue;
+      if (now - (worker.bootAt || 0) > HIGH_WORKER_BOOT_MS) restartHighSpeedWorker(index);
+    }
+  }
+
+  function watchWorkerBoot() {
+    setTimeout(() => {
+      recoverStuckHighSpeedWorkers();
+      if (highWorkers.some((worker, index) => worker && !highWorkerReady[index])) watchWorkerBoot();
+    }, 4000);
+  }
+
   function clearJobWaiters() {
     for (const waiter of highJobWaiters.values()) {
       clearTimeout(waiter.timer);
@@ -621,7 +654,10 @@
 
   function scanWithHighSpeedWorkers() {
     if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
-    if (!highWorkerReady.some(Boolean)) return;
+    if (!highWorkerReady.some(Boolean)) {
+      recoverStuckHighSpeedWorkers();
+      return;
+    }
     const now = performance.now();
     for (let index = 0; index < highWorkers.length; index += 1) {
       if (highWorkerBusy[index] && now - highWorkerStartedAt[index] > HIGH_WORKER_TIMEOUT) restartHighSpeedWorker(index);
@@ -770,6 +806,9 @@
       const tiles = nativeCodesToTiles(codes);
       if (tiles.length >= 2) {
         highMultiLayout = true;
+        if ((highTrackedTiles || []).filter(Boolean).length < 2) {
+          highScanRoi = clampScanRegion(inflateRect(unionScanCrops(tiles), 1.25));
+        }
         lockQuadSlots(tiles, true);
       } else if (tiles.length === 1 && !highMultiLayout) {
         highScanRoi = clampScanRegion(inflateRect(tiles[0], 1.55));
@@ -866,6 +905,7 @@
   function lockQuadSlots(fresh, sighting) {
     if (!fresh || fresh.length < 2) return;
     mergeVideoTiles(fresh, sighting);
+    if (sighting) return;
     if ((highTrackedTiles || []).filter(Boolean).length >= 2) {
       highTrackedTiles = inferMissingQuadTiles(highTrackedTiles);
       highTileProven = (highTrackedTiles || []).map(tile => !!tile);

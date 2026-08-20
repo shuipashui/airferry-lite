@@ -4,7 +4,7 @@
 
 对外说明只写 [README.md](README.md)。不要在 README 里放版本号、实测 KB/s、Worker / VideoFrame 细节或本文链接。
 
-**交接时点：** 2026-08-20。网页接收端 **v78**。Android APK 冻结 **0.8.12**。发送端是根目录 `sender/` 打出的单文件 HTML，无独立版本号，以 Pages 上的 `sender/dist/airferry-lite-sender.html` 为准。
+**交接时点：** 2026-08-20。网页接收端 **v79**。Android APK 冻结 **0.8.12**。发送端是根目录 `sender/` 打出的单文件 HTML，无独立版本号，以 Pages 上的 `sender/dist/airferry-lite-sender.html` 为准。
 
 ## 1. 项目一句话
 
@@ -29,11 +29,11 @@
 
 | 部件 | 版本 | 对照 |
 |---|---|---|
-| 网页接收端 | **v78** | 预热保留。单码四码命中不再缩 ROI，原生定位帮到锁住 2 格。对照仍是 v74 会话 **43.3 KB/s** |
+| 网页接收端 | **v79** | 原生定位不再冻格。Stop 不清 WASM。hashed wasm 单独缓存。对照仍是 v74 会话 **43.3 KB/s** |
 | Android APK | **0.8.12**（versionCode 27） | 未经明确要求不要改。历史峰值 **0.8.8：60 Hz 四码约 193 KB/s** |
 | 发送端 | AFL2 单文件 HTML | 默认 2331 B · 30 FPS · 单码；四码每码上限 **1273 B** |
 
-诊断第一行必须是 `网页：v78`（改版后变成 `网页：vN`）。
+诊断第一行必须是 `网页：v79`（改版后变成 `网页：vN`）。
 
 ## 4. 实测对照（回归用这些，不要用更旧的数）
 
@@ -46,7 +46,7 @@
 - 采集 **51.9** · 有效 **30.9** · 解码 **37.6 ms** · 取帧 **bitmap**
 - 实时 **65.0 KB/s** · 会话 **53.8 KB/s**
 
-这是网页单码在 **60 FPS 预览** 下必须保住的数。v73–v74、v76–v78 把 Android 预览锁在 30 FPS 以对准 30 FPS 发送。采集掉到约 10、忙时丢弃 0，就是主线程取帧把 `requestVideoFrameCallback` 卡住了。
+这是网页单码在 **60 FPS 预览** 下必须保住的数。v73–v74、v76–v79 把 Android 预览锁在 30 FPS 以对准 30 FPS 发送。采集掉到约 10、忙时丢弃 0，就是主线程取帧把 `requestVideoFrameCallback` 卡住了。
 
 ### 四码（当前对照是 v74）
 
@@ -73,7 +73,13 @@ v76 Pages 实测（30 FPS 预览 + inflight 2 + 间隔 33 ms）：
 
 v77：inflight 退回 **1**，页面加载预热 WASM。开头几秒相机正常了，但诊断没有「格 4」。采集 30 · 分析 16.5 · 有效 **0.0** · 解码 61.5 ms · **每帧 0.42** · 会话 **6.0 KB/s** · 还是有点卡。原因：WASM 一就绪就扫到 1 个四码，ROI 缩到那一码周围，并关掉原生定位，后面再也锁不成 2×2。
 
-v78：一个四码命中不再缩 ROI；原生定位一直帮到锁住 **2** 格。格 2 之后仍不要 `detect(video)`。不要 60 FPS 预览，不要 inflight 2。诊断第一行 `网页：v78`。
+v78 Pages 实测（同上参数，acquire 修好了所以有格 4）：
+
+- 格 4 · 采集 30.0 · 分析 12.6 · 有效 21.3 · 解码 **58.0 ms** · **每帧 0.78**
+- 实时 22.3 · 平均 17.6 · 会话 **10.9 KB/s** · 忙时丢弃 481
+- 格锁上了，但 720 图里码不够锐。原因：`BarcodeDetector` 两格一到就 `lockQuadSlots(..., true)`，`inferMissingQuadTiles` 直接冻成格 4，后续只 `followContainedQuadHits`，并集被放大。另有十几秒「正在加载解码器」：每次 Stop 都 `terminate` Worker，升版 SW 还把 hashed wasm 从缓存里删掉。
+
+v79：原生定位只帮到 2 格、**不要冻格**。WASM 自己锁 2×2。Stop 只暂停任务，Worker 继续活着。wasm 进 `airferry-lite-wasm` 缓存，升版不删。两个 Worker 错开启动。不要 60 FPS 预览，不要 inflight 2。诊断第一行 `网页：v79`。
 
 不要再走的路（都已 Pages 打过）：
 
@@ -125,7 +131,7 @@ v78：一个四码命中不再缩 ROI；原生定位一直帮到锁住 **2** 格
 
 根目录 `index.html` + `app.js` + `sw.js` 即 GitHub Pages。`web-receiver/` 是 byte-identical 镜像（换行除外），改完必跑 `node sync-receiver.mjs`。
 
-高速路径：`requestVideoFrameCallback` → `scanWithHighSpeedWorkers`。Worker 忙则丢最新帧，不排队。页面加载就预热 WASM Worker，点开始时不要再等编译。Android 2 个，桌面最多 4 个。
+高速路径：`requestVideoFrameCallback` → `scanWithHighSpeedWorkers`。Worker 忙则丢最新帧，不排队。页面加载就预热 WASM Worker，Stop 不要 terminate。Android 先起 1 个 Worker，就绪后再起第 2 个。桌面最多 4 个。
 
 ### 单码（不要改这条取帧）
 
@@ -139,13 +145,13 @@ v78：一个四码命中不再缩 ROI；原生定位一直帮到锁住 **2** 格
 1. `grabQuadPackedBitmap`：对 2×2 并集 **一次** `createImageBitmap(video, …, { resize 720 })`，把 bitmap 交给 **1 个** Worker，`maxSymbols: 4`。不要在页面线程 `getImageData` / `rgbaToLuma`。不要每格各读 video，不要 1440 atlas。
 2. 同时只允许 `HIGH_QUAD_INFLIGHT = 1` 帧在飞，取帧间隔 `HIGH_QUAD_GRAB_MS = 33`。v76 的 inflight 2 把解码拖到 71 ms、每帧掉到 0.66，不要再开。不要 60 FPS 预览。页面加载时预热 Worker。
 3. 同帧不再二次补扫。不要 `dueRelock`，不要周期性重锁整幅 ROI。
-4. `lockQuadSlots`：至少 **2** 个命中才锁；满 4 格冻结。格 4 之后只用 `followContainedQuadHits`。不要 `rebuildQuadFromHits`。未锁住 2 格前，原生定位继续帮；**格 2 之后**不要再 `BarcodeDetector.detect(video)`。一个四码命中不要把 ROI 缩到那一码周围。
+4. `lockQuadSlots`：至少 **2** 个命中才锁；满 4 格冻结。格 4 之后只用 `followContainedQuadHits`。不要 `rebuildQuadFromHits`。未锁住 2 格前，原生定位继续帮；**格 2 之后**不要再 `BarcodeDetector.detect(video)`。原生 `lockQuadSlots(tiles, true)` **不得** `inferMissing` 或冻格。一个四码命中不要把 ROI 缩到那一码周围。
 5. 保留 `function tileCenter`。格子里存原始框，只在扫描时 `inflateRect` 一次。
 6. packed luma 只作 ImageBitmap 失败时的回退。
 
 ### 相机
 
-- Android 预览请求 **30 FPS**（`frameRate: { ideal: 30, max: 30 }`），不要 60、不要 120、不要 `focusMode: continuous`、不要横屏 `1920×1440`（用 `1440×1920`）。Android 只开 **2** 个 WASM Worker。v75 证明 60 FPS 预览会对不准 30 FPS 发送，又卡又慢。
+- Android 预览请求 **30 FPS**（`frameRate: { ideal: 30, max: 30 }`），不要 60、不要 120、不要 `focusMode: continuous`、不要横屏 `1920×1440`（用 `1440×1920`）。Android 只开 **2** 个 WASM Worker，错开启动。Stop 不要 terminate。v75 证明 60 FPS 预览会对不准 30 FPS 发送，又卡又慢。
 - `cameraPreviewLive()`：轨 `live`、未 mute、video 在播且有宽高；1.5 s 没有新的视频帧则视为死预览。开始扫描若预览已死，先 `closeCamera` 再 `getUserMedia`。不要只看 `track.readyState === "live"` 就 return。
 - 扫描中开始按钮保持可点。不要因为主线程卡了就自动 `closeCamera`（v71 的 `dropDeadCamera` 会把活相机杀掉）。
 - 假 `ended` 只在轨仍 `live` 且未 mute、video 未暂停且有帧时忽略。`WeakSet` 每条轨只绑一次。
@@ -239,6 +245,8 @@ tests/                          npm test：协议 / 安全 / 运行时针
 - 不要用 1.5 s 无帧看门狗自动 `closeCamera`。
 - 不要在已经锁住 2 格之后继续 `BarcodeDetector.detect(video)`（和 `createImageBitmap` 抢相机）。未锁格时必须留着，v77 过早关掉会没有「格 4」。
 - 不要用一个四码命中把 ROI 缩到单码周围（v77：每帧 0.42、会话 6 KB/s）。
+- 不要用原生定位框 `inferMissingQuadTiles` 冻成格 4（v78：每帧 0.78、会话 10.9 KB/s）。冻格只许 WASM。
+- 不要在 `closeCamera` 里 `stopHighSpeedWorkers`。不要升版时删掉 `airferry-lite-wasm`。不要两个 Worker 一起编译。
 - 不要用稀疏 WASM 命中 `rebuildQuadFromHits` 重排 2×2（会打乱未锁住的格子，诊断里没有格 4）。
 - 网页不要搬 APK 的「≥3 命中按 midX/midY 重排」：WASM 每帧常常只有 1 个命中。
 - APK 不要改回 `ImageProxy.read()`（会旋转）。不要把高速录像 session 接到 ImageAnalysis。不要把已不用的 `LumaScaler` 接回热路径。
@@ -263,7 +271,7 @@ tests/                          npm test：协议 / 安全 / 运行时针
 
 ## 11. 已知缺口
 
-1. **网页四码** 对照仍是 v74 会话 **43.3 KB/s**（30 FPS · inflight 1 · 每帧 2.30）。v75 60 FPS、v76 inflight 2、v77 过早关原生定位都更慢。不要再加每格 video 读回，不要退回主线程 `getImageData`。不要搬 APK 的 ≥3 命中重排。单码取帧不要顺手改。
+1. **网页四码** 对照仍是 v74 会话 **43.3 KB/s**（30 FPS · inflight 1 · 每帧 2.30）。v75 60 FPS、v76 inflight 2、v77 过早关原生定位、v78 用原生框冻格都更慢。不要再加每格 video 读回，不要退回主线程 `getImageData`。不要搬 APK 的 ≥3 命中重排。单码取帧不要顺手改。
 2. AFL2 进度只在内存，刷新即丢。IndexedDB 只服务 AFL1。
 3. 文件上限 64 MiB。
 4. 本地 `origin/main` 和 GitHub `main` 的 SHA 偶尔对不齐（API 推送），以 GitHub API 的 ref 为准。
@@ -274,4 +282,4 @@ MIT。第三方见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。只使用 
 
 ---
 
-当前网页 **v78**，APK **0.8.12**。四码对照仍是 v74 会话 **43.3 KB/s**。v75 的 60 FPS、v76 的 inflight 2、v77 的过早关定位不要再走。以 Pages 诊断第一行 `网页：v78` 为准。
+当前网页 **v79**，APK **0.8.12**。四码对照仍是 v74 会话 **43.3 KB/s**。v75 的 60 FPS、v76 的 inflight 2、v77 的过早关定位、v78 的原生冻格不要再走。以 Pages 诊断第一行 `网页：v79` 为准。
