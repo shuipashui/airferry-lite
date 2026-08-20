@@ -27,6 +27,7 @@
   const QUAD_MAX_FRAME_BYTES = 1273;
   const HIGH_QUEUE_LIMIT = 8;
   const QUIET_MODULES = 2;
+  const QUAD_QUIET_MODULES = 4;
   const LINK_QUIET_MODULES = 4;
   const COMMON_HZ = [60, 75, 90, 120, 144, 165, 240];
   let file = null;
@@ -291,9 +292,10 @@
     return { count, dark };
   }
 
-  function rasterize(pattern) {
-    if (pattern.tile) return pattern.tile;
-    const size = pattern.count + QUIET_MODULES * 2;
+  function rasterize(pattern, quiet) {
+    pattern.tiles = pattern.tiles || {};
+    if (pattern.tiles[quiet]) return pattern.tiles[quiet];
+    const size = pattern.count + quiet * 2;
     const tile = document.createElement("canvas");
     tile.width = size;
     tile.height = size;
@@ -304,12 +306,12 @@
     for (let row = 0; row < pattern.count; row += 1) {
       for (let col = 0; col < pattern.count; col += 1) {
         if (!pattern.dark[row * pattern.count + col]) continue;
-        const pixel = ((row + QUIET_MODULES) * size + (col + QUIET_MODULES)) * 4;
+        const pixel = ((row + quiet) * size + (col + quiet)) * 4;
         data[pixel] = data[pixel + 1] = data[pixel + 2] = 0;
       }
     }
     context.putImageData(image, 0, 0);
-    pattern.tile = tile;
+    pattern.tiles[quiet] = tile;
     return tile;
   }
 
@@ -355,11 +357,25 @@
       context.imageSmoothingEnabled = false;
       context.fillStyle = "#fff";
       context.fillRect(0, 0, size, size);
-      const columns = patterns.length === 4 ? 2 : 1;
-      const rows = patterns.length === 4 ? 2 : 1;
-      const tileWidth = size / columns;
-      const tileHeight = size / rows;
-      patterns.forEach((pattern, index) => drawPatternTile(context, pattern, index % columns * tileWidth, Math.floor(index / columns) * tileHeight, tileWidth, tileHeight));
+      const quad = patterns.length === 4;
+      const columns = quad ? 2 : 1;
+      const gap = quad ? Math.max(16, Math.round(size * 0.04)) : 0;
+      const tileWidth = (size - gap) / columns;
+      const tileHeight = (size - gap) / columns;
+      const quiet = quad ? QUAD_QUIET_MODULES : QUIET_MODULES;
+      patterns.forEach((pattern, index) => {
+        const col = index % columns;
+        const row = Math.floor(index / columns);
+        drawPatternTile(
+          context,
+          pattern,
+          col * (tileWidth + gap),
+          row * (tileHeight + gap),
+          tileWidth,
+          tileHeight,
+          quiet
+        );
+      });
     } catch (error) {
       stop();
       statusText.textContent = "二维码过密，请降低每帧数据";
@@ -367,8 +383,8 @@
     }
   }
 
-  function drawPatternTile(context, pattern, x, y, width, height) {
-    const tile = rasterize(pattern);
+  function drawPatternTile(context, pattern, x, y, width, height, quiet) {
+    const tile = rasterize(pattern, quiet);
     const side = Math.floor(Math.min(width, height));
     if (side < 1) return;
     const offsetX = Math.floor(x + (width - side) / 2);
@@ -444,7 +460,9 @@
     const bytes = codes === 4 ? Math.min(frameBytes, QUAD_MAX_FRAME_BYTES) : frameBytes;
     const frameRate = Number(fps.value);
     const header = H?.HEADER_LEN || HEADER_LEN;
-    const cell = (canvas.width / (codes === 4 ? 2 : 1)) / (qrModules(bytes) + QUIET_MODULES * 2);
+    const quiet = codes === 4 ? QUAD_QUIET_MODULES : QUIET_MODULES;
+    const gap = codes === 4 ? Math.max(16, Math.round(canvas.width * 0.04)) : 0;
+    const cell = ((canvas.width - gap) / (codes === 4 ? 2 : 1)) / (qrModules(bytes) + quiet * 2);
     return {
       codes,
       bytes,
