@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v81";
+  const RECEIVER_BUILD = "v82";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -64,9 +64,10 @@
   const HIGH_QUAD_ACQUIRE_MS = 400;
   const HIGH_QUAD_TILE_MISS_LIMIT = 6;
   const HIGH_QUAD_FROZEN_MISS_LIMIT = 24;
-  const HIGH_SINGLE_INFLIGHT = 4;
+  const HIGH_SINGLE_INFLIGHT = /Android/i.test(navigator.userAgent || "") ? 1 : 4;
   const HIGH_QUAD_INFLIGHT = 1;
   const HIGH_QUAD_GRAB_MS = 33;
+  const HIGH_SINGLE_GRAB_MS = 33;
 
   let stream = null;
   let scanTimer = 0;
@@ -155,6 +156,7 @@
   let lumaUnavailable = false;
   let highGrabInFlight = false;
   let lastQuadGrabAt = 0;
+  let lastSingleGrabAt = 0;
   let lastNativeLocate = 0;
   let highTileProven = [false, false, false, false];
   let highQuadFrozen = false;
@@ -667,6 +669,7 @@
       return;
     }
     if (highGrabInFlight) return;
+    if (lastSingleGrabAt && now - lastSingleGrabAt < HIGH_SINGLE_GRAB_MS) return;
     if (highWorkerBusy.filter(Boolean).length >= HIGH_SINGLE_INFLIGHT) {
       workerBusyDrops += 1;
       return;
@@ -684,6 +687,7 @@
     }
     const job = jobs[0];
     highGrabInFlight = true;
+    lastSingleGrabAt = now;
     void postHighSpeedRegion(slot, job.source, job.maxSymbols, job.retry, job.tile).finally(() => {
       highGrabInFlight = false;
     });

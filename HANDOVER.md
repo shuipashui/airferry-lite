@@ -4,7 +4,7 @@
 
 对外说明只写 [README.md](README.md)。不要在 README 里放版本号、实测 KB/s、Worker / VideoFrame 细节或本文链接。
 
-**交接时点：** 2026-08-20。网页接收端 **v81**。Android APK 冻结 **0.8.12**。发送端是根目录 `sender/` 打出的单文件 HTML，无独立版本号，以 Pages 上的 `sender/dist/airferry-lite-sender.html` 为准。
+**交接时点：** 2026-08-20。网页接收端 **v82**。Android APK 冻结 **0.8.12**。发送端是根目录 `sender/` 打出的单文件 HTML，无独立版本号，以 Pages 上的 `sender/dist/airferry-lite-sender.html` 为准。
 
 ## 1. 项目一句话
 
@@ -29,11 +29,11 @@
 
 | 部件 | 版本 | 对照 |
 |---|---|---|
-| 网页接收端 | **v81** | 预览 60 FPS。不对焦锁定。取帧仍 33 ms · inflight 1。对照单码仍是 v66 会话 **53.8 KB/s**，四码对照 v74 **43.3 KB/s** |
+| 网页接收端 | **v82** | 预览 60 FPS。单码取帧 33 ms、Android inflight 1。对照单码 v66 实时 **65.0** / 会话 **53.8 KB/s**，四码 v74 **43.3 KB/s** |
 | Android APK | **0.8.12**（versionCode 27） | 未经明确要求不要改。历史峰值 **0.8.8：60 Hz 四码约 193 KB/s** |
 | 发送端 | AFL2 单文件 HTML | 默认 2331 B · 30 FPS · 单码；四码每码上限 **1273 B** |
 
-诊断第一行必须是 `网页：v81`（改版后变成 `网页：vN`）。
+诊断第一行必须是 `网页：v82`（改版后变成 `网页：vN`）。
 
 ## 4. 实测对照（回归用这些，不要用更旧的数）
 
@@ -83,7 +83,13 @@ v79：原生定位只帮到 2 格、不冻格。Stop 不清 WASM。加载解码�
 
 v80：高速路径不再对 `video` 做 `detect`。但又把 Android 对焦/曝光锁成 `manual/none/single-shot`，红米对不上焦，预览一直糊。
 
-v81：撤掉对焦锁，预览请求 **60 FPS**（和 v66/v64 一样）。四码取帧仍 `HIGH_QUAD_GRAB_MS = 33`、`HIGH_QUAD_INFLIGHT = 1`。v75 翻车是 16 ms 连抠 + inflight 2，不是 60 FPS 预览本身。不要再锁 AF。诊断第一行 `网页：v81`。
+v81 Pages 实测（60 FPS 预览，不锁 AF，四码仍 33 ms inflight 1）：**页面不卡。**
+
+- 四码：采集 59.9 · 分析 20.6 · 有效 29.5 · 解码 **29.3 ms** · **每帧 1.36** · 格 4 · 实时 37.4 · 会话 **35.0 KB/s** · 解块 556/1117
+- 单码：采集 59.0 · 分析 43.0 · 有效 25.0 · 解码 29.0 ms · **每帧 0.54** · 实时 **53.8** · 会话 **48.1 KB/s** · 解完 606/606
+- 单码没到 v66 的 65 KB/s：60 FPS 预览按相机帧连抠，一半扫在 30 FPS 发送的换帧间隙上，重复 55、每帧 0.54。
+
+v82：单码也 33 ms 取一帧，Android `HIGH_SINGLE_INFLIGHT = 1`。不要再 16 ms 连抠，不要锁 AF。诊断第一行 `网页：v82`。
 
 不要再走的路（都已 Pages 打过）：
 
@@ -142,7 +148,8 @@ v81：撤掉对焦锁，预览请求 **60 FPS**（和 v66/v64 一样）。四码
 1. 未锁定：整幅 `createImageBitmap(video, 0, 0, vw, vh, { resize 960 })`。
 2. WASM 锁 ROI。不要在高速扫描时对 `video` 做 `BarcodeDetector.detect`（和预览抢相机，这台机会糊、会卡）。
 3. 锁定后：`createImageBitmap(video, x, y, widthSrc, heightSrc, { resize 720 })`。
-4. 失败不要 `captureViaCanvas = true`，不要二次 `createImageBitmap` 裁已经拿到的 bitmap。
+4. Android 一次只飞 1 帧，取帧间隔 `HIGH_SINGLE_GRAB_MS = 33`，对齐 30 FPS 发送。不要按 60 FPS 相机连抠。
+5. 失败不要 `captureViaCanvas = true`，不要二次 `createImageBitmap` 裁已经拿到的 bitmap。
 
 ### 四码（锁格不变；v73 一张图进 Worker）
 
@@ -286,4 +293,4 @@ MIT。第三方见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。只使用 
 
 ---
 
-当前网页 **v81**，APK **0.8.12**。预览 60 FPS，四码取帧 33 ms · inflight 1。四码对照仍是 v74 会话 **43.3 KB/s**。不要再锁 AF，不要 16 ms 连抠。以 Pages 诊断第一行 `网页：v81` 为准。
+当前网页 **v82**，APK **0.8.12**。预览 60 FPS，单码/四码取帧都是 33 ms。单码对照 v66 实时 **65.0 KB/s**，四码对照 v74 **43.3 KB/s**。不要再锁 AF，不要 16 ms 连抠。以 Pages 诊断第一行 `网页：v82` 为准。
