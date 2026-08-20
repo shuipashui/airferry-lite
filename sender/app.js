@@ -335,6 +335,16 @@
     drawScreen([pattern]);
   }
 
+  function viewerContentSide(viewer) {
+    const style = getComputedStyle(viewer);
+    const padX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+    const padY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+    return Math.min(
+      Math.max(0, viewer.clientWidth - padX),
+      Math.max(0, viewer.clientHeight - padY)
+    );
+  }
+
   function syncCanvasSize() {
     const viewer = canvas.closest(".viewer") || canvas.parentElement;
     if (!viewer) return;
@@ -342,27 +352,20 @@
     document.documentElement.classList.toggle("quad-send", quad);
     document.body.classList.toggle("quad-send", quad);
     viewer.classList.toggle("quad", quad);
-    if (quad) {
+    const fullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    let side;
+    if (quad && fullscreen) {
       canvas.style.width = "";
       canvas.style.height = "";
       const rect = canvas.getBoundingClientRect();
-      const side = Math.max(256, Math.floor(Math.min(rect.width, rect.height)));
-      if (canvas.width !== side || canvas.height !== side) {
-        canvas.width = side;
-        canvas.height = side;
-      }
-      return;
+      side = Math.max(256, Math.floor(Math.min(rect.width, rect.height)));
+    } else {
+      const avail = viewerContentSide(viewer);
+      const cap = quad ? Math.floor(Math.min(window.innerWidth, window.innerHeight) * 0.96) : avail;
+      side = Math.max(256, Math.floor(Math.min(avail, cap)));
+      canvas.style.width = side + "px";
+      canvas.style.height = side + "px";
     }
-    const style = getComputedStyle(viewer);
-    const padX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
-    const padY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
-    const avail = Math.min(
-      Math.max(0, viewer.clientWidth - padX),
-      Math.max(0, viewer.clientHeight - padY)
-    );
-    const side = Math.max(256, Math.floor(avail));
-    canvas.style.width = side + "px";
-    canvas.style.height = side + "px";
     if (canvas.width !== side || canvas.height !== side) {
       canvas.width = side;
       canvas.height = side;

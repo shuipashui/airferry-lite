@@ -30,6 +30,7 @@ const senderApp = fs.readFileSync(new URL("../sender/app.js", import.meta.url), 
 assert.ok(senderApp.includes("QUIET_MODULES = 2"), "single-code QR quiet zone should stay tight so modules can use the canvas");
 assert.ok(senderApp.includes("QUAD_QUIET_MODULES = 4"), "quad codes need a spec quiet zone so adjacent finders do not merge");
 assert.ok(senderStyles.includes("body.quad-send #qrCanvas") && senderStyles.includes("96vmin"), "quad file QR must use the original 96vmin canvas");
+assert.ok(!senderStyles.includes("html.quad-send,body.quad-send{height:auto"), "quad sender must keep the same fixed window as single-code");
 assert.ok(!senderApp.includes("size * 0.04"), "quad tiles should fill the original 2x2 canvas instead of shrinking for an extra gutter");
 assert.ok(senderApp.includes("offsetY, side, side)"), "file QR must fill the canvas instead of leaving unused white from integer cell size");
 console.log("QR density tests ok");
