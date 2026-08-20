@@ -55,7 +55,7 @@ for (const needle of [
   ,"const HIGH_QUAD_PACKED_SIZE = 720;"
   ,">= 4 ? 4 : 2"
   ,"!/Android/i.test(navigator.userAgent || \"\")"
-  ,"const RECEIVER_BUILD = \"v65\";"
+  ,"const RECEIVER_BUILD = \"v66\";"
   ,"function grabLumaRegion"
   ,"function cropLuma"
   ,"function downscaleLuma"
@@ -138,10 +138,8 @@ for (const needle of [
   ,"实时 — · 平均 —"
   ,"elapsed < 1000"
   ," · 每帧 "
-  ,"function startCapturePump"
-  ,"MediaStreamTrackProcessor"
 ]) assert.ok(source.includes(needle), "missing receiver guard: " + needle);
-assert.ok(indexHtml.includes("app.js?v=65"), "index.html must cache-bust app.js with the current receiver build");
+assert.ok(indexHtml.includes("app.js?v=66"), "index.html must cache-bust app.js with the current receiver build");
 assert.ok(!source.includes("highMultiLayout || !highSingleConfirmed"), "single-code acquire must not be replaced by quadrant crops");
 assert.ok(!source.includes("dueRelock"), "quad must not fall back to overlapping quadrants after empty misses");
 assert.ok(!source.includes("HIGH_MULTI_FULL_DECODE_EVERY"), "quad must not periodic-relock the whole ROI");
@@ -156,7 +154,8 @@ assert.ok(!source.includes("nudgeFrozenTiles"), "quad tiles must not be nudged b
 assert.ok(!source.includes("function rebuildQuadFromHits"), "locked quad must not rebuild the 2x2 from sparse WASM hits");
 assert.ok(source.includes("width: { ideal: 1440 }"), "Android camera must request portrait 1440x1920 instead of landscape 1920x1440");
 assert.ok(source.includes("cameraEndedWhileStarting"), "startup ended events must not immediately close the camera");
-assert.ok(source.includes("if (track.readyState === \"live\") return;"), "spurious ended must not close a live track");
+assert.ok(source.includes("if (track.readyState === \"live\")"), "spurious ended must not close a live track");
+assert.ok(source.includes("bindCameraEnded(activeStream)"), "spurious ended must re-arm the camera listener");
 assert.ok(!source.includes("HIGH_TILE_PAD_LOCK"), "quad tiles must not use a second lock pad");
 assert.ok(source.includes("highQuadFrozen ? HIGH_QUAD_FROZEN_MISS_LIMIT : HIGH_QUAD_TILE_MISS_LIMIT"), "frozen quad grid must survive brief handshake misses");
 assert.ok(source.includes("const useLuma = highMultiLayout &&"), "single-code scans must not use the quad luma grab");
@@ -164,21 +163,22 @@ assert.ok(!source.includes("probeMulti"), "single-code scans must not be shredde
 assert.ok(!source.includes("if (lastHitBox >= 700) return Math.min(HIGH_TILE_SIZE, longest);"), "close single-code full frames must not be capped at 720");
 assert.ok(source.includes("if (highScanMisses > 0) return inflateRect(highScanRoi, 1.2 + highScanMisses * 0.2);"), "single-code tracking must keep an ROI so WASM does not search the whole portrait");
 assert.ok(source.includes("if (tile || highMultiLayout || highScanRoi) return Math.min(HIGH_TILE_SIZE, longest);"), "locked single-code ROI must scan at 720 like v26, not 960/1440");
-assert.ok(source.includes("createImageBitmap(video, 0, 0, vw, vh,"), "single-code video grabs must snapshot the full frame, not crop the HTMLVideoElement");
-assert.ok(source.includes("postedFrame = new VideoFrame(video)"), "single-code must keep a VideoFrame fallback if MediaStreamTrackProcessor is missing");
-assert.ok(source.includes("{ id, frame: postedFrame, maxSymbols, retryBinarizer, crop }"), "single-code VideoFrame posts must include the worker crop");
-assert.ok(source.includes("highVideoFrameBlocked = true"), "VideoFrame transfer failures must fall back to createImageBitmap without disabling the bitmap path");
-assert.ok(source.includes("live.clone()"), "single-code capture must clone the camera track so the preview is not consumed");
-assert.ok(source.includes(" · 取帧 "), "diagnostics must show whether MST, VideoFrame, or bitmap captured the frame");
-assert.ok(!source.includes("createImageBitmap(full.bitmap"), "locked single-code must crop inside the worker, not with a second main-thread ImageBitmap");
+assert.ok(source.includes("createImageBitmap(video, 0, 0, vw, vh,"), "unlocked single-code acquire must snapshot the full frame");
+assert.ok(source.includes("!tile && !highMultiLayout && !highScanRoi"), "locked single-code must not keep snapshotting the full 1440 frame");
+assert.ok(source.includes("createImageBitmap(video, x, y, widthSrc, heightSrc,"), "locked single-code must crop the video to the ROI like quad packed grabs");
+assert.ok(!source.includes("MediaStreamTrackProcessor"), "single-code must not clone or consume the camera track");
+assert.ok(!source.includes("live.clone()"), "cloning the camera track flashes this Chrome preview");
+assert.ok(!source.includes("postedFrame = new VideoFrame(video)"), "new VideoFrame(video) is a full-frame readback and must not be the single-code path");
+assert.ok(source.includes(" · 取帧 "), "diagnostics must show whether bitmap or canvas captured the frame");
+assert.ok(!source.includes("createImageBitmap(full.bitmap"), "locked single-code must not make a second main-thread ImageBitmap crop");
 assert.ok(!source.includes("await cropBitmapToSource"), "ROI geometry must not await a main-thread bitmap crop");
-assert.ok(source.includes("crop = { x: next.x, y: next.y, w: next.w, h: next.h, dw: next.width, dh: next.height }"), "locked single-code must send the ROI crop to the worker");
-assert.ok(source.includes("retryBinarizer, crop }"), "locked single-code ImageBitmap posts must include the worker crop");
+assert.ok(source.includes("retryBinarizer, crop }"), "ImageBitmap posts must include the worker crop field");
+assert.ok(!source.includes("if (highScanMisses >= 12) captureViaCanvas"), "decode misses must not stick the session on the canvas path");
 assert.ok(!source.includes("createImageBitmap(video, {"), "ImageBitmap grabs must pass a source rectangle so Chrome can GPU-scale");
 assert.ok(!source.includes("if (!highMultiLayout && !highScanRoi) return;"), "single-code speed must not wait for an ROI crop before counting bytes");
 assert.ok(source.includes("let swRefreshing = false;"), "service worker updates must reload even when the previous build already recorded a refresh");
 assert.ok(serviceWorker.includes("client.navigate(client.url)"), "new service worker must navigate open pages off a stuck old build");
-assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v65";'), "service worker cache version was not bumped");
+assert.ok(serviceWorker.includes('const CACHE_NAME = "airferry-lite-v66";'), "service worker cache version was not bumped");
 assert.ok(serviceWorker.includes('path.endsWith(".wasm")'), "service worker must cache WASM/worker files instead of no-store");
 assert.ok(serviceWorker.includes('"./highspeed-protocol.js"') && serviceWorker.includes('"./vendor/decimen/highspeed-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/multi-decoder-worker.js"') && serviceWorker.includes('"./vendor/decimen/zxing_reader-EOacYbLr.wasm"'), "high-speed receiver assets are not cached");
 assert.equal(mirrorSource, source, "web-receiver app.js drifted from the published root receiver");
