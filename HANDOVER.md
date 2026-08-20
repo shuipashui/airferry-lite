@@ -4,7 +4,7 @@
 
 对外说明只写 [README.md](README.md)。不要在 README 里放版本号、实测 KB/s、Worker / VideoFrame 细节或本文链接。
 
-**交接时点：** 2026-08-20。网页接收端 **v83**。Android APK 冻结 **0.8.12**。发送端是根目录 `sender/` 打出的单文件 HTML，无独立版本号，以 Pages 上的 `sender/dist/airferry-lite-sender.html` 为准。
+**交接时点：** 2026-08-20。网页接收端 **v84**。Android APK 冻结 **0.8.12**。发送端是根目录 `sender/` 打出的单文件 HTML，无独立版本号，以 Pages 上的 `sender/dist/airferry-lite-sender.html` 为准。
 
 ## 1. 项目一句话
 
@@ -29,11 +29,11 @@
 
 | 部件 | 版本 | 对照 |
 |---|---|---|
-| 网页接收端 | **v83** | 预览 60 FPS。单码回到 v81 取帧（inflight 4，不限 33 ms）。四码仍 33 ms · inflight 1 |
+| 网页接收端 | **v84** | 预览 60 FPS。单码同 v83。四码仍 33 ms · inflight 1；锁格后 Worker 按格裁 720，每格 maxSymbols 1 |
 | Android APK | **0.8.12**（versionCode 27） | 未经明确要求不要改。历史峰值 **0.8.8：60 Hz 四码约 193 KB/s** |
 | 发送端 | AFL2 单文件 HTML | 默认 2331 B · 30 FPS · 单码；四码每码上限 **1273 B** |
 
-诊断第一行必须是 `网页：v83`（改版后变成 `网页：vN`）。
+诊断第一行必须是 `网页：v84`（改版后变成 `网页：vN`）。
 
 ## 4. 实测对照（回归用这些，不要用更旧的数）
 
@@ -91,7 +91,9 @@ v81 Pages 实测（60 FPS 预览，不锁 AF，四码仍 33 ms inflight 1）：*
 
 v82 Pages 实测（单码也 33 ms、Android inflight 1）：采集 58 · 分析 **20.0** · 有效 **9.0 FPS** · 每帧仍 0.51 · 实时 **22.5** · 会话 **23.2 KB/s**。限速没有把每帧打上去，只是少扫了，变慢。不要再给单码加 33 ms 间隔。
 
-v83：单码取帧退回 v81（`HIGH_SINGLE_INFLIGHT = 4`，不限 33 ms）。四码仍 33 ms · inflight 1。不要锁 AF。诊断第一行 `网页：v83`。
+v83 Pages 实测（单码取帧同 v81，不限 33 ms）：**解完 606/606。** 采集 40.4 · 分析 36.5 · 有效 **21.7 FPS** · 解码 30.5 ms · **每帧 0.51** · 实时 **48.8** · 平均 47.8 · 会话 **45.5 KB/s** · 重复 42。从 v82 的 23 KB/s 恢复到 v81 量级（48.1），仍低于 v66 的 53.8。每帧仍约 0.5，差在分析/有效码次数，不是命中率。
+
+v84：四码锁格后不再对整张 720 做 `maxSymbols: 4`。仍只从相机抠一张 720，Worker 里按格 `cropImageData`，每格 `maxSymbols: 1`。瞄准未锁格时仍整图 `maxSymbols: 4`。单码不动。诊断四码锁定后应有 `切格`。不要因此把 inflight 打成 2 或间隔打成 16 ms。
 
 不要再走的路（都已 Pages 打过）：
 
@@ -152,14 +154,16 @@ v83：单码取帧退回 v81（`HIGH_SINGLE_INFLIGHT = 4`，不限 33 ms）。�
 3. 锁定后：`createImageBitmap(video, x, y, widthSrc, heightSrc, { resize 720 })`。
 4. 失败不要 `captureViaCanvas = true`，不要二次 `createImageBitmap` 裁已经拿到的 bitmap。不要给单码加 33 ms 间隔（v82 有效码从 25 掉到 9）。
 
-### 四码（锁格不变；v73 一张图进 Worker）
+### 四码（锁格不变；v84 一张图进 Worker 后切格）
 
-1. `grabQuadPackedBitmap`：对 2×2 并集 **一次** `createImageBitmap(video, …, { resize 720 })`，把 bitmap 交给 **1 个** Worker，`maxSymbols: 4`。不要在页面线程 `getImageData` / `rgbaToLuma`。不要每格各读 video，不要 1440 atlas。
-2. 同时只允许 `HIGH_QUAD_INFLIGHT = 1` 帧在飞，取帧间隔 `HIGH_QUAD_GRAB_MS = 33`。v76 的 inflight 2 把解码拖到 71 ms、每帧掉到 0.66，不要再开。预览可以 60 FPS，但不要按 16 ms 连抠。页面加载时预热 Worker。
-3. 同帧不再二次补扫。不要 `dueRelock`，不要周期性重锁整幅 ROI。
-4. `lockQuadSlots`：至少 **2** 个命中才锁；满 4 格冻结。格 4 之后只用 `followContainedQuadHits`。不要 `rebuildQuadFromHits`。高速 WASM 扫描不要再 `BarcodeDetector.detect(video)`。原生 `lockQuadSlots(tiles, true)` 若被调用 **不得** `inferMissing` 或冻格。一个四码命中不要把 ROI 缩到那一码周围。
-5. 保留 `function tileCenter`。格子里存原始框，只在扫描时 `inflateRect` 一次。
-6. packed luma 只作 ImageBitmap 失败时的回退。
+1. `grabQuadPackedBitmap`：对 2×2 并集 **一次** `createImageBitmap(video, …, { resize 720 })`。不要在页面线程 `getImageData` / `rgbaToLuma`。不要每格各读 video，不要 1440 atlas。
+2. 未锁格（不足 2 个 tracked tile）：整张 720、`maxSymbols: 4`，和 v74 瞄准一样。
+3. 已有 ≥2 格：`mapCropsToPacked` 把格子映射进这张 720，Worker `decodePackedTiles` 每格 `maxSymbols: 1`。像素裁切在 Worker，不是 `createImageBitmap(video)`。
+4. 同时只允许 `HIGH_QUAD_INFLIGHT = 1` 帧在飞，取帧间隔 `HIGH_QUAD_GRAB_MS = 33`。v76 的 inflight 2 把解码拖到 71 ms、每帧掉到 0.66，不要再开。预览可以 60 FPS，但不要按 16 ms 连抠。页面加载时预热 Worker。
+5. 同帧不再二次补扫相机。不要 `dueRelock`，不要周期性重锁整幅 ROI。Worker 对同一张 bitmap 切格不算二次取帧。
+6. `lockQuadSlots`：至少 **2** 个命中才锁；满 4 格冻结。格 4 之后只用 `followContainedQuadHits`。不要 `rebuildQuadFromHits`。高速 WASM 扫描不要再 `BarcodeDetector.detect(video)`。原生 `lockQuadSlots(tiles, true)` 若被调用 **不得** `inferMissing` 或冻格。一个四码命中不要把 ROI 缩到那一码周围。
+7. 保留 `function tileCenter`。格子里存原始框，只在扫描时 `inflateRect` 一次。
+8. packed luma 只作 ImageBitmap 失败时的回退。
 
 ### 相机
 
@@ -253,7 +257,7 @@ tests/                          npm test：协议 / 安全 / 运行时针
 - 不要删 `tileCenter`（格 1 时对 `undefined` 取中心，卡死）。
 - 不要 nearest-neighbor nudge、不要 `dueRelock`、不要在 WASM 高速扫描时跑全图 BarcodeDetector。
 - 不要按相机中线切 2×2，不要把并排两个码当成完整 2×2。
-- 不要每格对 video 做 `createImageBitmap`，不要 1440 atlas 再切格，不要在页面线程对 720 packed 做 `getImageData`。一张 720 bitmap 进 Worker、`maxSymbols: 4` 是 v73 主路径。
+- 不要每格对 video 做 `createImageBitmap`，不要 1440 atlas 再切格，不要在页面线程对 720 packed 做 `getImageData`。一张 720 bitmap 进 Worker；未锁格 `maxSymbols: 4`，锁格后 Worker 切格 `maxSymbols: 1`。
 - 不要用 1.5 s 无帧看门狗自动 `closeCamera`。
 - 不要在 WASM 高速扫描中 `BarcodeDetector.detect(video)`（v79：预览发糊、一卡一卡）。格 4 靠 WASM 中心方块 + 禁止单码缩 ROI。
 - 不要用一个四码命中把 ROI 缩到单码周围（v77：每帧 0.42、会话 6 KB/s）。
@@ -283,7 +287,7 @@ tests/                          npm test：协议 / 安全 / 运行时针
 
 ## 11. 已知缺口
 
-1. **网页四码 100 KB/s**：2331 B · 30 FPS · 四码每码 1253 B，屏幕上限约 `1253 × 4 × 30 ≈ 147 KB/s`，所以 100 KB/s 在发送侧够得着，但网页现在 35–43 KB/s。要 100 KB/s 必须约 **82 个唯一码/秒**，也就是几乎每一发帧打中 **2.7 / 4** 个码。v74 最好是分析 15 × 每帧 2.30 ≈ 35 码/秒（43 KB/s）。v81 解码已经 29 ms，但每帧只有 1.36。这台机上为提分析率走过的路都翻了：16 ms + inflight 2（卡、每帧 0.26）、每格 `createImageBitmap`（闪退）、主线程 `getImageData`（卡）。APK 0.8.8 能到 **193 KB/s**，靠的是 CameraX 最新帧 Y 平面 + 原生 zxing-cpp 约 60 FPS 分析，网页没有这条管线。开源对照：Decimen 父实验 ~128 KB/s 是 120 Hz 屏 + 更密帧 + 叠码；[RaptorQR](https://github.com/infrost/RaptorQR) 标 183–254 KB/s 用 RaptorQ（后来的 AGPL Decimen 同系，**不能搬**）和四码并行，短文件数字会偏乐观；[QRFerry](https://github.com/deedy/qr-data-transfer) 明确避开四码格、改双通道交替，因为四码获取成本高。网页要到 100 KB/s，下一步只能是 **提高 720 并集里每帧命中（回到 v74 的 2.3）** 或 **换发送侧**（60 FPS 四码，但这台 60 Hz 屏容易拖影），不要再 16 ms 连抠。单码取帧不要顺手改。
+1. **网页四码 100 KB/s**：2331 B · 30 FPS · 四码每码 1253 B，屏幕上限约 `1253 × 4 × 30 ≈ 147 KB/s`，所以 100 KB/s 在发送侧够得着，但网页现在 35–43 KB/s。要 100 KB/s 必须约 **82 个唯一码/秒**，也就是几乎每一发帧打中 **2.7 / 4** 个码。v74 最好是分析 15 × 每帧 2.30 ≈ 35 码/秒（43 KB/s）。v81 解码已经 29 ms，但每帧只有 1.36。v84 在锁格后对同一张 720 切格扫，目标是把每帧拉回 ≥2.3，而不是加分析次数。这台机上为提分析率走过的路都翻了：16 ms + inflight 2（卡、每帧 0.26）、每格 `createImageBitmap`（闪退）、主线程 `getImageData`（卡）。APK 0.8.8 能到 **193 KB/s**，靠的是 CameraX 最新帧 Y 平面 + 原生 zxing-cpp 约 60 FPS 分析，网页没有这条管线。开源对照：Decimen 父实验 ~128 KB/s 是 120 Hz 屏 + 更密帧 + 叠码；[RaptorQR](https://github.com/infrost/RaptorQR) 标 183–254 KB/s 用 RaptorQ（后来的 AGPL Decimen 同系，**不能搬**）和四码并行，短文件数字会偏乐观；[QRFerry](https://github.com/deedy/qr-data-transfer) 明确避开四码格、改双通道交替，因为四码获取成本高。不要再 16 ms 连抠。单码取帧不要顺手改。不要为了四码去换 AFL3 / RaptorQ。
 2. AFL2 进度只在内存，刷新即丢。IndexedDB 只服务 AFL1。
 3. 文件上限 64 MiB。
 4. 本地 `origin/main` 和 GitHub `main` 的 SHA 偶尔对不齐（API 推送），以 GitHub API 的 ref 为准。
@@ -294,4 +298,4 @@ MIT。第三方见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。只使用 
 
 ---
 
-当前网页 **v83**，APK **0.8.12**。预览 60 FPS。单码取帧同 v81（inflight 4）。四码 33 ms · inflight 1。单码对照 v66 实时 **65.0 KB/s**，四码对照 v74 **43.3 KB/s**。不要再锁 AF，不要单码 33 ms 限速。以 Pages 诊断第一行 `网页：v83` 为准。
+当前网页 **v84**，APK **0.8.12**。预览 60 FPS。单码实测会话 **45.5 KB/s**（解完 606/606）。四码锁格后 Worker 切格；对照 v74 **43.3 KB/s** / 每帧 **2.30**。不要再锁 AF，不要单码 33 ms 限速，不要 16 ms inflight 2。以 Pages 诊断第一行 `网页：v84` 为准。

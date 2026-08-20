@@ -74,6 +74,10 @@ assert.equal(quadQr.getModuleCount(), 117, "1273-byte quad frame must fit QR V25
   assert.ok(worker.includes("SPDX-License-Identifier: MIT"));
   assert.ok(workerBridge.includes('importScripts("./multi-decoder-worker.js")'));
   assert.ok(workerBridge.includes("maxSymbols"), "bitmap bridge must forward maxSymbols to the WASM decoder");
+  assert.ok(workerBridge.includes("data.tiles"), "bitmap bridge must decode locked quad tiles from one packed bitmap");
+  assert.ok(workerBridge.includes("function cropImageData"), "quad tiles must be sliced from the packed ImageData, not grabbed from live video");
+  assert.ok(workerBridge.includes("function decodePackedTiles"), "locked quad must scan each packed tile with maxSymbols 1");
+  assert.ok(workerBridge.includes("maxSymbols: 1"), "packed tile scans must not use maxSymbols 4 on each crop");
   assert.ok(workerBridge.includes("data.lum"), "bitmap bridge must forward packed luma without a canvas round-trip");
   assert.ok(workerBridge.includes("if (data.frame)"), "bitmap bridge must handle transferred VideoFrame before the luma fallback");
   assert.ok(workerBridge.includes("bitmapFromFrame"), "bitmap bridge must crop and resize a transferred VideoFrame off the main thread");

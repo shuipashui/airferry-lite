@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v83";
+  const RECEIVER_BUILD = "v84";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -169,6 +169,7 @@
   let highTrackedTiles = null;
   let lastHitBox = 0;
   let lastPostedScanSize = 0;
+  let lastQuadTiles = 0;
   let highBitmapLock = false;
   let highLocateLock = false;
   let highLocateTick = 0;
@@ -1398,12 +1399,34 @@
     };
   }
 
-  function postBitmapToWorker(slot, bitmap, source, width, height, retryBinarizer, maxSymbols) {
+  function mapCropsToPacked(crops, grabbed) {
+    const src = grabbed.source;
+    const sx = grabbed.width / Math.max(src.width, 1);
+    const sy = grabbed.height / Math.max(src.height, 1);
+    const tiles = [];
+    for (const crop of crops || []) {
+      const rect = clampBitmapRect(
+        Math.round((crop.x - src.x) * sx),
+        Math.round((crop.y - src.y) * sy),
+        Math.round(crop.width * sx),
+        Math.round(crop.height * sy),
+        grabbed.width,
+        grabbed.height
+      );
+      if (rect.w < 24 || rect.h < 24) continue;
+      tiles.push({ x: rect.x, y: rect.y, w: rect.w, h: rect.h });
+    }
+    return tiles;
+  }
+
+  function postBitmapToWorker(slot, bitmap, source, width, height, retryBinarizer, maxSymbols, tiles) {
     highWorkerBusy[slot] = true;
     highWorkerStartedAt[slot] = performance.now();
     lastPostedScanSize = Math.max(width, height);
     lastCapturePath = "bitmap";
     lastUsedLuma = false;
+    const cropTiles = tiles && tiles.length >= 2 ? tiles : null;
+    lastQuadTiles = cropTiles ? cropTiles.length : 0;
     const id = ++highFrameId;
     highDecodeMeta.set(id, {
       x: source.x,
@@ -1419,7 +1442,8 @@
       bitmap,
       maxSymbols: Math.max(1, Math.min(4, maxSymbols || 1)),
       retryBinarizer,
-      crop: null
+      crop: null,
+      tiles: cropTiles
     }, [bitmap]);
     return new Promise(resolve => {
       const timer = setTimeout(() => {
@@ -1464,6 +1488,8 @@
         try { grabbed?.bitmap.close(); } catch (_) {}
         return [];
       }
+      const locked = (highTrackedTiles || []).filter(Boolean).length >= 2;
+      const tiles = locked ? mapCropsToPacked(crops, grabbed) : [];
       const pending = postBitmapToWorker(
         slots[0],
         grabbed.bitmap,
@@ -1471,11 +1497,13 @@
         grabbed.width,
         grabbed.height,
         retryBinarizer,
-        4
+        tiles.length >= 2 ? 1 : 4,
+        tiles
       );
       highGrabInFlight = false;
       return pending;
     } catch (_) {
+      lastQuadTiles = 0;
       const packed = await grabPackedRegion(region);
       if (!packed || !stream) return [];
       const sized = downscaleLuma(packed.lum, packed.width, packed.height, HIGH_QUAD_PACKED_SIZE);
@@ -2519,7 +2547,8 @@
       "解码：" + backend + " · 取帧 " + lastCapturePath + " · Worker " + workerCount + " · 平均 " + avgDecode +
         " · 扫描 " + currentHighScanSize() + " · 布局 " + (highMultiLayout ? "四码" : "单码") +
         (highScanRoi ? " · ROI" : " · 全图") +
-        (highTrackedTiles ? " · 格 " + highTrackedTiles.filter(Boolean).length : "") + perFrameLabel(),
+        (highTrackedTiles ? " · 格 " + highTrackedTiles.filter(Boolean).length : "") +
+        (highMultiLayout && lastQuadTiles >= 2 ? " · 切格" : "") + perFrameLabel(),
       "调度：Worker 就绪 " + highWorkerReady.filter(Boolean).length + "/" + workerCount +
         " · 忙时丢弃 " + workerBusyDrops + " · 重启 " + workerRestarts + " · 错误 " + workerErrors +
         " · 连续未识别 " + highScanMisses,
