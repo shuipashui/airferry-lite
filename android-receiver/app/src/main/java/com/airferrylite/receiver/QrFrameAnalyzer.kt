@@ -49,6 +49,7 @@ class QrFrameAnalyzer(
     @Volatile private var decodeExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     @Volatile private var tileExecutor: ExecutorService = Executors.newFixedThreadPool(TILE_WORKERS)
     private val workerBusy = AtomicInteger(0)
+    private val skipUntilRecover = AtomicBoolean(false)
     private val analysisIdle = AtomicBoolean(false)
     private val recoverRequested = AtomicBoolean(false)
     private val pipelineRecoveries = AtomicLong(0)
