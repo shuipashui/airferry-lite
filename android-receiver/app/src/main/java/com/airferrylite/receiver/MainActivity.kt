@@ -112,7 +112,7 @@ class MainActivity : AppCompatActivity() {
     private var recoverBurst = 0
     private var recoverBurstStartedAt = 0L
     private val lastAfl2Session = AtomicReference<String?>(null)
-    private var lowHitWindows = 0
+    private var leftForeground = false
 
     private data class PendingSave(val name: String, val mime: String, val bytes: ByteArray)
 
@@ -190,7 +190,6 @@ class MainActivity : AppCompatActivity() {
                     lastStats = stats
                     lastStatsAt = SystemClock.elapsedRealtime()
                     recoverBurst = 0
-                    maybeRecoverLowDualHits(stats)
                     renderDiagnostics()
                 }
             }
@@ -202,14 +201,14 @@ class MainActivity : AppCompatActivity() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), CAMERA_PERMISSION_REQUEST)
         } else {
-            previewView.post { startScanner() }
+            previewView.postDelayed({ startScanner() }, CAMERA_BIND_DELAY_MS)
         }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == CAMERA_PERMISSION_REQUEST && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
-            previewView.post { startScanner() }
+            previewView.postDelayed({ startScanner() }, CAMERA_BIND_DELAY_MS)
         } else {
             statusText.text = "需要摄像头权限才能接收"
         }
@@ -243,9 +242,6 @@ class MainActivity : AppCompatActivity() {
         bindingCamera = true
         try {
             val rotation = previewView.display?.rotation ?: Surface.ROTATION_0
-            val preview = Preview.Builder().setTargetRotation(rotation).build().also {
-                it.surfaceProvider = previewView.surfaceProvider
-            }
             val fpsRanges = cameraFpsRanges(provider)
             availableCameraFpsLabel = fpsRanges.joinToString(",") { "${it.lower}-${it.upper}" }.ifBlank { "未知" }
             highSpeedCameraFpsLabel = cameraHighSpeedFpsRanges(provider)
@@ -253,6 +249,7 @@ class MainActivity : AppCompatActivity() {
             val fallbackFps = pickFpsRange(fpsRanges, if (requestedFps == 120) 60 else 30)
             var activeFps = preferredFps
             var fellBack = false
+            var preview = buildPreview(rotation, activeFps)
             var analysis = buildAnalysis(rotation, activeFps)
             imageAnalysis?.clearAnalyzer()
             provider.unbindAll()
@@ -264,6 +261,7 @@ class MainActivity : AppCompatActivity() {
                 analysis.clearAnalyzer()
                 provider.unbindAll()
                 activeFps = fallbackFps
+                preview = buildPreview(rotation, activeFps)
                 analysis = buildAnalysis(rotation, activeFps)
                 analysis.setAnalyzer(cameraExecutor, frameAnalyzer)
                 provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
@@ -312,6 +310,12 @@ class MainActivity : AppCompatActivity() {
             ?: ranges.maxWithOrNull(compareBy<Range<Int>> { it.upper }.thenBy { it.lower })
     }
 
+    private fun buildPreview(rotation: Int, fpsRange: Range<Int>?): Preview {
+        val builder = Preview.Builder().setTargetRotation(rotation)
+        applyScanCaptureOptions(Camera2Interop.Extender(builder), fpsRange)
+        return builder.build().also { it.surfaceProvider = previewView.surfaceProvider }
+    }
+
     private fun buildAnalysis(rotation: Int, fpsRange: Range<Int>?): ImageAnalysis {
         val builder = ImageAnalysis.Builder()
             .setResolutionSelector(
@@ -325,13 +329,21 @@ class MainActivity : AppCompatActivity() {
             .setTargetRotation(rotation)
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
-        if (fpsRange != null) {
-            Camera2Interop.Extender(builder).setCaptureRequestOption(
-                CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
-                fpsRange
-            )
-        }
+        applyScanCaptureOptions(Camera2Interop.Extender(builder), fpsRange)
         return builder.build()
+    }
+
+    private fun <T> applyScanCaptureOptions(extender: Camera2Interop.Extender<T>, fpsRange: Range<Int>?) {
+        if (fpsRange != null) {
+            extender.setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fpsRange)
+        }
+        extender.setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+        extender.setCaptureRequestOption(CaptureRequest.CONTROL_AE_LOCK, false)
+        extender.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_LOCK, false)
+        extender.setCaptureRequestOption(
+            CaptureRequest.CONTROL_AF_MODE,
+            CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+        )
     }
 
     private fun handleResult(result: DecodedQr) {
@@ -368,7 +380,6 @@ class MainActivity : AppCompatActivity() {
             ContextCompat.getMainExecutor(this).execute {
                 frameAnalyzer.resetSession()
                 if (HighSpeedAssembler.isMultiLayoutFrame(bytes)) frameAnalyzer.setMultiLayout(true)
-                lowHitWindows = 0
             }
         }
         if (update.error != null) highProtocolErrors += 1
@@ -412,7 +423,6 @@ class MainActivity : AppCompatActivity() {
             lastAfl2Session.set(null)
             ContextCompat.getMainExecutor(this).execute {
                 frameAnalyzer.resetSession()
-                lowHitWindows = 0
             }
         }
     }
@@ -480,14 +490,7 @@ class MainActivity : AppCompatActivity() {
         lastHighSolved = 0
         lastHighTotal = 0
         lastAfl2Session.set(null)
-        lowHitWindows = 0
-        val stalled = frameAnalyzer.isPaused() ||
-            (lastStatsAt != 0L && SystemClock.elapsedRealtime() - lastStatsAt > SCAN_STALL_MS)
-        if (stalled) {
-            restartScanner(countRecovery = true)
-        } else {
-            frameAnalyzer.resetSession()
-        }
+        restartScanner(countRecovery = false)
         updateUi(TransferUpdate(null, 0, 0))
         fileText.text = "等待文件"
         progress.progress = 0
@@ -514,31 +517,6 @@ class MainActivity : AppCompatActivity() {
         }
         restartScanner(countRecovery = true, forceRebind = true)
         statusText.text = "扫描卡住，已重启相机"
-    }
-
-    private fun maybeRecoverLowDualHits(stats: ScanStats) {
-        if (!cameraStarted || bindingCamera || isDestroyed) return
-        val analysis = stats.analysisFps
-        val perFrame = if (analysis > 5) stats.validQrFps / analysis else 2.0
-        val stuckOnOneCode = stats.multiLayout &&
-            stats.tileCount in 1..2 &&
-            perFrame in 0.4..1.35
-        if (stuckOnOneCode) {
-            lowHitWindows += 1
-            if (lowHitWindows >= 2) {
-                lowHitWindows = 0
-                val now = SystemClock.elapsedRealtime()
-                if (lastRecoverAt != 0L && now - lastRecoverAt < RECOVER_COOLDOWN_MS) {
-                    frameAnalyzer.resetSession()
-                    frameAnalyzer.setMultiLayout(true)
-                    return
-                }
-                restartScanner(countRecovery = true, forceRebind = true)
-                statusText.text = "双码只扫到一格，已重启相机"
-            }
-            return
-        }
-        if (perFrame >= 1.5 || perFrame < 0.2) lowHitWindows = 0
     }
 
     private fun restartScanner(countRecovery: Boolean, forceRebind: Boolean = false) {
@@ -685,10 +663,24 @@ class MainActivity : AppCompatActivity() {
         else -> "%.1f MB".format(size / 1048576.0)
     }
 
+    override fun onStart() {
+        super.onStart()
+        if (!leftForeground || !cameraStarted || isDestroyed) return
+        previewView.postDelayed({
+            if (isDestroyed || !leftForeground) return@postDelayed
+            leftForeground = false
+            bindCamera()
+            lastRecoverAt = SystemClock.elapsedRealtime()
+        }, CAMERA_BIND_DELAY_MS)
+    }
+
     override fun onStop() {
+        leftForeground = true
+        imageAnalysis?.clearAnalyzer()
+        cameraProvider?.unbindAll()
+        imageAnalysis = null
         if (::frameAnalyzer.isInitialized) frameAnalyzer.resetSession()
         lastAfl2Session.set(null)
-        lowHitWindows = 0
         super.onStop()
     }
 
@@ -714,5 +706,6 @@ class MainActivity : AppCompatActivity() {
         private const val RECOVER_COOLDOWN_MS = 5000L
         private const val RECOVER_BURST_WINDOW_MS = 30000L
         private const val MAX_RECOVER_BURST = 3
+        private const val CAMERA_BIND_DELAY_MS = 300L
     }
 }
