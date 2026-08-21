@@ -26,10 +26,10 @@
   const rateHint = el("rateHint");
   const HEADER_LEN = 20;
   const RECEIVER_URL = "https://shuipashui.github.io/airferry-lite/";
-  const QR_CACHE_LIMIT = 64;
+  const QR_CACHE_LIMIT = 256;
+  const QR_WORKER_COUNT = 3;
   const QUAD_MAX_FRAME_BYTES = 1465;
   const DUAL_FRAME_BYTES = 1732;
-  const DUAL_60FPS_MAX_BYTES = 1465;
   const FPS_CHOICES = {
     single: [
       ["20", "20 FPS"],
@@ -84,6 +84,18 @@
   let intervalMs = 125;
   const qrCache = new Map();
   const highQueue = [];
+  const encodeReady = new Map();
+  const queueWaiters = [];
+  const qrWorkerJobs = new Map();
+  const qrWorkerWait = [];
+  const qrWorkerAssigned = new Map();
+  const qrWorkers = [];
+  const qrWorkerIdle = [];
+  let qrWorkerNextId = 1;
+  let encodeGeneration = 0;
+  let encodeSerial = 0;
+  let queueSerial = 0;
+  let encodeInflight = 0;
   let highNextSeq = 0;
   let highNextPair = 0;
   let codesPerScreen = 1;
@@ -169,28 +181,34 @@
         transmittedSize: packed.transmittedSize
       };
       const prepared = { encoding: packed.compression, originalSize: sourceBytes.length, savedBytes: sourceBytes.length - packed.transmittedSize };
-      highQueue.length = 0;
+      resetEncodePipeline();
       highNextSeq = 0;
       highNextPair = 0;
       livePatterns = [null, null, null, null];
       liveSeqs = [0, 0, 0, 0];
       emitted = 0;
       qrCache.clear();
+      statusText.textContent = "正在生成二维码流";
+      startQrWorkers();
+      pumpEncode();
       if (quadRefreshesAll()) {
-        fillHighQueue(1);
+        await waitForQueueDepth(1);
         paintQueued(highQueue.shift());
-        fillHighQueue(4);
+        pumpEncode();
+        await waitForQueueDepth(4);
       } else if (codesPerScreen === 4 || dualStaggers()) {
-        fillHighQueue(2);
+        await waitForQueueDepth(2);
         paintQueued(highQueue.shift());
         paintQueued(highQueue.shift());
-        fillHighQueue(4);
+        pumpEncode();
+        await waitForQueueDepth(4);
       } else if (codesPerScreen === 2) {
-        fillHighQueue(1);
+        await waitForQueueDepth(1);
         paintQueued(highQueue.shift());
-        fillHighQueue(4);
+        pumpEncode();
+        await waitForQueueDepth(4);
       } else {
-        fillHighQueue(4);
+        await waitForQueueDepth(4);
         drawScreen(highQueue[0].patterns);
       }
       sessionText.textContent = transfer.session;
@@ -368,10 +386,6 @@
     return codesPerScreen === 4 && Number(fps.value) < 60;
   }
 
-  function encodeAheadCount() {
-    return dualUpdatesBoth() || quadRefreshesAll() ? 1 : 2;
-  }
-
   function updateIntervalVsyncs() {
     if (quadRefreshesAll()) return vsyncsPerQr;
     if (codesPerScreen === 4 || dualStaggers()) return Math.max(1, Math.round(vsyncsPerQr / 2));
@@ -380,10 +394,8 @@
 
   function tick() {
     const next = highQueue.shift();
-    if (!next) {
-      fillHighQueue(1);
-      return;
-    }
+    pumpEncode();
+    if (!next) return;
     paintQueued(next);
     emitted += next.seqs.length;
     frameText.textContent = codesPerScreen === 4
@@ -392,7 +404,6 @@
         ? "双码 " + DUAL_SLOTS.map((slot) => liveSeqs[slot]).join(",") + " · K=" + transfer.total
         : "喷泉帧 " + next.seqs.join(",") + " · K=" + transfer.total;
     progressBar.style.width = Math.min(100, emitted / Math.ceil(transfer.total * 1.15) * 100) + "%";
-    fillHighQueue(encodeAheadCount());
   }
 
   function paintQueued(item) {
@@ -415,63 +426,220 @@
       : ordinal - transfer.total;
   }
 
-  function encodeNextCode() {
+  function takePackedCode() {
     const seq = nextFrameSeq();
     const bytes = H.packFrame({ ...transfer.header, seq }, transfer.encoder.encode(seq));
-    return { seq, pattern: getHighSpeedQrPattern(bytes, seq) };
+    return { seq, bytes };
   }
 
-  function fillHighQueue(max) {
-    if (!transfer) return;
-    for (let count = 0; count < max && highQueue.length < HIGH_QUEUE_LIMIT; count += 1) {
-      if (codesPerScreen === 4) {
-        if (quadRefreshesAll()) {
-          const indices = [0, 1, 2, 3];
-          const seqs = [];
-          const patterns = [];
-          for (let code = 0; code < indices.length; code += 1) {
-            const encoded = encodeNextCode();
-            seqs.push(encoded.seq);
-            patterns.push(encoded.pattern);
-          }
-          highQueue.push({ indices, seqs, patterns });
-          continue;
-        }
-        const pair = highNextPair;
-        highNextPair ^= 1;
-        const indices = QUAD_PAIRS[pair];
-        const seqs = [];
-        const patterns = [];
-        for (let code = 0; code < indices.length; code += 1) {
-          const encoded = encodeNextCode();
-          seqs.push(encoded.seq);
-          patterns.push(encoded.pattern);
-        }
-        highQueue.push({ pair, indices, seqs, patterns });
-        continue;
+  function nextScreenJob() {
+    if (codesPerScreen === 4) {
+      if (quadRefreshesAll()) {
+        const indices = [0, 1, 2, 3];
+        const packed = indices.map(() => takePackedCode());
+        return { indices, seqs: packed.map((item) => item.seq), packed };
       }
-      if (codesPerScreen === 2) {
-        if (dualUpdatesBoth()) {
-          const indices = DUAL_SLOTS;
-          const seqs = [];
-          const patterns = [];
-          for (let code = 0; code < indices.length; code += 1) {
-            const encoded = encodeNextCode();
-            seqs.push(encoded.seq);
-            patterns.push(encoded.pattern);
-          }
-          highQueue.push({ indices, seqs, patterns });
-          continue;
-        }
-        const slot = DUAL_SLOTS[highNextPair & 1];
-        highNextPair ^= 1;
-        const encoded = encodeNextCode();
-        highQueue.push({ indices: [slot], seqs: [encoded.seq], patterns: [encoded.pattern] });
-        continue;
-      }
-      const encoded = encodeNextCode();
-      highQueue.push({ seqs: [encoded.seq], patterns: [encoded.pattern] });
+      const pair = highNextPair;
+      highNextPair ^= 1;
+      const indices = QUAD_PAIRS[pair];
+      const packed = indices.map(() => takePackedCode());
+      return { pair, indices, seqs: packed.map((item) => item.seq), packed };
     }
+    if (codesPerScreen === 2) {
+      if (dualUpdatesBoth()) {
+        const packed = DUAL_SLOTS.map(() => takePackedCode());
+        return { indices: DUAL_SLOTS, seqs: packed.map((item) => item.seq), packed };
+      }
+      const slot = DUAL_SLOTS[highNextPair & 1];
+      highNextPair ^= 1;
+      const packed = [takePackedCode()];
+      return { indices: [slot], seqs: packed.map((item) => item.seq), packed };
+    }
+    const packed = [takePackedCode()];
+    return { seqs: packed.map((item) => item.seq), packed };
+  }
+
+  function resetEncodePipeline() {
+    encodeGeneration += 1;
+    encodeSerial = 0;
+    queueSerial = 0;
+    encodeInflight = 0;
+    encodeReady.clear();
+    highQueue.length = 0;
+    queueWaiters.length = 0;
+  }
+
+  function flushQueueWaiters() {
+    for (let index = queueWaiters.length - 1; index >= 0; index -= 1) {
+      if (highQueue.length >= queueWaiters[index].count) {
+        queueWaiters[index].resolve();
+        queueWaiters.splice(index, 1);
+      }
+    }
+  }
+
+  function waitForQueueDepth(count) {
+    if (highQueue.length >= count) return Promise.resolve();
+    pumpEncode();
+    return new Promise((resolve) => {
+      queueWaiters.push({ count, resolve });
+    });
+  }
+
+  function pumpEncode() {
+    if (!transfer) return;
+    while (highQueue.length + encodeInflight < HIGH_QUEUE_LIMIT) {
+      const job = nextScreenJob();
+      const generation = encodeGeneration;
+      const serial = encodeSerial;
+      encodeSerial += 1;
+      encodeInflight += 1;
+      Promise.all(job.packed.map((item) => encodeQrPattern(item.bytes, item.seq).catch(() => getHighSpeedQrPattern(item.bytes, item.seq)))).then((patterns) => {
+        encodeInflight -= 1;
+        if (generation !== encodeGeneration) {
+          pumpEncode();
+          return;
+        }
+        encodeReady.set(serial, {
+          pair: job.pair,
+          indices: job.indices,
+          seqs: job.seqs,
+          patterns
+        });
+        while (encodeReady.has(queueSerial)) {
+          highQueue.push(encodeReady.get(queueSerial));
+          encodeReady.delete(queueSerial);
+          queueSerial += 1;
+        }
+        flushQueueWaiters();
+        pumpEncode();
+      });
+    }
+  }
+
+  function qrEncodeWorkerMain() {
+    self.onmessage = function (event) {
+      const job = event.data;
+      const qr = qrcode(job.version, "L");
+      qr.addBytes(new Uint8Array(job.bytes));
+      qr.make(4);
+      const count = qr.getModuleCount();
+      const dark = new Uint8Array(count * count);
+      for (let row = 0; row < count; row += 1) {
+        for (let col = 0; col < count; col += 1) {
+          dark[row * count + col] = qr.isDark(row, col) ? 1 : 0;
+        }
+      }
+      self.postMessage({ id: job.id, seq: job.seq, count, dark }, [dark.buffer]);
+    };
+  }
+
+  function qrcodeLibrarySource() {
+    const scripts = document.scripts || [];
+    for (let index = 0; index < scripts.length; index += 1) {
+      const text = scripts[index].textContent || "";
+      if (text.indexOf("QRErrorCorrectLevel") >= 0 && text.indexOf("addBytes") >= 0) return text;
+    }
+    return "";
+  }
+
+  function startQrWorkers() {
+    if (qrWorkers.length || typeof Worker !== "function" || typeof Blob !== "function") return;
+    const lib = qrcodeLibrarySource();
+    if (!lib) return;
+    let url = "";
+    try {
+      url = URL.createObjectURL(new Blob([lib + "\n(" + qrEncodeWorkerMain.toString() + ")();"], { type: "text/javascript" }));
+      for (let index = 0; index < QR_WORKER_COUNT; index += 1) {
+        const worker = new Worker(url);
+        worker.onmessage = (event) => completeQrWorker(worker, event.data);
+        worker.onerror = () => failQrWorker(worker);
+        qrWorkers.push(worker);
+        qrWorkerIdle.push(worker);
+      }
+    } catch (error) {
+      qrWorkers.length = 0;
+      qrWorkerIdle.length = 0;
+    }
+    if (url) URL.revokeObjectURL(url);
+  }
+
+  function recycleQrWorker(worker) {
+    qrWorkerAssigned.delete(worker);
+    if (qrWorkerIdle.indexOf(worker) < 0) qrWorkerIdle.push(worker);
+    dispatchQrWorker();
+  }
+
+  function failQrWorker(worker) {
+    const jobId = qrWorkerAssigned.get(worker);
+    qrWorkerAssigned.delete(worker);
+    const idleAt = qrWorkerIdle.indexOf(worker);
+    if (idleAt >= 0) qrWorkerIdle.splice(idleAt, 1);
+    const liveAt = qrWorkers.indexOf(worker);
+    if (liveAt >= 0) qrWorkers.splice(liveAt, 1);
+    try { worker.terminate(); } catch (error) {}
+    const job = jobId != null ? qrWorkerJobs.get(jobId) : null;
+    if (job) {
+      qrWorkerJobs.delete(jobId);
+      job.resolve(getHighSpeedQrPattern(job.bytes, job.seq));
+    }
+    if (!qrWorkers.length) {
+      while (qrWorkerWait.length) {
+        const pending = qrWorkerWait.shift();
+        pending.resolve(getHighSpeedQrPattern(pending.bytes, pending.seq));
+      }
+      return;
+    }
+    dispatchQrWorker();
+  }
+
+  function completeQrWorker(worker, data) {
+    recycleQrWorker(worker);
+    const job = qrWorkerJobs.get(data.id);
+    if (!job) return;
+    qrWorkerJobs.delete(data.id);
+    const pattern = { count: data.count, dark: data.dark };
+    rememberQrPattern(job.key, pattern);
+    job.resolve(pattern);
+  }
+
+  function dispatchQrWorker() {
+    while (qrWorkerIdle.length && qrWorkerWait.length) {
+      const worker = qrWorkerIdle.shift();
+      const job = qrWorkerWait.shift();
+      qrWorkerJobs.set(job.id, job);
+      qrWorkerAssigned.set(worker, job.id);
+      const copy = job.bytes.slice();
+      try {
+        worker.postMessage({ id: job.id, seq: job.seq, version: job.version, bytes: copy.buffer }, [copy.buffer]);
+      } catch (error) {
+        qrWorkerJobs.delete(job.id);
+        qrWorkerAssigned.delete(worker);
+        recycleQrWorker(worker);
+        job.resolve(getHighSpeedQrPattern(job.bytes, job.seq));
+      }
+    }
+  }
+
+  function encodeQrPattern(bytes, seq) {
+    const key = "h:" + seq;
+    const hit = qrCache.get(key);
+    if (hit) return Promise.resolve(hit);
+    startQrWorkers();
+    if (!qrWorkers.length) return Promise.resolve(getHighSpeedQrPattern(bytes, seq));
+    const version = qrVersionForBytes(bytes.length);
+    return new Promise((resolve) => {
+      const id = qrWorkerNextId;
+      qrWorkerNextId += 1;
+      qrWorkerWait.push({ id, seq, version, bytes, key, resolve });
+      dispatchQrWorker();
+    });
+  }
+
+  function rememberQrPattern(key, pattern) {
+    if (qrCache.has(key)) return;
+    if (qrCache.size >= QR_CACHE_LIMIT) qrCache.delete(qrCache.keys().next().value);
+    qrCache.set(key, pattern);
   }
 
   function qrVersionForBytes(frameBytes) {
@@ -492,8 +660,7 @@
     qr.addBytes(bytes);
     qr.make(4);
     const pattern = extractPattern(qr);
-    if (qrCache.size >= QR_CACHE_LIMIT) qrCache.delete(qrCache.keys().next().value);
-    qrCache.set(key, pattern);
+    rememberQrPattern(key, pattern);
     return pattern;
   }
 
@@ -754,7 +921,7 @@
     let text = "理论速度：" + formatRate(rate.screen) + "（" + rate.bytes + " B × " + rate.codes + " 码 × " + rate.fps + " FPS）· 载荷约 " + formatRate(rate.payload);
     if (rate.scale) text += " · 每模块 " + rate.scale + " 设备像素（整数）";
     if (rate.codes === 4) text += "。30 FPS 四码整屏同换；60 FPS 仍交错换对角，避免四格同刷拖影";
-    if (rate.codes === 2) text += "。双码只占 2×2 上排。60 FPS 两格同时更新，用 1465 B。1732 B 只给 30 FPS";
+    if (rate.codes === 2) text += "。双码只占 2×2 上排。60 FPS 两格同时更新。打开预填 1732 B · 60 FPS";
     if (rate.codes === 4 && rate.cell && rate.cell < 3) text += "。模块偏小，请全屏后再播";
     if (rate.codes === 2 && rate.cell && rate.cell < 3) text += "。模块偏小，请全屏后再播";
     if (rate.codes === 4 && rate.fps >= 60 && (measuredRefreshHz || 60) < 90) text += "。60 Hz 屏上四码 60 FPS 容易拖影，改用 30 FPS 通常更快";
@@ -788,7 +955,6 @@
 
   function fastestChunk(layout) {
     const choices = CHUNK_CHOICES[layout] || CHUNK_CHOICES.single;
-    if (layout === "dual" && Number(fps.value) >= 60) return String(DUAL_60FPS_MAX_BYTES);
     return choices[choices.length - 1][0];
   }
 
@@ -810,13 +976,6 @@
     fps.value = fastestFps(layout);
     chunkSize.value = fastestChunk(layout);
     renderRateHint();
-  }
-
-  function syncDualChunkToFps() {
-    if (layoutName() !== "dual") return;
-    if (Number(fps.value) >= 60 && Number(chunkSize.value) > DUAL_60FPS_MAX_BYTES) {
-      chunkSize.value = String(DUAL_60FPS_MAX_BYTES);
-    }
   }
 
   function probeRefreshHz() {
@@ -843,10 +1002,7 @@
   }
 
   chunkSize.addEventListener("change", renderRateHint);
-  fps.addEventListener("change", () => {
-    syncDualChunkToFps();
-    renderRateHint();
-  });
+  fps.addEventListener("change", renderRateHint);
   qrMode.addEventListener("change", applyFastestLayout);
   function relayoutQr() {
     if (lastPatterns) drawScreen(lastPatterns);

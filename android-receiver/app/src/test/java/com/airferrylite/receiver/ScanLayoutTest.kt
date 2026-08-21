@@ -149,6 +149,9 @@ class ScanLayoutTest {
         assertTrue(next[1].left + next[1].width < 1440)
         assertTrue(next[0].left != previous[0].left || next[0].width != previous[0].width)
     }
+
+    @Test
+    fun exclusiveQuadrantsAreFlush() {
         val region = ScanRegion(0, 0, 1000, 1000)
         val tiles = ScanLayout.exclusiveQuadrants(region)
         assertEquals(4, tiles.size)
