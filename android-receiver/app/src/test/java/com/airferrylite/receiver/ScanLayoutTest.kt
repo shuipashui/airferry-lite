@@ -95,6 +95,14 @@ class ScanLayoutTest {
     }
 
     @Test
+    fun dualHitsDoNotUseTightTiles() {
+        assertTrue(ScanLayout.usesTightTiles(3))
+        assertTrue(ScanLayout.usesTightTiles(4))
+        assertTrue(!ScanLayout.usesTightTiles(2))
+        assertTrue(!ScanLayout.usesTightTiles(1))
+    }
+
+    @Test
     fun followContainedHitsUpdatesOnlyTheOwningTile() {
         val tiles = listOf(
             ScanRegion(80, 80, 240, 240),
