@@ -60,6 +60,7 @@ class QrFrameAnalyzer(
     private val singleLayoutConfirmed = AtomicBoolean(false)
     private val trackedRoi = AtomicReference<ScanRegion?>(null)
     private val trackedTiles = AtomicReference<List<ScanRegion>?>(null)
+    private val tileUndercount = AtomicInteger(0)
     private val roiMisses = AtomicInteger(0)
     private val capturedInWindow = AtomicLong(0)
     private val decodedInWindow = AtomicLong(0)
@@ -152,6 +153,7 @@ class QrFrameAnalyzer(
             if (enabled) singleLayoutConfirmed.set(false) else {
                 trackedRoi.set(null)
                 trackedTiles.set(null)
+                tileUndercount.set(0)
             }
         }
     }
@@ -161,6 +163,7 @@ class QrFrameAnalyzer(
         singleLayoutConfirmed.set(false)
         trackedRoi.set(null)
         trackedTiles.set(null)
+        tileUndercount.set(0)
         roiMisses.set(0)
         droppedFrames.set(0)
         submittedFrames.set(0)
@@ -196,6 +199,9 @@ class QrFrameAnalyzer(
         }
         if (previousTiles.isNotEmpty()) {
             add(readCropsParallel(luma, previousTiles.filter { !tileCovered(it, merged) }, retryBinarizer = false))
+        }
+        if (previousTiles.size >= 2 && transferCount(merged) < 2) {
+            add(decoder.read(luma, ScanLayout.centerSquare(luma.width, luma.height), 4))
         }
         if (transferCount(merged) >= 4) return merged
         if (previousTiles.size >= 4 && transferCount(merged) >= 3) return merged
@@ -311,7 +317,10 @@ class QrFrameAnalyzer(
             val miss = roiMisses.incrementAndGet()
             val lockedTiles = trackedTiles.get()?.size ?: 0
             val missLimit = if (lockedTiles >= 4) 6 else 2
-            if (miss >= missLimit) trackedTiles.set(null)
+            if (miss >= missLimit) {
+                trackedTiles.set(null)
+                tileUndercount.set(0)
+            }
             return
         }
         roiMisses.set(0)
@@ -378,14 +387,29 @@ class QrFrameAnalyzer(
             hit.points.map { (x, y) -> (hit.originLeft + x) to (hit.originTop + y) }
         }
         when {
-            hits.size >= 3 -> trackedTiles.set(ScanLayout.tilesFromHits(perCode, imageWidth, imageHeight))
-            hits.size >= 2 && (previous == null || previous.size <= 2) -> {
+            hits.size >= 3 -> {
+                tileUndercount.set(0)
                 trackedTiles.set(ScanLayout.tilesFromHits(perCode, imageWidth, imageHeight))
             }
+            hits.size >= 2 && (previous == null || previous.size <= 2) -> {
+                tileUndercount.set(0)
+                trackedTiles.set(ScanLayout.tilesFromHits(perCode, imageWidth, imageHeight))
+            }
+            previous != null && previous.size >= 2 && hits.size < 2 -> {
+                if (tileUndercount.incrementAndGet() >= TILE_UNDERCOUNT_LIMIT) {
+                    trackedTiles.set(null)
+                    trackedRoi.set(null)
+                    tileUndercount.set(0)
+                }
+            }
             previous != null && previous.isNotEmpty() -> {
+                tileUndercount.set(0)
                 trackedTiles.set(ScanLayout.followContainedHits(previous, perCode, imageWidth, imageHeight))
             }
-            hits.size >= 2 -> trackedTiles.set(ScanLayout.tilesFromHits(perCode, imageWidth, imageHeight))
+            hits.size >= 2 -> {
+                tileUndercount.set(0)
+                trackedTiles.set(ScanLayout.tilesFromHits(perCode, imageWidth, imageHeight))
+            }
         }
     }
 
@@ -429,5 +453,6 @@ class QrFrameAnalyzer(
         private const val TILE_WORKERS = 4
         private const val FRAME_DECODE_TIMEOUT_MS = 400L
         private const val STALE_TIMESTAMP_LIMIT = 12
+        private const val TILE_UNDERCOUNT_LIMIT = 3
     }
 }
