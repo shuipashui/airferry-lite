@@ -200,7 +200,10 @@ class QrFrameAnalyzer(
         if (previousTiles.isNotEmpty()) {
             add(readCropsParallel(luma, previousTiles.filter { !tileCovered(it, merged) }, retryBinarizer = false))
         }
-        if (previousTiles.size >= 2 && transferCount(merged) < 2) {
+        // Dual: one multi-layout hit sets multiLayout, but 1-hit must not lock tiles.
+        // Without this, later frames only crop quadrants at maxSymbols=1 and stay at half speed.
+        // Do not full-frame maxSymbols=4 while two tiles are already hitting (0.8.19).
+        if (previousTiles.size < 2 || transferCount(merged) < 2) {
             add(decoder.read(luma, ScanLayout.centerSquare(luma.width, luma.height), 4))
         }
         if (transferCount(merged) >= 4) return merged
@@ -316,7 +319,7 @@ class QrFrameAnalyzer(
             emptyDecodes.incrementAndGet()
             val miss = roiMisses.incrementAndGet()
             val lockedTiles = trackedTiles.get()?.size ?: 0
-            val missLimit = if (lockedTiles >= 4) 6 else 2
+            val missLimit = if (lockedTiles >= 2) 6 else 2
             if (miss >= missLimit) {
                 trackedTiles.set(null)
                 tileUndercount.set(0)
