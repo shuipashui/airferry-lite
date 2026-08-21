@@ -3,9 +3,12 @@ package com.airferrylite.receiver
 import android.os.SystemClock
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import java.nio.ByteBuffer
 import java.util.concurrent.Callable
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -32,7 +35,8 @@ data class ScanStats(
     val roiMisses: Int,
     val roiTracked: Boolean,
     val multiLayout: Boolean,
-    val tileCount: Int
+    val tileCount: Int,
+    val pipelineRecoveries: Long
 )
 
 /** Latest-frame zxing-cpp scan on the CameraX analyzer thread. */
@@ -40,10 +44,18 @@ class QrFrameAnalyzer(
     private val onDecoded: (DecodedQr) -> Unit,
     private val onStats: (ScanStats) -> Unit = {}
 ) : ImageAnalysis.Analyzer {
-    private val decoder = NativeQrDecoder()
-    private val tileDecoders = Array(TILE_WORKERS) { NativeQrDecoder() }
-    private val tileExecutor = Executors.newFixedThreadPool(TILE_WORKERS)
+    @Volatile private var decoder = NativeQrDecoder()
+    @Volatile private var tileDecoders = Array(TILE_WORKERS) { NativeQrDecoder() }
+    @Volatile private var decodeExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    @Volatile private var tileExecutor: ExecutorService = Executors.newFixedThreadPool(TILE_WORKERS)
     private val workerBusy = AtomicInteger(0)
+    private val skipUntilRecover = AtomicBoolean(false)
+    private val recoverRequested = AtomicBoolean(false)
+    private val pipelineRecoveries = AtomicLong(0)
+    private val lastImageTimestamp = AtomicLong(0)
+    private val staleTimestampFrames = AtomicInteger(0)
+    private val lumaLock = Any()
+    @Volatile private var lumaScratch: ByteBuffer? = null
     private val multiLayout = AtomicBoolean(false)
     private val singleLayoutConfirmed = AtomicBoolean(false)
     private val trackedRoi = AtomicReference<ScanRegion?>(null)
@@ -66,30 +78,70 @@ class QrFrameAnalyzer(
     override fun analyze(image: ImageProxy) {
         capturedInWindow.incrementAndGet()
         reportStatsIfDue(image.width, image.height)
-        try {
-            val region = chooseRegion(image.width, image.height)
-            val maxSymbols = if (multiLayout.get() || !singleLayoutConfirmed.get()) 4 else 1
-            if (maxSymbols > 1) multiScans.incrementAndGet()
-            submittedFrames.incrementAndGet()
-            val started = System.nanoTime()
-            val hits = try {
-                decodeFrame(image, region, maxSymbols)
-            } catch (_: Exception) {
-                decodeErrors.incrementAndGet()
-                emptyList()
-            }
-            decodeNanos.addAndGet(System.nanoTime() - started)
-            decodeSamples.incrementAndGet()
-            decodedInWindow.incrementAndGet()
-            publish(image.width, image.height, region, hits)
-        } finally {
+        if (skipUntilRecover.get()) {
+            droppedFrames.incrementAndGet()
             image.close()
+            return
         }
+        noteImageTimestamp(image.imageInfo.timestamp)
+        val snapshot = try {
+            captureLuma(image)
+        } catch (_: Exception) {
+            decodeErrors.incrementAndGet()
+            image.close()
+            return
+        }
+        image.close()
+        val region = chooseRegion(snapshot.width, snapshot.height)
+        val maxSymbols = if (multiLayout.get() || !singleLayoutConfirmed.get()) 4 else 1
+        if (maxSymbols > 1) multiScans.incrementAndGet()
+        submittedFrames.incrementAndGet()
+        val started = System.nanoTime()
+        val hits = try {
+            decodeExecutor.submit(Callable { decodeFrame(snapshot, region, maxSymbols) })
+                .get(FRAME_DECODE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        } catch (_: TimeoutException) {
+            requestRecover()
+            emptyList()
+        } catch (_: Exception) {
+            decodeErrors.incrementAndGet()
+            emptyList()
+        }
+        decodeNanos.addAndGet(System.nanoTime() - started)
+        decodeSamples.incrementAndGet()
+        decodedInWindow.incrementAndGet()
+        publish(snapshot.width, snapshot.height, region, hits)
     }
 
     fun close() {
+        skipUntilRecover.set(true)
+        decodeExecutor.shutdownNow()
         tileExecutor.shutdownNow()
+        runCatching { decodeExecutor.awaitTermination(200, TimeUnit.MILLISECONDS) }
         runCatching { tileExecutor.awaitTermination(200, TimeUnit.MILLISECONDS) }
+    }
+
+    fun consumeRecoverRequest(): Boolean = recoverRequested.getAndSet(false)
+
+    fun recoverPipeline(count: Boolean = false) {
+        skipUntilRecover.set(true)
+        val oldDecode = decodeExecutor
+        val oldTiles = tileExecutor
+        decodeExecutor = Executors.newSingleThreadExecutor()
+        tileExecutor = Executors.newFixedThreadPool(TILE_WORKERS)
+        decoder = NativeQrDecoder()
+        tileDecoders = Array(TILE_WORKERS) { NativeQrDecoder() }
+        oldDecode.shutdownNow()
+        oldTiles.shutdownNow()
+        runCatching { oldDecode.awaitTermination(200, TimeUnit.MILLISECONDS) }
+        runCatching { oldTiles.awaitTermination(200, TimeUnit.MILLISECONDS) }
+        synchronized(lumaLock) { lumaScratch = null }
+        resetSession()
+        lastImageTimestamp.set(0)
+        staleTimestampFrames.set(0)
+        recoverRequested.set(false)
+        skipUntilRecover.set(false)
+        if (count) pipelineRecoveries.incrementAndGet()
     }
 
     fun setMultiLayout(enabled: Boolean) {
@@ -123,8 +175,8 @@ class QrFrameAnalyzer(
         return ScanLayout.activeRegion(trackedRoi.get(), roiMisses.get(), width, height)
     }
 
-    private fun decodeFrame(image: ImageProxy, region: ScanRegion, maxSymbols: Int): List<NativeHit> {
-        if (!multiLayout.get()) return decoder.read(image, region, maxSymbols)
+    private fun decodeFrame(luma: LumaSnapshot, region: ScanRegion, maxSymbols: Int): List<NativeHit> {
+        if (!multiLayout.get()) return decoder.read(luma, region, maxSymbols)
         val merged = mutableListOf<NativeHit>()
         val seen = mutableSetOf<String>()
         fun add(hits: List<NativeHit>) {
@@ -134,10 +186,10 @@ class QrFrameAnalyzer(
             }
         }
         val previousTiles = trackedTiles.get().orEmpty().map {
-            ScanLayout.clamp(it, image.width, image.height)
+            ScanLayout.clamp(it, luma.width, luma.height)
         }
         if (previousTiles.isNotEmpty()) {
-            add(readCropsParallel(image, previousTiles.filter { !tileCovered(it, merged) }, retryBinarizer = false))
+            add(readCropsParallel(luma, previousTiles.filter { !tileCovered(it, merged) }, retryBinarizer = false))
         }
         if (transferCount(merged) >= 4) return merged
         if (previousTiles.size >= 4 && transferCount(merged) >= 3) return merged
@@ -146,30 +198,30 @@ class QrFrameAnalyzer(
         val pending = overlays.indices.mapNotNull { index ->
             overlays[index].takeUnless { tileCovered(exclusive[index], merged) }
         }
-        add(readCropsSerial(image, pending, retryBinarizer = false))
+        add(readCropsSerial(luma, pending, retryBinarizer = false))
         if (transferCount(merged) >= 4) return merged
         if (previousTiles.size >= 4 && transferCount(merged) >= 3) return merged
         val retries = exclusive.mapNotNull { tile ->
             if (tileCovered(tile, merged)) null
-            else ScanLayout.inflate(tile, 1.28f, image.width, image.height)
+            else ScanLayout.inflate(tile, 1.28f, luma.width, luma.height)
         }
-        add(readCropsSerial(image, retries, retryBinarizer = true))
+        add(readCropsSerial(luma, retries, retryBinarizer = true))
         return merged
     }
 
     private fun readCropsParallel(
-        image: ImageProxy,
+        luma: LumaSnapshot,
         crops: List<ScanRegion>,
         retryBinarizer: Boolean
     ): List<NativeHit> {
         if (crops.isEmpty()) return emptyList()
-        if (crops.size == 1) return tileDecoders[0].read(image, crops[0], 1, retryBinarizer)
+        if (crops.size == 1) return tileDecoders[0].read(luma, crops[0], 1, retryBinarizer)
         val jobs = crops.take(TILE_WORKERS)
         workerBusy.set(jobs.size)
         return try {
             jobs.mapIndexed { index, crop ->
                 tileExecutor.submit(Callable {
-                    tileDecoders[index].read(image, crop, 1, retryBinarizer)
+                    tileDecoders[index].read(luma, crop, 1, retryBinarizer)
                 })
             }.flatMap { it.get() }
         } finally {
@@ -178,17 +230,59 @@ class QrFrameAnalyzer(
     }
 
     private fun readCropsSerial(
-        image: ImageProxy,
+        luma: LumaSnapshot,
         crops: List<ScanRegion>,
         retryBinarizer: Boolean
     ): List<NativeHit> {
         if (crops.isEmpty()) return emptyList()
         val hits = mutableListOf<NativeHit>()
         for (crop in crops) {
-            hits += decoder.read(image, crop, 1, retryBinarizer)
+            hits += decoder.read(luma, crop, 1, retryBinarizer)
             if (transferCount(hits) >= 4) break
         }
         return hits
+    }
+
+    private fun captureLuma(image: ImageProxy): LumaSnapshot {
+        val plane = image.planes[0]
+        val source = plane.buffer.duplicate().apply { rewind() }
+        val size = source.remaining()
+        val copy = synchronized(lumaLock) {
+            val existing = lumaScratch
+            if (existing != null && existing.capacity() >= size) {
+                existing.clear()
+                existing.limit(size)
+                existing
+            } else {
+                ByteBuffer.allocateDirect(size).also { lumaScratch = it }
+            }
+        }
+        copy.put(source)
+        copy.position(0)
+        copy.limit(size)
+        return LumaSnapshot(
+            copy.slice(),
+            plane.rowStride,
+            plane.pixelStride.coerceAtLeast(1),
+            image.width,
+            image.height
+        )
+    }
+
+    private fun noteImageTimestamp(timestamp: Long) {
+        if (timestamp == 0L) return
+        val previous = lastImageTimestamp.getAndSet(timestamp)
+        if (previous != 0L && previous == timestamp) {
+            if (staleTimestampFrames.incrementAndGet() >= STALE_TIMESTAMP_LIMIT) requestRecover()
+        } else {
+            staleTimestampFrames.set(0)
+        }
+    }
+
+    private fun requestRecover() {
+        decodeErrors.incrementAndGet()
+        recoverRequested.set(true)
+        skipUntilRecover.set(true)
     }
 
     private fun transferCount(hits: List<NativeHit>) =
@@ -315,7 +409,8 @@ class QrFrameAnalyzer(
                 roiMisses = roiMisses.get(),
                 roiTracked = trackedRoi.get() != null && roiMisses.get() < ScanLayout.ROI_MISS_LIMIT,
                 multiLayout = multiLayout.get(),
-                tileCount = trackedTiles.get()?.size ?: 0
+                tileCount = trackedTiles.get()?.size ?: 0,
+                pipelineRecoveries = pipelineRecoveries.get()
             )
         )
     }
@@ -323,5 +418,7 @@ class QrFrameAnalyzer(
     companion object {
         private const val STATS_INTERVAL_MS = 1000L
         private const val TILE_WORKERS = 4
+        private const val FRAME_DECODE_TIMEOUT_MS = 400L
+        private const val STALE_TIMESTAMP_LIMIT = 12
     }
 }

@@ -1,6 +1,5 @@
 package com.airferrylite.receiver
 
-import androidx.camera.core.ImageProxy
 import java.lang.reflect.Method
 import java.nio.ByteBuffer
 import zxingcpp.BarcodeReader
@@ -11,6 +10,14 @@ internal data class NativeHit(
     val points: List<Pair<Float, Float>>,
     val originLeft: Int = 0,
     val originTop: Int = 0
+)
+
+internal data class LumaSnapshot(
+    val buffer: ByteBuffer,
+    val rowStride: Int,
+    val pixelStride: Int,
+    val width: Int,
+    val height: Int
 )
 
 /**
@@ -33,29 +40,28 @@ internal class NativeQrDecoder {
     }
     private var packed: ByteBuffer? = null
 
-    fun read(image: ImageProxy, region: ScanRegion, maxSymbols: Int, retryBinarizer: Boolean = true): List<NativeHit> {
+    fun read(luma: LumaSnapshot, region: ScanRegion, maxSymbols: Int, retryBinarizer: Boolean = true): List<NativeHit> {
         reader.options.maxNumberOfSymbols = maxSymbols.coerceIn(1, 4)
-        val plane = image.planes[0]
-        val source = plane.buffer.duplicate().apply { rewind() }
+        val source = luma.buffer.duplicate().apply { rewind() }
         reader.options.binarizer = BarcodeReader.Binarizer.LOCAL_AVERAGE
-        var results = readOnce(plane, source, region)
+        var results = readOnce(luma, source, region)
         if (results.isEmpty() && retryBinarizer) {
             reader.options.binarizer = BarcodeReader.Binarizer.GLOBAL_HISTOGRAM
-            results = readOnce(plane, source, region)
+            results = readOnce(luma, source, region)
         }
         return results.mapNotNull { toHit(it, region.left, region.top) }
     }
 
     private fun readOnce(
-        plane: ImageProxy.PlaneProxy,
+        luma: LumaSnapshot,
         source: ByteBuffer,
         region: ScanRegion
     ): List<BarcodeReader.Result> {
-        return if (plane.pixelStride == 1 && source.isDirect) {
-            invokeReadY(source, plane.rowStride, region.left, region.top, region.width, region.height)
+        return if (luma.pixelStride == 1 && source.isDirect) {
+            invokeReadY(source, luma.rowStride, region.left, region.top, region.width, region.height)
         } else {
             val packedBuffer = acquirePacked(region.width * region.height)
-            copyPacked(source, plane.rowStride, plane.pixelStride, region, packedBuffer)
+            copyPacked(source, luma.rowStride, luma.pixelStride, region, packedBuffer)
             invokeReadY(packedBuffer, region.width, 0, 0, region.width, region.height)
         }
     }

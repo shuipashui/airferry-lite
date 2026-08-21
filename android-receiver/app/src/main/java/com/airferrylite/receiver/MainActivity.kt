@@ -8,6 +8,8 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Build
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.provider.MediaStore
 import android.hardware.camera2.CameraCharacteristics
@@ -95,6 +97,17 @@ class MainActivity : AppCompatActivity() {
     private var pendingSave: PendingSave? = null
     private var pendingSession: String? = null
     private var bindingCamera = false
+    private val watchdog = Handler(Looper.getMainLooper())
+    private val watchdogTick = object : Runnable {
+        override fun run() {
+            maybeRecoverStalledScanner()
+            watchdog.postDelayed(this, WATCHDOG_INTERVAL_MS)
+        }
+    }
+    private var lastStatsAt = 0L
+    private var lastRecoverAt = 0L
+    private var recoverBurst = 0
+    private var recoverBurstStartedAt = 0L
 
     private data class PendingSave(val name: String, val mime: String, val bytes: ByteArray)
 
@@ -168,6 +181,8 @@ class MainActivity : AppCompatActivity() {
             onStats = { stats ->
                 ContextCompat.getMainExecutor(this).execute {
                     lastStats = stats
+                    lastStatsAt = SystemClock.elapsedRealtime()
+                    recoverBurst = 0
                     renderDiagnostics()
                 }
             }
@@ -175,6 +190,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.resetButton).setOnClickListener { resetTransfer() }
         findViewById<Button>(R.id.copyDiagnosticsButton).setOnClickListener { copyDiagnostics() }
         saveButton.setOnClickListener { savePendingFile() }
+        watchdog.postDelayed(watchdogTick, WATCHDOG_INTERVAL_MS)
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), CAMERA_PERMISSION_REQUEST)
         } else {
@@ -244,6 +260,7 @@ class MainActivity : AppCompatActivity() {
                 fellBack = true
             }
             activeCameraFps = activeFps
+            lastStatsAt = SystemClock.elapsedRealtime()
             val boundFps = activeFps
             statusText.text = if (boundFps != null && (fellBack || requestedFps !in boundFps.lower..boundFps.upper)) {
                 "相机达不到 ${requestedFps} FPS，已落到 ${boundFps.lower}-${boundFps.upper}"
@@ -420,7 +437,6 @@ class MainActivity : AppCompatActivity() {
         assembler.reset()
         protocolExecutor.execute { highSpeedAssembler.reset() }
         highSpeedSessionActive = false
-        frameAnalyzer.resetSession()
         pendingSave = null
         pendingSession = null
         saveButton.isEnabled = false
@@ -438,6 +454,7 @@ class MainActivity : AppCompatActivity() {
         lastHighUnique = 0
         lastHighSolved = 0
         lastHighTotal = 0
+        restartScanner(countRecovery = false)
         updateUi(TransferUpdate(null, 0, 0))
         fileText.text = "等待文件"
         progress.progress = 0
@@ -445,6 +462,33 @@ class MainActivity : AppCompatActivity() {
         missingText.text = "缺失片段：—"
         statusText.text = "正在高速扫描"
         renderDiagnostics()
+    }
+
+    private fun maybeRecoverStalledScanner() {
+        if (!cameraStarted || bindingCamera || isDestroyed) return
+        if (!::frameAnalyzer.isInitialized) return
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastRecoverAt < RECOVER_COOLDOWN_MS) return
+        val asked = frameAnalyzer.consumeRecoverRequest()
+        val heartbeatDead = lastStatsAt != 0L && now - lastStatsAt > SCAN_STALL_MS
+        if (!asked && !heartbeatDead) return
+        if (now - recoverBurstStartedAt > RECOVER_BURST_WINDOW_MS) recoverBurst = 0
+        if (recoverBurst == 0) recoverBurstStartedAt = now
+        recoverBurst += 1
+        if (recoverBurst > MAX_RECOVER_BURST) {
+            statusText.text = "摄像头无画面，点重置或退出重开"
+            return
+        }
+        lastRecoverAt = now
+        restartScanner(countRecovery = true)
+        statusText.text = "扫描卡住，已重启相机"
+    }
+
+    private fun restartScanner(countRecovery: Boolean) {
+        if (!countRecovery) recoverBurst = 0
+        cameraProvider?.unbindAll()
+        frameAnalyzer.recoverPipeline(countRecovery)
+        if (cameraProvider != null) bindCamera()
     }
 
     private fun renderDiagnostics() {
@@ -460,6 +504,7 @@ class MainActivity : AppCompatActivity() {
             "分析：提交 ${stats?.submittedFrames ?: 0} · 完成 ${stats?.analysisFps?.let { "%.1f".format(it) } ?: "0"} FPS · 丢帧 ${stats?.droppedFrames ?: 0}",
             "解码：zxing-cpp · 平均 ${stats?.averageDecodeMs?.let { "%.1f ms".format(it) } ?: "—"} · 单码命中 ${stats?.singleHits ?: 0} · 多码扫描 ${stats?.multiScans ?: 0}（命中 ${stats?.multiHits ?: 0}${perFrameLabel(stats)}）",
             "分析器：线程 ${stats?.workerCount ?: "?"} · 忙 ${stats?.workerBusy ?: "?"} · 空结果 ${stats?.emptyDecodes ?: 0} · 异常 ${stats?.decodeErrors ?: 0} · 新缓冲 ${stats?.bufferAllocations ?: 0}",
+            "看门狗：恢复 ${stats?.pipelineRecoveries ?: 0} 次 · 心跳 ${if (lastStatsAt == 0L) "—" else "${(now - lastStatsAt).coerceAtLeast(0)} ms"}",
             "ROI：${roiLabel(stats)} · 连续未命中 ${stats?.roiMisses ?: 0} · 布局 ${if (stats?.multiLayout == true) "四码" else "单码"}",
             "协议：二维码 ${decodedQrCount.get()} · AFL2 ${highFrameCount} · 唯一 ${highUniqueFrameCount} · 重复 ${highDuplicateCount} · 无效 ${invalidFrameCount.get()} · 错误 ${highProtocolErrors} · 队列 ${pendingProtocolFrames.get()} · 解块 ${lastHighSolved}/${lastHighTotal}",
             "高速会话：最近帧 ${highAge} · 唯一载荷 ${formatBytes(sessionUniquePayloadBytes)} · 光学 ${formatBytes(highBytesReceived)} · 速度 ${latestSpeedLabel} · 会话 ${formatRate(sessionAverageBytesPerSecond)}",
@@ -575,6 +620,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        watchdog.removeCallbacks(watchdogTick)
         cameraProvider?.unbindAll()
         if (::frameAnalyzer.isInitialized) frameAnalyzer.close()
         if (::cameraExecutor.isInitialized) cameraExecutor.shutdownNow()
@@ -589,5 +635,10 @@ class MainActivity : AppCompatActivity() {
         private const val SPEED_REFRESH_INTERVAL_MS = 1000L
         private const val PREFS_NAME = "airferry-lite"
         private const val PREF_FPS = "preview_fps"
+        private const val WATCHDOG_INTERVAL_MS = 1000L
+        private const val SCAN_STALL_MS = 2000L
+        private const val RECOVER_COOLDOWN_MS = 5000L
+        private const val RECOVER_BURST_WINDOW_MS = 30000L
+        private const val MAX_RECOVER_BURST = 3
     }
 }
