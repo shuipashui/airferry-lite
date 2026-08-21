@@ -239,9 +239,6 @@ class MainActivity : AppCompatActivity() {
         bindingCamera = true
         try {
             val rotation = previewView.display?.rotation ?: Surface.ROTATION_0
-            val preview = Preview.Builder().setTargetRotation(rotation).build().also {
-                it.surfaceProvider = previewView.surfaceProvider
-            }
             val fpsRanges = cameraFpsRanges(provider)
             availableCameraFpsLabel = fpsRanges.joinToString(",") { "${it.lower}-${it.upper}" }.ifBlank { "未知" }
             highSpeedCameraFpsLabel = cameraHighSpeedFpsRanges(provider)
@@ -249,6 +246,7 @@ class MainActivity : AppCompatActivity() {
             val fallbackFps = pickFpsRange(fpsRanges, if (requestedFps == 120) 60 else 30)
             var activeFps = preferredFps
             var fellBack = false
+            var preview = buildPreview(rotation, activeFps)
             var analysis = buildAnalysis(rotation, activeFps)
             imageAnalysis?.clearAnalyzer()
             provider.unbindAll()
@@ -260,6 +258,7 @@ class MainActivity : AppCompatActivity() {
                 analysis.clearAnalyzer()
                 provider.unbindAll()
                 activeFps = fallbackFps
+                preview = buildPreview(rotation, activeFps)
                 analysis = buildAnalysis(rotation, activeFps)
                 analysis.setAnalyzer(cameraExecutor, frameAnalyzer)
                 provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
@@ -308,6 +307,12 @@ class MainActivity : AppCompatActivity() {
             ?: ranges.maxWithOrNull(compareBy<Range<Int>> { it.upper }.thenBy { it.lower })
     }
 
+    private fun buildPreview(rotation: Int, fpsRange: Range<Int>?): Preview {
+        val builder = Preview.Builder().setTargetRotation(rotation)
+        applyScanCaptureOptions(Camera2Interop.Extender(builder), fpsRange)
+        return builder.build().also { it.surfaceProvider = previewView.surfaceProvider }
+    }
+
     private fun buildAnalysis(rotation: Int, fpsRange: Range<Int>?): ImageAnalysis {
         val builder = ImageAnalysis.Builder()
             .setResolutionSelector(
@@ -321,13 +326,21 @@ class MainActivity : AppCompatActivity() {
             .setTargetRotation(rotation)
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
-        if (fpsRange != null) {
-            Camera2Interop.Extender(builder).setCaptureRequestOption(
-                CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
-                fpsRange
-            )
-        }
+        applyScanCaptureOptions(Camera2Interop.Extender(builder), fpsRange)
         return builder.build()
+    }
+
+    private fun <T> applyScanCaptureOptions(extender: Camera2Interop.Extender<T>, fpsRange: Range<Int>?) {
+        if (fpsRange != null) {
+            extender.setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fpsRange)
+        }
+        extender.setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+        extender.setCaptureRequestOption(CaptureRequest.CONTROL_AE_LOCK, false)
+        extender.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_LOCK, false)
+        extender.setCaptureRequestOption(
+            CaptureRequest.CONTROL_AF_MODE,
+            CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+        )
     }
 
     private fun handleResult(result: DecodedQr) {

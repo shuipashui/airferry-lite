@@ -369,14 +369,8 @@ class QrFrameAnalyzer(
                         imageWidth,
                         imageHeight
                     )
-                    multiLayout.get() && existingRoi != null -> ScanLayout.union(
-                        existingRoi,
-                        next,
-                        imageWidth,
-                        imageHeight
-                    )
                     multiLayout.get() && hits.size >= 2 -> next
-                    multiLayout.get() -> existingRoi ?: next
+                    multiLayout.get() -> existingRoi
                     else -> ScanLayout.centerSquare(imageWidth, imageHeight)
                 }
             )
@@ -391,7 +385,7 @@ class QrFrameAnalyzer(
                 tileUndercount.set(0)
                 trackedTiles.set(ScanLayout.tilesFromHits(perCode, imageWidth, imageHeight))
             }
-            hits.size >= 2 && (previous == null || previous.size <= 2) -> {
+            hits.size >= 2 && (previous == null || previous.size < 2) -> {
                 tileUndercount.set(0)
                 trackedTiles.set(ScanLayout.tilesFromHits(perCode, imageWidth, imageHeight))
             }
@@ -401,6 +395,9 @@ class QrFrameAnalyzer(
                     trackedRoi.set(null)
                     tileUndercount.set(0)
                 }
+            }
+            previous != null && previous.size >= 2 -> {
+                tileUndercount.set(0)
             }
             previous != null && previous.isNotEmpty() -> {
                 tileUndercount.set(0)
