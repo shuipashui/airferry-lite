@@ -30,7 +30,7 @@
       <div class="actions"><button id="prepareBtn" class="primary" disabled>生成二维码流</button><button id="playBtn" disabled>开始播放</button><button id="fullscreenBtn" disabled>全屏</button><button id="resetBtn" disabled>重置</button><a id="openReceiver" class="jump" target="_blank" rel="noopener">打开接收端</a></div>
       <div class="status"><div><span>状态</span><strong id="statusText">等待文件</strong></div><div><span>传输</span><strong id="compressText">—</strong></div><div><span>会话</span><strong id="sessionText">—</strong></div><div><span>片段</span><strong id="frameText">—</strong></div></div>
       <div class="progress"><i id="progressBar"></i></div>
-      <p class="tip">四码请全屏。60 Hz 电脑用 30 FPS（每码显示两帧，比 60 FPS 更稳）；120 Hz 再用 60 FPS。四个码都要进手机画面。单码用 2331 B / 30 FPS；2953 B 只适合单码。四码每码上限 1273 B（QR V25），选更大的每帧数据不会再增加；更远或不稳可改 1003 B。理论速度是屏幕吞吐上限，喷泉码大约再加 15% 帧。</p>
+      <p class="tip">窗口里也能播，手机靠近即可。全屏只是模块更大、更稳。60 Hz 用 30 FPS；120 Hz 再用 60 FPS。四码交错换对角，每次只更新两个码。四个码都要进手机画面。单码用 2331 B / 30 FPS；2953 B 只适合单码。四码每码上限 1273 B（QR V25）。全屏后右上角可以暂停，空格键同样有效。</p>
     </section>
     <section class="panel viewer">
       <canvas id="qrCanvas" width="1080" height="1080"></canvas>
@@ -39,6 +39,10 @@
           <div class="receiver-link-copy"><strong>手机网页接收端</strong><span>扫码后直接打开接收页面</span><a id="receiverUrl" target="_blank" rel="noopener"></a><small>选择文件并生成二维码流后，此入口会自动隐藏</small></div>
           <div class="receiver-qr-wrap"><canvas id="receiverQrCanvas" width="300" height="300" aria-label="手机接收端网址二维码"></canvas></div>
         </section>
+      </div>
+      <div class="viewer-hud" id="viewerHud" hidden>
+        <button type="button" id="hudPlayBtn">开始播放</button>
+        <button type="button" id="hudFsBtn">退出全屏</button>
       </div>
     </section>
   </main>

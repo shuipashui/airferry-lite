@@ -11,6 +11,9 @@
   const playBtn = el("playBtn");
   const resetBtn = el("resetBtn");
   const fullscreenBtn = el("fullscreenBtn");
+  const hudPlayBtn = el("hudPlayBtn");
+  const hudFsBtn = el("hudFsBtn");
+  const viewerHud = el("viewerHud");
   const canvas = el("qrCanvas");
   const overlay = el("overlay");
   const compressText = el("compressText");
@@ -30,6 +33,7 @@
   const QUAD_QUIET_MODULES = 4;
   const LINK_QUIET_MODULES = 4;
   const COMMON_HZ = [60, 75, 90, 120, 144, 165, 240];
+  const QUAD_PAIRS = [[0, 3], [1, 2]];
   let file = null;
   let transfer = null;
   let animationFrame = 0;
@@ -39,8 +43,11 @@
   const qrCache = new Map();
   const highQueue = [];
   let highNextSeq = 0;
+  let highNextPair = 0;
   let codesPerScreen = 1;
   let lastPatterns = null;
+  let livePatterns = [null, null, null, null];
+  let liveSeqs = [0, 0, 0, 0];
   let vsyncPhase = 0;
   let vsyncsPerQr = 2;
   let lastRafAt = 0;
@@ -104,13 +111,23 @@
       const prepared = { encoding: packed.compression, originalSize: sourceBytes.length, savedBytes: sourceBytes.length - packed.transmittedSize };
       highQueue.length = 0;
       highNextSeq = 0;
+      highNextPair = 0;
+      livePatterns = [null, null, null, null];
+      liveSeqs = [0, 0, 0, 0];
       emitted = 0;
       qrCache.clear();
-      fillHighQueue(4);
+      if (codesPerScreen === 4) {
+        fillHighQueue(2);
+        paintQueued(highQueue.shift());
+        paintQueued(highQueue.shift());
+        fillHighQueue(4);
+      } else {
+        fillHighQueue(4);
+        drawScreen(highQueue[0].patterns);
+      }
       sessionText.textContent = transfer.session;
       frameText.textContent = "0 / " + transfer.total;
       progressBar.style.width = "0%";
-      drawScreen(highQueue[0].patterns);
       overlay.classList.add("hidden");
       renderRateHint();
       const gzip = packed.compression === "gzip";
@@ -123,9 +140,11 @@
       fileLabel.textContent = file.name + " · " + formatBytes(file.size) + (gzip ? " · 已压缩 " + savedPct + "%" : " · 未压缩");
       statusText.textContent = "二维码流已生成，可开始播放";
       playBtn.disabled = false;
-      playBtn.textContent = "开始播放";
+      if (hudPlayBtn) hudPlayBtn.disabled = false;
+      setPlayLabel("开始播放");
       resetBtn.disabled = false;
       if (fullscreenBtn) fullscreenBtn.disabled = false;
+      if (viewerHud) viewerHud.hidden = false;
     } catch (error) {
       statusText.textContent = "生成失败：" + error.message;
       prepareBtn.disabled = false;
@@ -133,6 +152,21 @@
   });
 
   playBtn.addEventListener("click", () => animationFrame ? stop() : start());
+  if (hudPlayBtn) hudPlayBtn.addEventListener("click", () => animationFrame ? stop() : start());
+  if (hudFsBtn) {
+    hudFsBtn.addEventListener("click", () => {
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    });
+  }
+  document.addEventListener("keydown", event => {
+    if (event.code !== "Space" && event.key !== " ") return;
+    const tag = event.target && event.target.tagName;
+    if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA" || tag === "BUTTON" || tag === "A") return;
+    if (!transfer || playBtn.disabled) return;
+    event.preventDefault();
+    if (animationFrame) stop();
+    else start();
+  });
   resetBtn.addEventListener("click", () => {
     stop();
     file = null;
@@ -140,14 +174,20 @@
     fileInput.value = "";
     selectFile(null);
     playBtn.disabled = true;
+    if (hudPlayBtn) hudPlayBtn.disabled = true;
     resetBtn.disabled = true;
     if (fullscreenBtn) fullscreenBtn.disabled = true;
+    if (viewerHud) viewerHud.hidden = true;
+    setPlayLabel("开始播放");
     sessionText.textContent = "—";
     frameText.textContent = "—";
     if (compressText) compressText.textContent = "—";
     progressBar.style.width = "0%";
     overlay.classList.remove("hidden");
     lastPatterns = null;
+    livePatterns = [null, null, null, null];
+    liveSeqs = [0, 0, 0, 0];
+    highNextPair = 0;
     document.documentElement.classList.remove("quad-send");
     document.body.classList.remove("quad-send");
     const viewer = canvas.closest(".viewer");
@@ -166,7 +206,9 @@
       else viewer.requestFullscreen().catch(() => {});
     });
     document.addEventListener("fullscreenchange", () => {
-      fullscreenBtn.textContent = document.fullscreenElement ? "退出全屏" : "全屏";
+      const full = !!(document.fullscreenElement || document.webkitFullscreenElement);
+      fullscreenBtn.textContent = full ? "退出全屏" : "全屏";
+      if (hudFsBtn) hudFsBtn.textContent = "退出全屏";
       if (lastPatterns) drawScreen(lastPatterns);
     });
   }
@@ -180,10 +222,8 @@
     rafSamples.length = 0;
     measuredRefreshHz = 0;
     vsyncsPerQr = vsyncsForFps(60, Number(fps.value));
-    statusText.textContent = codesPerScreen === 4
-      ? "正在循环播放 · 四码请全屏"
-      : "正在循环播放";
-    playBtn.textContent = "暂停";
+    statusText.textContent = playbackStatus();
+    setPlayLabel("暂停");
     animationFrame = requestAnimationFrame(playLoop);
   }
 
@@ -202,8 +242,7 @@
           if (hz !== measuredRefreshHz || next !== vsyncsPerQr) {
             measuredRefreshHz = hz;
             vsyncsPerQr = next;
-            statusText.textContent = (codesPerScreen === 4 ? "正在循环播放 · 四码请全屏" : "正在循环播放")
-              + " · 屏 " + hz + " Hz · 每 " + next + " vsync 换一屏";
+            statusText.textContent = playbackStatus();
           } else {
             vsyncsPerQr = next;
           }
@@ -212,7 +251,7 @@
     }
     lastRafAt = timestamp;
     vsyncPhase += 1;
-    if (vsyncPhase >= vsyncsPerQr) {
+    if (vsyncPhase >= updateIntervalVsyncs()) {
       vsyncPhase = 0;
       tick();
     }
@@ -226,8 +265,28 @@
     }
     if (transfer) {
       statusText.textContent = "已暂停";
-      playBtn.textContent = "继续播放";
+      setPlayLabel("继续播放");
     }
+  }
+
+  function setPlayLabel(label) {
+    playBtn.textContent = label;
+    if (hudPlayBtn) hudPlayBtn.textContent = label;
+  }
+
+  function playbackStatus() {
+    const playing = codesPerScreen === 4
+      ? "正在循环播放 · 四码交错换对角"
+      : "正在循环播放";
+    if (!measuredRefreshHz) return playing;
+    const interval = updateIntervalVsyncs();
+    const unit = codesPerScreen === 4 ? "一对" : "一屏";
+    return playing + " · 屏 " + measuredRefreshHz + " Hz · 每 " + interval + " vsync 换" + unit;
+  }
+
+  function updateIntervalVsyncs() {
+    if (codesPerScreen === 4) return Math.max(1, Math.round(vsyncsPerQr / 2));
+    return vsyncsPerQr;
   }
 
   function tick() {
@@ -236,28 +295,60 @@
       fillHighQueue(1);
       return;
     }
-    drawScreen(next.patterns);
-    emitted += 1;
-    frameText.textContent = (codesPerScreen === 4 ? "四码帧 " : "喷泉帧 ") + next.seqs.join(",") + " · K=" + transfer.total;
+    paintQueued(next);
+    emitted += next.seqs.length;
+    frameText.textContent = codesPerScreen === 4
+      ? "四码 " + liveSeqs.join(",") + " · K=" + transfer.total
+      : "喷泉帧 " + next.seqs.join(",") + " · K=" + transfer.total;
     progressBar.style.width = Math.min(100, emitted / Math.ceil(transfer.total * 1.15) * 100) + "%";
     fillHighQueue(2);
+  }
+
+  function paintQueued(item) {
+    if (!item) return;
+    if (codesPerScreen === 4 && item.indices) {
+      for (let index = 0; index < item.indices.length; index += 1) {
+        liveSeqs[item.indices[index]] = item.seqs[index];
+        livePatterns[item.indices[index]] = item.patterns[index];
+      }
+      drawScreen(livePatterns);
+      return;
+    }
+    drawScreen(item.patterns);
+  }
+
+  function nextFrameSeq() {
+    const ordinal = highNextSeq++;
+    return ordinal < transfer.total
+      ? (0x80000000 | ordinal) >>> 0
+      : ordinal - transfer.total;
+  }
+
+  function encodeNextCode() {
+    const seq = nextFrameSeq();
+    const bytes = H.packFrame({ ...transfer.header, seq }, transfer.encoder.encode(seq));
+    return { seq, pattern: getHighSpeedQrPattern(bytes, seq) };
   }
 
   function fillHighQueue(max) {
     if (!transfer) return;
     for (let count = 0; count < max && highQueue.length < HIGH_QUEUE_LIMIT; count += 1) {
-      const seqs = [];
-      const patterns = [];
-      for (let code = 0; code < codesPerScreen; code += 1) {
-        const ordinal = highNextSeq++;
-        const seq = ordinal < transfer.total
-          ? (0x80000000 | ordinal) >>> 0
-          : ordinal - transfer.total;
-        const bytes = H.packFrame({ ...transfer.header, seq }, transfer.encoder.encode(seq));
-        seqs.push(seq);
-        patterns.push(getHighSpeedQrPattern(bytes, seq));
+      if (codesPerScreen === 4) {
+        const pair = highNextPair;
+        highNextPair ^= 1;
+        const indices = QUAD_PAIRS[pair];
+        const seqs = [];
+        const patterns = [];
+        for (let code = 0; code < indices.length; code += 1) {
+          const encoded = encodeNextCode();
+          seqs.push(encoded.seq);
+          patterns.push(encoded.pattern);
+        }
+        highQueue.push({ pair, indices, seqs, patterns });
+        continue;
       }
-      highQueue.push({ seqs, patterns });
+      const encoded = encodeNextCode();
+      highQueue.push({ seqs: [encoded.seq], patterns: [encoded.pattern] });
     }
   }
 
@@ -339,57 +430,77 @@
     const style = getComputedStyle(viewer);
     const padX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
     const padY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
-    return Math.min(
-      Math.max(0, viewer.clientWidth - padX),
-      Math.max(0, viewer.clientHeight - padY)
-    );
+    const width = Math.max(0, viewer.clientWidth - padX);
+    const height = Math.max(0, viewer.clientHeight - padY);
+    return Math.floor(Math.min(width, height));
   }
 
-  function syncCanvasSize() {
+  function devicePixelRatioValue() {
+    const value = window.devicePixelRatio;
+    return Number.isFinite(value) && value > 0 ? value : 1;
+  }
+
+  function cssBudgetSide() {
     const viewer = canvas.closest(".viewer") || canvas.parentElement;
-    if (!viewer) return;
-    const quad = lastPatterns && lastPatterns.length === 4;
+    if (!viewer) return 256;
+    return Math.max(1, viewerContentSide(viewer));
+  }
+
+  function integerModuleScale(cssBudget, dpr, moduleCount) {
+    const budget = Math.max(1, cssBudget);
+    const ratio = dpr > 0 ? dpr : 1;
+    const count = Math.max(1, moduleCount);
+    let scale = Math.max(1, Math.floor((budget * ratio) / count));
+    while ((count * (scale + 1) / ratio) <= budget) scale += 1;
+    while (scale > 1 && (count * scale / ratio) > budget) scale -= 1;
+    return scale;
+  }
+
+  function layoutMetrics(patterns) {
+    const quad = patterns.length === 4;
+    const columns = quad ? 2 : 1;
+    const quiet = quad ? QUAD_QUIET_MODULES : QUIET_MODULES;
+    const modules = patterns[0].count + quiet * 2;
+    const dpr = devicePixelRatioValue();
+    const cssBudget = cssBudgetSide();
+    const scale = integerModuleScale(cssBudget, dpr, modules * columns);
+    const tilePx = modules * scale;
+    const canvasPx = tilePx * columns;
+    return { quad, columns, quiet, scale, tilePx, canvasPx, cssSide: canvasPx / dpr };
+  }
+
+  function syncCanvasSize(patterns) {
+    const viewer = canvas.closest(".viewer") || canvas.parentElement;
+    if (!viewer) return layoutMetrics(patterns);
+    const quad = patterns.length === 4;
     document.documentElement.classList.toggle("quad-send", quad);
     document.body.classList.toggle("quad-send", quad);
     viewer.classList.toggle("quad", quad);
-    const fullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
-    let side;
-    if (quad && fullscreen) {
-      canvas.style.width = "";
-      canvas.style.height = "";
-      const rect = canvas.getBoundingClientRect();
-      side = Math.max(256, Math.floor(Math.min(rect.width, rect.height)));
-    } else {
-      const avail = viewerContentSide(viewer);
-      const cap = quad ? Math.floor(Math.min(window.innerWidth, window.innerHeight) * 0.96) : avail;
-      side = Math.max(256, Math.floor(Math.min(avail, cap)));
-      canvas.style.width = side + "px";
-      canvas.style.height = side + "px";
+    const metrics = layoutMetrics(patterns);
+    canvas.style.maxWidth = "none";
+    canvas.style.maxHeight = "none";
+    canvas.style.width = metrics.cssSide + "px";
+    canvas.style.height = metrics.cssSide + "px";
+    if (canvas.width !== metrics.canvasPx || canvas.height !== metrics.canvasPx) {
+      canvas.width = metrics.canvasPx;
+      canvas.height = metrics.canvasPx;
     }
-    if (canvas.width !== side || canvas.height !== side) {
-      canvas.width = side;
-      canvas.height = side;
-    }
+    return metrics;
   }
 
   function drawScreen(patterns) {
     try {
       lastPatterns = patterns;
-      syncCanvasSize();
-      const size = canvas.width;
+      const metrics = syncCanvasSize(patterns);
       const context = canvas.getContext("2d", { alpha: false });
       context.imageSmoothingEnabled = false;
       context.fillStyle = "#fff";
-      context.fillRect(0, 0, size, size);
-      const quad = patterns.length === 4;
-      const columns = quad ? 2 : 1;
-      const tileWidth = size / columns;
-      const tileHeight = size / columns;
-      const quiet = quad ? QUAD_QUIET_MODULES : QUIET_MODULES;
+      context.fillRect(0, 0, canvas.width, canvas.height);
       patterns.forEach((pattern, index) => {
-        const col = index % columns;
-        const row = Math.floor(index / columns);
-        drawPatternTile(context, pattern, col * tileWidth, row * tileHeight, tileWidth, tileHeight, quiet);
+        if (!pattern) return;
+        const col = index % metrics.columns;
+        const row = Math.floor(index / metrics.columns);
+        drawPatternTile(context, pattern, col * metrics.tilePx, row * metrics.tilePx, metrics.quiet, metrics.scale);
       });
     } catch (error) {
       stop();
@@ -398,14 +509,12 @@
     }
   }
 
-  function drawPatternTile(context, pattern, x, y, width, height, quiet) {
+  function drawPatternTile(context, pattern, x, y, quiet, scale) {
     const tile = rasterize(pattern, quiet);
-    const side = Math.floor(Math.min(width, height));
-    if (side < 1) return;
-    const offsetX = Math.floor(x + (width - side) / 2);
-    const offsetY = Math.floor(y + (height - side) / 2);
+    const dest = tile.width * scale;
+    if (dest < 1) return;
     context.imageSmoothingEnabled = false;
-    context.drawImage(tile, 0, 0, tile.width, tile.height, offsetX, offsetY, side, side);
+    context.drawImage(tile, 0, 0, tile.width, tile.height, x, y, dest, dest);
   }
 
   function drawLinkQr(text) {
@@ -476,14 +585,19 @@
     const frameRate = Number(fps.value);
     const header = H?.HEADER_LEN || HEADER_LEN;
     const quiet = codes === 4 ? QUAD_QUIET_MODULES : QUIET_MODULES;
-    const cell = (canvas.width / (codes === 4 ? 2 : 1)) / (qrModules(bytes) + quiet * 2);
+    const columns = codes === 4 ? 2 : 1;
+    const modules = qrModules(bytes) + quiet * 2;
+    const dpr = devicePixelRatioValue();
+    const cssBudget = cssBudgetSide();
+    const scale = integerModuleScale(cssBudget, dpr, modules * columns);
     return {
       codes,
       bytes,
       fps: frameRate,
       screen: bytes * codes * frameRate,
       payload: Math.max(0, bytes - header) * codes * frameRate,
-      cell
+      cell: scale / dpr,
+      scale
     };
   }
 
@@ -491,8 +605,9 @@
     if (!rateHint) return;
     const rate = currentLayout();
     let text = "理论速度：" + formatRate(rate.screen) + "（" + rate.bytes + " B × " + rate.codes + " 码 × " + rate.fps + " FPS）· 载荷约 " + formatRate(rate.payload);
-    if (rate.cell) text += " · 屏上约 " + (Math.round(rate.cell * 10) / 10) + " px/模块";
-    if (rate.codes === 4 && rate.cell && rate.cell < 4) text += "。模块偏小，请全屏后再播";
+    if (rate.scale) text += " · 每模块 " + rate.scale + " 设备像素（整数）";
+    if (rate.codes === 4) text += "。四码交错换对角，每次只换两个";
+    if (rate.codes === 4 && rate.cell && rate.cell < 3) text += "。模块偏小，请全屏后再播";
     if (rate.codes === 4 && rate.fps >= 60) text += "。60 Hz 屏上四码 60 FPS 容易拖影，改用 30 FPS 通常更快";
     if (rate.codes === 1 && rate.fps > 30) text += "。单码超过 30 FPS 时相机会拍到换码拖影，通常更慢";
     if (rate.fps > 60) text += "。分析流约 60 FPS，更高发送帧率不会增加唯一码";
@@ -514,12 +629,15 @@
     renderRateHint();
   });
   qrMode.addEventListener("change", syncFpsToLayout);
-  if (typeof ResizeObserver === "function") {
-    new ResizeObserver(() => {
-      if (lastPatterns) drawScreen(lastPatterns);
-      renderRateHint();
-    }).observe(canvas.closest(".viewer") || canvas.parentElement || canvas);
+  function relayoutQr() {
+    if (lastPatterns) drawScreen(lastPatterns);
+    renderRateHint();
   }
+  if (typeof ResizeObserver === "function") {
+    new ResizeObserver(relayoutQr).observe(canvas.closest(".viewer") || canvas.parentElement || canvas);
+  }
+  window.addEventListener("resize", relayoutQr);
+  if (window.visualViewport) window.visualViewport.addEventListener("resize", relayoutQr);
   receiverUrl.href = RECEIVER_URL;
   receiverUrl.textContent = RECEIVER_URL;
   if (openReceiver) openReceiver.href = RECEIVER_URL;
