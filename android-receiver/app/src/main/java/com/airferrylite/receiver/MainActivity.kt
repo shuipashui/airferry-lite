@@ -113,6 +113,8 @@ class MainActivity : AppCompatActivity() {
     private var recoverBurstStartedAt = 0L
     private val lastAfl2Session = AtomicReference<String?>(null)
     private var leftForeground = false
+    private var launchRebindDone = false
+    private var cameraBoundAt = 0L
 
     private data class PendingSave(val name: String, val mime: String, val bytes: ByteArray)
 
@@ -222,6 +224,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 cameraProvider = providerFuture.get()
                 bindCamera()
+                previewView.postDelayed({ maybeRebindDeadLaunch() }, LAUNCH_REBIND_MS)
             } catch (error: Exception) {
                 cameraStarted = false
                 statusText.text = "摄像头启动失败：${error.message ?: "未知错误"}"
@@ -269,7 +272,7 @@ class MainActivity : AppCompatActivity() {
             }
             imageAnalysis = analysis
             activeCameraFps = activeFps
-            lastStatsAt = SystemClock.elapsedRealtime()
+            cameraBoundAt = SystemClock.elapsedRealtime()
             val boundFps = activeFps
             statusText.text = if (boundFps != null && (fellBack || requestedFps !in boundFps.lower..boundFps.upper)) {
                 "相机达不到 ${requestedFps} FPS，已落到 ${boundFps.lower}-${boundFps.upper}"
@@ -506,8 +509,9 @@ class MainActivity : AppCompatActivity() {
         val now = SystemClock.elapsedRealtime()
         if (now - lastRecoverAt < RECOVER_COOLDOWN_MS) return
         val asked = frameAnalyzer.consumeRecoverRequest()
+        val neverGotFrames = lastStatsAt == 0L && cameraBoundAt != 0L && now - cameraBoundAt > SCAN_STALL_MS
         val heartbeatDead = lastStatsAt != 0L && now - lastStatsAt > SCAN_STALL_MS
-        if (!asked && !heartbeatDead) return
+        if (!asked && !heartbeatDead && !neverGotFrames) return
         if (now - recoverBurstStartedAt > RECOVER_BURST_WINDOW_MS) recoverBurst = 0
         if (recoverBurst == 0) recoverBurstStartedAt = now
         recoverBurst += 1
@@ -517,6 +521,15 @@ class MainActivity : AppCompatActivity() {
         }
         restartScanner(countRecovery = true, forceRebind = true)
         statusText.text = "扫描卡住，已重启相机"
+    }
+
+    private fun maybeRebindDeadLaunch() {
+        if (launchRebindDone || isDestroyed || !cameraStarted || bindingCamera) return
+        launchRebindDone = true
+        val stats = lastStats
+        if (stats != null && stats.validQrFps >= 1) return
+        restartScanner(countRecovery = false, forceRebind = true)
+        statusText.text = "相机未扫到码，已重开"
     }
 
     private fun restartScanner(countRecovery: Boolean, forceRebind: Boolean = false) {
@@ -669,8 +682,7 @@ class MainActivity : AppCompatActivity() {
         previewView.postDelayed({
             if (isDestroyed || !leftForeground) return@postDelayed
             leftForeground = false
-            bindCamera()
-            lastRecoverAt = SystemClock.elapsedRealtime()
+            restartScanner(countRecovery = false, forceRebind = true)
         }, CAMERA_BIND_DELAY_MS)
     }
 
@@ -707,5 +719,6 @@ class MainActivity : AppCompatActivity() {
         private const val RECOVER_BURST_WINDOW_MS = 30000L
         private const val MAX_RECOVER_BURST = 3
         private const val CAMERA_BIND_DELAY_MS = 300L
+        private const val LAUNCH_REBIND_MS = 1000L
     }
 }
