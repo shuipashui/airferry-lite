@@ -49,7 +49,7 @@ class QrFrameAnalyzer(
     @Volatile private var decodeExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     @Volatile private var tileExecutor: ExecutorService = Executors.newFixedThreadPool(TILE_WORKERS)
     private val workerBusy = AtomicInteger(0)
-    private val skipUntilRecover = AtomicBoolean(false)
+    private val analysisIdle = AtomicBoolean(false)
     private val recoverRequested = AtomicBoolean(false)
     private val pipelineRecoveries = AtomicLong(0)
     private val lastImageTimestamp = AtomicLong(0)
@@ -81,6 +81,10 @@ class QrFrameAnalyzer(
         reportStatsIfDue(image.width, image.height)
         if (skipUntilRecover.get()) {
             droppedFrames.incrementAndGet()
+            image.close()
+            return
+        }
+        if (analysisIdle.get()) {
             image.close()
             return
         }
@@ -126,6 +130,26 @@ class QrFrameAnalyzer(
 
     fun isPaused(): Boolean = skipUntilRecover.get()
 
+    fun setAnalysisIdle(idle: Boolean) {
+        analysisIdle.set(idle)
+    }
+
+    fun rebuildDecoders() {
+        skipUntilRecover.set(true)
+        val oldDecode = decodeExecutor
+        val oldTiles = tileExecutor
+        decodeExecutor = Executors.newSingleThreadExecutor()
+        tileExecutor = Executors.newFixedThreadPool(TILE_WORKERS)
+        decoder = NativeQrDecoder()
+        tileDecoders = Array(TILE_WORKERS) { NativeQrDecoder() }
+        oldDecode.shutdownNow()
+        oldTiles.shutdownNow()
+        runCatching { oldDecode.awaitTermination(200, TimeUnit.MILLISECONDS) }
+        runCatching { oldTiles.awaitTermination(200, TimeUnit.MILLISECONDS) }
+        synchronized(lumaLock) { lumaScratch = null }
+        skipUntilRecover.set(false)
+    }
+
     fun recoverPipeline(count: Boolean = false) {
         skipUntilRecover.set(true)
         val oldDecode = decodeExecutor
@@ -139,6 +163,7 @@ class QrFrameAnalyzer(
         runCatching { oldDecode.awaitTermination(200, TimeUnit.MILLISECONDS) }
         runCatching { oldTiles.awaitTermination(200, TimeUnit.MILLISECONDS) }
         synchronized(lumaLock) { lumaScratch = null }
+        analysisIdle.set(false)
         resetSession()
         lastImageTimestamp.set(0)
         staleTimestampFrames.set(0)
@@ -178,6 +203,7 @@ class QrFrameAnalyzer(
         staleTimestampFrames.set(0)
         recoverRequested.set(false)
         skipUntilRecover.set(false)
+        analysisIdle.set(false)
     }
 
     private fun chooseRegion(width: Int, height: Int): ScanRegion {
@@ -200,10 +226,11 @@ class QrFrameAnalyzer(
         if (previousTiles.isNotEmpty()) {
             add(readCropsParallel(luma, previousTiles.filter { !tileCovered(it, merged) }, retryBinarizer = false))
         }
-        // Dual: one multi-layout hit sets multiLayout, but 1-hit must not lock tiles.
-        // Without this, later frames only crop quadrants at maxSymbols=1 and stay at half speed.
-        // Do not full-frame maxSymbols=4 while two tiles are already hitting (0.8.19).
-        if (previousTiles.size < 2 || transferCount(merged) < 2) {
+        if (previousTiles.size < 2) {
+            add(decoder.read(luma, ScanLayout.centerSquare(luma.width, luma.height), 4))
+            return merged
+        }
+        if (transferCount(merged) < 2) {
             add(decoder.read(luma, ScanLayout.centerSquare(luma.width, luma.height), 4))
         }
         if (transferCount(merged) >= 4) return merged
@@ -328,12 +355,11 @@ class QrFrameAnalyzer(
         }
         roiMisses.set(0)
         validQrInWindow.addAndGet(transferHits.size.toLong())
-        val lockedMulti = transferHits.any { QrPayload.isMultiLayout(QrPayload.bytesFrom(it.bytes, it.text)) } ||
-            transferHits.size >= 2
+        val lockedMulti = transferHits.size >= 2
         if (lockedMulti) {
             lockMultiLayout()
             multiHits.addAndGet(transferHits.size.toLong())
-        } else {
+        } else if (transferHits.none { QrPayload.isMultiLayout(QrPayload.bytesFrom(it.bytes, it.text)) }) {
             singleLayoutConfirmed.set(true)
             singleHits.addAndGet(transferHits.size.toLong())
         }

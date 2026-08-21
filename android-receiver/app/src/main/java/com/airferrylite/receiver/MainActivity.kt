@@ -165,7 +165,6 @@ class MainActivity : AppCompatActivity() {
                 val bytes = decoded.bytes
                 if (bytes != null && HighSpeedAssembler.looksLikeFrame(bytes)) {
                     highSpeedSessionActive = true
-                    if (HighSpeedAssembler.isMultiLayoutFrame(bytes)) frameAnalyzer.setMultiLayout(true)
                     val epoch = protocolEpoch.get()
                     pendingProtocolFrames.incrementAndGet()
                     protocolExecutor.execute {
@@ -363,6 +362,7 @@ class MainActivity : AppCompatActivity() {
         val meta = update.meta
         val complete = update.complete
         if (complete != null && meta != null) {
+            frameAnalyzer.setAnalysisIdle(true)
             offerCompletedFile(meta.session, meta.name, meta.mime, complete)
         }
     }
@@ -409,6 +409,7 @@ class MainActivity : AppCompatActivity() {
             renderDiagnostics()
         }
         if (file != null && update.session != null) {
+            frameAnalyzer.setAnalysisIdle(true)
             offerCompletedFile("high:${update.session}", file.name, file.mime, file.bytes)
         }
     }
@@ -480,6 +481,7 @@ class MainActivity : AppCompatActivity() {
         if (stalled) {
             restartScanner(countRecovery = true)
         } else {
+            frameAnalyzer.rebuildDecoders()
             frameAnalyzer.resetSession()
         }
         updateUi(TransferUpdate(null, 0, 0))
