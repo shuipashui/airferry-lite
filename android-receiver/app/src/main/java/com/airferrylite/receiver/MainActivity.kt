@@ -97,6 +97,8 @@ class MainActivity : AppCompatActivity() {
     private var pendingSave: PendingSave? = null
     private var pendingSession: String? = null
     private var bindingCamera = false
+    private var imageAnalysis: ImageAnalysis? = null
+    private val protocolEpoch = AtomicInteger(0)
     private val watchdog = Handler(Looper.getMainLooper())
     private val watchdogTick = object : Runnable {
         override fun run() {
@@ -164,9 +166,11 @@ class MainActivity : AppCompatActivity() {
                 if (bytes != null && HighSpeedAssembler.looksLikeFrame(bytes)) {
                     highSpeedSessionActive = true
                     if (HighSpeedAssembler.isMultiLayoutFrame(bytes)) frameAnalyzer.setMultiLayout(true)
+                    val epoch = protocolEpoch.get()
                     pendingProtocolFrames.incrementAndGet()
                     protocolExecutor.execute {
                         try {
+                            if (epoch != protocolEpoch.get()) return@execute
                             handleHighSpeedFrame(bytes)
                         } catch (_: Throwable) {
                             highProtocolErrors += 1
@@ -246,12 +250,14 @@ class MainActivity : AppCompatActivity() {
             var activeFps = preferredFps
             var fellBack = false
             var analysis = buildAnalysis(rotation, activeFps)
-            analysis.setAnalyzer(cameraExecutor, frameAnalyzer)
+            imageAnalysis?.clearAnalyzer()
             provider.unbindAll()
+            analysis.setAnalyzer(cameraExecutor, frameAnalyzer)
             try {
                 provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
             } catch (preferredError: Exception) {
                 if (fallbackFps == null || fallbackFps == preferredFps) throw preferredError
+                analysis.clearAnalyzer()
                 provider.unbindAll()
                 activeFps = fallbackFps
                 analysis = buildAnalysis(rotation, activeFps)
@@ -259,6 +265,7 @@ class MainActivity : AppCompatActivity() {
                 provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
                 fellBack = true
             }
+            imageAnalysis = analysis
             activeCameraFps = activeFps
             lastStatsAt = SystemClock.elapsedRealtime()
             val boundFps = activeFps
@@ -269,7 +276,7 @@ class MainActivity : AppCompatActivity() {
             }
             renderDiagnostics()
         } catch (error: Exception) {
-            cameraStarted = false
+            if (imageAnalysis == null) cameraStarted = false
             statusText.text = "摄像头启动失败：${error.message ?: "未知错误"}"
         } finally {
             bindingCamera = false
@@ -434,6 +441,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun resetTransfer() {
+        protocolEpoch.incrementAndGet()
         assembler.reset()
         protocolExecutor.execute { highSpeedAssembler.reset() }
         highSpeedSessionActive = false
@@ -454,7 +462,13 @@ class MainActivity : AppCompatActivity() {
         lastHighUnique = 0
         lastHighSolved = 0
         lastHighTotal = 0
-        restartScanner(countRecovery = false)
+        val stalled = frameAnalyzer.isPaused() ||
+            (lastStatsAt != 0L && SystemClock.elapsedRealtime() - lastStatsAt > SCAN_STALL_MS)
+        if (stalled) {
+            restartScanner(countRecovery = true)
+        } else {
+            frameAnalyzer.resetSession()
+        }
         updateUi(TransferUpdate(null, 0, 0))
         fileText.text = "等待文件"
         progress.progress = 0
@@ -476,19 +490,27 @@ class MainActivity : AppCompatActivity() {
         if (recoverBurst == 0) recoverBurstStartedAt = now
         recoverBurst += 1
         if (recoverBurst > MAX_RECOVER_BURST) {
-            statusText.text = "摄像头无画面，点重置或退出重开"
+            statusText.text = "摄像头无画面，退出应用重开"
             return
         }
-        lastRecoverAt = now
-        restartScanner(countRecovery = true)
+        restartScanner(countRecovery = true, forceRebind = true)
         statusText.text = "扫描卡住，已重启相机"
     }
 
-    private fun restartScanner(countRecovery: Boolean) {
+    private fun restartScanner(countRecovery: Boolean, forceRebind: Boolean = false) {
         if (!countRecovery) recoverBurst = 0
+        val now = SystemClock.elapsedRealtime()
+        if (!forceRebind && lastRecoverAt != 0L && now - lastRecoverAt < RECOVER_COOLDOWN_MS) {
+            frameAnalyzer.resetSession()
+            return
+        }
+        lastRecoverAt = now
+        imageAnalysis?.clearAnalyzer()
         cameraProvider?.unbindAll()
         frameAnalyzer.recoverPipeline(countRecovery)
-        if (cameraProvider != null) bindCamera()
+        previewView.post {
+            if (!isDestroyed && cameraProvider != null) bindCamera()
+        }
     }
 
     private fun renderDiagnostics() {
@@ -621,6 +643,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         watchdog.removeCallbacks(watchdogTick)
+        imageAnalysis?.clearAnalyzer()
         cameraProvider?.unbindAll()
         if (::frameAnalyzer.isInitialized) frameAnalyzer.close()
         if (::cameraExecutor.isInitialized) cameraExecutor.shutdownNow()

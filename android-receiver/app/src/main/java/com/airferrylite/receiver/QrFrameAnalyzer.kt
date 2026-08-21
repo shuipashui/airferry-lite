@@ -123,6 +123,8 @@ class QrFrameAnalyzer(
 
     fun consumeRecoverRequest(): Boolean = recoverRequested.getAndSet(false)
 
+    fun isPaused(): Boolean = skipUntilRecover.get()
+
     fun recoverPipeline(count: Boolean = false) {
         skipUntilRecover.set(true)
         val oldDecode = decodeExecutor
@@ -169,6 +171,10 @@ class QrFrameAnalyzer(
         decodeSamples.set(0)
         emptyDecodes.set(0)
         decodeErrors.set(0)
+        lastImageTimestamp.set(0)
+        staleTimestampFrames.set(0)
+        recoverRequested.set(false)
+        skipUntilRecover.set(false)
     }
 
     private fun chooseRegion(width: Int, height: Int): ScanRegion {
