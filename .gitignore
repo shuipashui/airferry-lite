@@ -3,6 +3,7 @@ android-receiver/.gradle/
 android-receiver/.kotlin/
 android-receiver/build/
 android-receiver/app/build/
+android-receiver/dist/
 android-receiver/local.properties
 \.tools/
 \.npm-cache/
