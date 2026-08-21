@@ -23,7 +23,7 @@
           <select id="chunkSize"></select>
         </label>
         <label>播放帧率
-          <select id="fps"><option value="20">20 FPS</option><option value="24">24 FPS</option><option value="30" selected>30 FPS（60 Hz 推荐）</option><option value="45">45 FPS（60 Hz 会落到 30）</option><option value="60">60 FPS（高刷四码）</option><option value="90">90 FPS（高刷屏）</option><option value="120">120 FPS（高刷屏）</option></select>
+          <select id="fps"></select>
         </label>
         <label>二维码布局
           <select id="qrMode"><option value="single" selected>单码（兼容）</option><option value="quad">四码（多码吞吐）</option></select>
@@ -2411,7 +2411,21 @@ var qrcode = function() {
   const RECEIVER_URL = "https://shuipashui.github.io/airferry-lite/";
   const QR_CACHE_LIMIT = 64;
   const QUAD_MAX_FRAME_BYTES = 1465;
-  const CHUNK_CHOICES = {
+  const FPS_CHOICES = {
+    single: [
+      ["20", "20 FPS"],
+      ["24", "24 FPS"],
+      ["30", "30 FPS"]
+    ],
+    quad: [
+      ["20", "20 FPS"],
+      ["24", "24 FPS"],
+      ["30", "30 FPS"],
+      ["60", "60 FPS（高刷）"],
+      ["90", "90 FPS（高刷）"],
+      ["120", "120 FPS（高刷）"]
+    ]
+  };
     single: [
       ["1465", "1465 B"],
       ["2331", "2331 B"],
@@ -3006,7 +3020,6 @@ var qrcode = function() {
     if (rate.codes === 4 && rate.fps >= 60 && (measuredRefreshHz || 60) < 90) text += "。60 Hz 屏上四码 60 FPS 容易拖影，改用 30 FPS 通常更快";
     if (rate.codes === 1 && rate.fps > 30) text += "。单码超过 30 FPS 时相机会拍到换码拖影，通常更慢";
     if (rate.fps > 60) text += "。分析流约 60 FPS，更高发送帧率不会增加唯一码";
-    if (rate.fps === 45) text += "。60 Hz 屏上 45 FPS 会对齐成 30 FPS 播放";
     rateHint.textContent = text;
   }
 
@@ -3014,15 +3027,22 @@ var qrcode = function() {
     return qrMode.value === "quad" ? "quad" : "single";
   }
 
-  function fillChunkChoices(layout) {
-    const choices = CHUNK_CHOICES[layout] || CHUNK_CHOICES.single;
-    chunkSize.replaceChildren();
+  function fillSelect(select, choices) {
+    select.replaceChildren();
     for (const [value, label] of choices) {
       const option = document.createElement("option");
       option.value = value;
       option.textContent = label;
-      chunkSize.append(option);
+      select.append(option);
     }
+  }
+
+  function fillChunkChoices(layout) {
+    fillSelect(chunkSize, CHUNK_CHOICES[layout] || CHUNK_CHOICES.single);
+  }
+
+  function fillFpsChoices(layout) {
+    fillSelect(fps, FPS_CHOICES[layout] || FPS_CHOICES.single);
   }
 
   function fastestChunk(layout) {
@@ -3032,7 +3052,7 @@ var qrcode = function() {
 
   function fastestFps(layout) {
     const hz = measuredRefreshHz || 60;
-    const allowed = [...fps.options].map((option) => Number(option.value)).filter((value) => value > 0).sort((a, b) => a - b);
+    const allowed = (FPS_CHOICES[layout] || FPS_CHOICES.single).map((item) => Number(item[0]));
     let cap = Math.max(20, Math.floor(hz / 2));
     if (layout === "single") cap = Math.min(cap, 30);
     if (layout === "quad" && hz < 90) cap = Math.min(cap, 30);
@@ -3043,6 +3063,7 @@ var qrcode = function() {
   function applyFastestLayout() {
     const layout = layoutName();
     fillChunkChoices(layout);
+    fillFpsChoices(layout);
     chunkSize.value = fastestChunk(layout);
     fps.value = fastestFps(layout);
     renderRateHint();
