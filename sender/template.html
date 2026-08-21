@@ -17,7 +17,7 @@
       </label>
       <div class="grid">
         <label>每帧数据
-          <select id="chunkSize"><option value="1003">1003 B（四码稳妥）</option><option value="1273">1273 B（四码）</option><option value="1465">1465 B（低密度）</option><option value="2331" selected>2331 B（单码推荐）</option><option value="2953">2953 B（单码高吞吐）</option></select>
+          <select id="chunkSize"></select>
         </label>
         <label>播放帧率
           <select id="fps"><option value="20">20 FPS</option><option value="24">24 FPS</option><option value="30" selected>30 FPS（60 Hz 推荐）</option><option value="45">45 FPS（60 Hz 会落到 30）</option><option value="60">60 FPS（高刷四码）</option><option value="90">90 FPS（高刷屏）</option><option value="120">120 FPS（高刷屏）</option></select>
@@ -30,7 +30,7 @@
       <div class="actions"><button id="prepareBtn" class="primary" disabled>生成二维码流</button><button id="playBtn" disabled>开始播放</button><button id="fullscreenBtn" disabled>全屏</button><button id="resetBtn" disabled>重置</button><a id="openReceiver" class="jump" target="_blank" rel="noopener">打开接收端</a></div>
       <div class="status"><div><span>状态</span><strong id="statusText">等待文件</strong></div><div><span>传输</span><strong id="compressText">—</strong></div><div><span>会话</span><strong id="sessionText">—</strong></div><div><span>片段</span><strong id="frameText">—</strong></div></div>
       <div class="progress"><i id="progressBar"></i></div>
-      <p class="tip">窗口里也能播，手机靠近即可。全屏只是模块更大、更稳。60 Hz 用 30 FPS；120 Hz 再用 60 FPS。四码交错换对角，每次只更新两个码。四个码都要进手机画面。单码用 2331 B / 30 FPS；2953 B 只适合单码。四码每码上限 1273 B（QR V25）。全屏后右上角可以暂停，空格键同样有效。</p>
+      <p class="tip">打开单码或四码时，按这台屏能稳定达到的最高速度预填参数。四码每帧只列出 1003 / 1273 / 1465 B。窗口里也能播，全屏模块更大。60 Hz 用 30 FPS；120 Hz 四码可用 60 FPS。四码交错换对角。空格键暂停，全屏后右上角同样有效。</p>
     </section>
     <section class="panel viewer">
       <canvas id="qrCanvas" width="1080" height="1080"></canvas>

@@ -27,7 +27,19 @@
   const HEADER_LEN = 20;
   const RECEIVER_URL = "https://shuipashui.github.io/airferry-lite/";
   const QR_CACHE_LIMIT = 64;
-  const QUAD_MAX_FRAME_BYTES = 1273;
+  const QUAD_MAX_FRAME_BYTES = 1465;
+  const CHUNK_CHOICES = {
+    single: [
+      ["1465", "1465 B"],
+      ["2331", "2331 B"],
+      ["2953", "2953 B"]
+    ],
+    quad: [
+      ["1003", "1003 B"],
+      ["1273", "1273 B"],
+      ["1465", "1465 B"]
+    ]
+  };
   const HIGH_QUEUE_LIMIT = 8;
   const QUIET_MODULES = 2;
   const QUAD_QUIET_MODULES = 4;
@@ -608,27 +620,77 @@
     if (rate.scale) text += " · 每模块 " + rate.scale + " 设备像素（整数）";
     if (rate.codes === 4) text += "。四码交错换对角，每次只换两个";
     if (rate.codes === 4 && rate.cell && rate.cell < 3) text += "。模块偏小，请全屏后再播";
-    if (rate.codes === 4 && rate.fps >= 60) text += "。60 Hz 屏上四码 60 FPS 容易拖影，改用 30 FPS 通常更快";
+    if (rate.codes === 4 && rate.fps >= 60 && (measuredRefreshHz || 60) < 90) text += "。60 Hz 屏上四码 60 FPS 容易拖影，改用 30 FPS 通常更快";
     if (rate.codes === 1 && rate.fps > 30) text += "。单码超过 30 FPS 时相机会拍到换码拖影，通常更慢";
     if (rate.fps > 60) text += "。分析流约 60 FPS，更高发送帧率不会增加唯一码";
-    if (rate.codes === 4 && rate.bytes === QUAD_MAX_FRAME_BYTES && Number(chunkSize.value) > QUAD_MAX_FRAME_BYTES) {
-      text += "。四码已限制为每码 " + QUAD_MAX_FRAME_BYTES + " B";
-    }
     if (rate.fps === 45) text += "。60 Hz 屏上 45 FPS 会对齐成 30 FPS 播放";
     rateHint.textContent = text;
   }
 
-  function syncFpsToLayout() {
-    if (qrMode.value !== "quad" && Number(fps.value) > 30) fps.value = "30";
+  function layoutName() {
+    return qrMode.value === "quad" ? "quad" : "single";
+  }
+
+  function fillChunkChoices(layout) {
+    const choices = CHUNK_CHOICES[layout] || CHUNK_CHOICES.single;
+    chunkSize.replaceChildren();
+    for (const [value, label] of choices) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      chunkSize.append(option);
+    }
+  }
+
+  function fastestChunk(layout) {
+    const choices = CHUNK_CHOICES[layout] || CHUNK_CHOICES.single;
+    return choices[choices.length - 1][0];
+  }
+
+  function fastestFps(layout) {
+    const hz = measuredRefreshHz || 60;
+    const allowed = [...fps.options].map((option) => Number(option.value)).filter((value) => value > 0).sort((a, b) => a - b);
+    let cap = Math.max(20, Math.floor(hz / 2));
+    if (layout === "single") cap = Math.min(cap, 30);
+    if (layout === "quad" && hz < 90) cap = Math.min(cap, 30);
+    const picked = [...allowed].reverse().find((value) => value <= cap);
+    return String(picked || 30);
+  }
+
+  function applyFastestLayout() {
+    const layout = layoutName();
+    fillChunkChoices(layout);
+    chunkSize.value = fastestChunk(layout);
+    fps.value = fastestFps(layout);
     renderRateHint();
   }
 
+  function probeRefreshHz() {
+    const samples = [];
+    let last = 0;
+    function step(timestamp) {
+      if (last) {
+        const dt = timestamp - last;
+        if (dt > 3 && dt < 22) samples.push(dt);
+      }
+      last = timestamp;
+      if (samples.length >= 8) {
+        const avg = samples.reduce((sum, value) => sum + value, 0) / samples.length;
+        const hz = snapRefreshHz(1000 / avg);
+        if (hz !== measuredRefreshHz) {
+          measuredRefreshHz = hz;
+          applyFastestLayout();
+        }
+        return;
+      }
+      requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
+
   chunkSize.addEventListener("change", renderRateHint);
-  fps.addEventListener("change", () => {
-    if (qrMode.value !== "quad" && Number(fps.value) > 30) fps.value = "30";
-    renderRateHint();
-  });
-  qrMode.addEventListener("change", syncFpsToLayout);
+  fps.addEventListener("change", renderRateHint);
+  qrMode.addEventListener("change", applyFastestLayout);
   function relayoutQr() {
     if (lastPatterns) drawScreen(lastPatterns);
     renderRateHint();
@@ -643,5 +705,6 @@
   if (openReceiver) openReceiver.href = RECEIVER_URL;
   drawLinkQr(RECEIVER_URL);
   clearCanvas();
-  renderRateHint();
+  applyFastestLayout();
+  probeRefreshHz();
 })();
