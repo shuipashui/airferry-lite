@@ -4,7 +4,7 @@
 
 对外说明只写 [README.md](README.md)。不要在 README 里放版本号、实测 KB/s、Worker / VideoFrame 细节或本文链接。
 
-**交接时点：** 2026-08-22。网页接收端 **v85**。Android APK **0.8.19**。当前最快：双码 **1732 B · 60 FPS** 会话 **190.4 KB/s**（V30 上限约 201）。四码 **1465 B · 30 FPS 整屏同换** 会话 **168.9**。发送端打开双码预填 1732·60，打开四码预填 1465·30。以 Pages 上的 `sender/dist/airferry-lite-sender.html` 为准。
+**交接时点：** 2026-08-22。网页接收端 **v85**。Android APK **0.8.20**。当前最快：双码 **1732 B · 60 FPS** 会话 **190.4 KB/s**（V30 上限约 201）。四码 **1465 B · 30 FPS 整屏同换** 会话 **168.9**。发送端打开双码预填 1732·60，打开四码预填 1465·30。以 Pages 上的 `sender/dist/airferry-lite-sender.html` 为准。
 
 ## 1. 项目一句话
 
@@ -30,10 +30,10 @@
 | 部件 | 版本 | 对照 |
 |---|---|---|
 | 网页接收端 | **v85** | 预览可选手动 30/60 FPS（默认 60）。四码 33 ms · inflight 1；锁格后 Worker 切格 |
-| Android APK | **0.8.19**（versionCode 34） | 红米窗口 · 相机 60。双码 **1732·60** 会话 **190.4**（每帧 1.88）。双码不锁紧格子，扫两码并集。0.8.17 紧格跟丢会掉到约 84 KB/s |
+| Android APK | **0.8.20**（versionCode 35） | 红米窗口 · 相机 60。双码 **1732·60** 会话 **190.4**（每帧 1.88）。扫码路径同 0.8.18：两格裁剪。**0.8.19 整幅 maxSymbols=4 已否定**（1732 每帧 0.01） |
 | 发送端 | AFL2 单文件 HTML | 打开单码预填 **2953 B · 30 FPS**；打开四码预填 **1465 B · 30 FPS**（整屏同换）；打开双码预填 **1732 B · 60 FPS**。QR 在 Worker 里生成。60 FPS 四码仍交错。无 45 FPS |
 
-诊断第一行必须是 `网页：v85` 或 `App 0.8.19`。
+诊断第一行必须是 `网页：v85` 或 `App 0.8.20`。
 
 ## 4. 实测对照（只认这些）
 
@@ -50,7 +50,7 @@
 
 网页四码卡在分析约 15 FPS（1 帧在飞），不是卡在每帧只打中 1 个码。v74 每帧约 2.30。不要用更旧的网页数字当目标。
 
-### APK 0.8.19（当前最快）
+### APK 0.8.20（当前最快）
 
 相机 **60**。电脑 **60 Hz**。非全屏。解块完成。收完后诊断可能变成 ROI 全图 / 跟踪中（未命中累计），那是停播/挪开之后，不是中途掉锁。
 
@@ -63,7 +63,7 @@
 | 1465 B · 60 FPS · 双码同刷 | 窗口 | 59.9 / 59.9 · 10.2 ms | **1.90** | 格 2 | 1687 / 191 | 161.9 / 166.5 / **168.6 KB/s** |
 | 1465 B · 60 FPS · 四码交错 | 窗口 | 59.9 / 59.9 · 16.6 ms | 1.93 | 收完跟踪中 | 1846 / 441 | 166.8 / 164.5 / **154.4 KB/s** |
 
-0.8.17 双码久播会掉到约 **84 KB/s**（每帧 0.87、重复 0）：两枚码被收成紧格子后跟丢一枚。0.8.19 双码只跟两码并集 ROI，用 `maxSymbols=4` 一次扫，不再锁两格。诊断 ROI 为 **双码并集**。四码仍锁 4 格。
+0.8.17 双码久播可能掉到约 **84 KB/s**（每帧 0.87、重复 0）：跟丢一枚后只扫到 60 个新码/秒。0.8.18/0.8.20 在已锁 ≥2 格却只命中 1 枚时整幅补扫，连续 3 帧不够则丢格。**不要再做 0.8.19**：双码改整幅 `maxSymbols=4` 后 1732 每帧 0.01、1465 会话掉到 144。双码必须走两格 `maxSymbols=1` 裁剪。
 
 不要交错双码 60 FPS（约 84 KB/s）。不要 60 Hz 四码四格同刷。
 
@@ -136,16 +136,16 @@
 - 停止：冻最后一帧到 `#cameraFreeze` 再清 `srcObject`。`finishing` 时不要清布局字段。
 - SW：`claim` 即可。不要 `client.navigate`，不要 `controllerchange` 时 `reload`。WASM 第一次用再缓存。
 
-## 7. Android APK 实现（0.8.19）
+## 7. Android APK 实现（0.8.20）
 
-源码：`android-receiver/app/src/main/java/com/airferrylite/receiver/`。构建：`android-receiver/build-local.ps1` 或 GitHub Actions `Build Android receiver`。Java 17，SDK 35。`versionName 0.8.19` / `versionCode 34`。不要改解码选项（`tryHarder` / rotate / invert / downscale / `isPure`），除非明确要求动分析管线。
+源码：`android-receiver/app/src/main/java/com/airferrylite/receiver/`。构建：`android-receiver/build-local.ps1` 或 GitHub Actions `Build Android receiver`。Java 17，SDK 35。`versionName 0.8.20` / `versionCode 35`。不要改解码选项（`tryHarder` / rotate / invert / downscale / `isPure`），除非明确要求动分析管线。
 
 APK 比网页快，是因为同一帧 Y 平面上原生 zxing-cpp 能扫多个码，CameraX 丢旧帧，没有 `createImageBitmap` 整帧读回。网页不要搬 APK 的 midX/midY 重排。
 
 - 分析流：**1920×1440** · `YUV_420_888` · `KEEP_ONLY_LATEST`。标题行 30/60/120 只改 AE 档。高速录像管道不能扫码。
 - `NativeQrDecoder`：先拷 Y 平面再 `readYBuffer`，**rotation 0**。不要 `ImageProxy.read()`（会旋转）。`tryHarder` / rotate / invert / downscale 全关。先 `LOCAL_AVERAGE`，空再 `GLOBAL_HISTOGRAM`。`LumaScaler` 热路径不用。
 - 帧头 `0x0d` / `0x0f` 或一帧 ≥2 个传输码 → 多码；否则单码 `maxSymbols = 1`。未确认前 `maxSymbols = 4`。
-- 四码：已有 4 格则 4 路并行；锁满且本帧 ≥3 命中则返回。≥3 命中才 `tilesFromHits`。**双码（2 命中）不锁紧格子**，只跟并集 ROI，一次 `maxSymbols=4`。0.8.17 两格 `maxSymbols=1` 会越跟越紧，久播只剩一枚（约 84 KB/s）。空扫：无锁 2 次清；已锁 4 格要 6 次。
+- 四码：已有格子则 4 路并行；锁满且本帧 ≥3 命中则返回，不再串行补扫。≥3 命中才 `tilesFromHits`。四码 1–2 命中只 `followContainedHits`。**已锁 ≤2 格且本帧 ≥2 命中则重排格子**。**已锁 ≥2 格却只命中 1 枚：整幅补扫；连续 3 帧不够则丢格**。不要双码整幅 `maxSymbols=4`（0.8.19 已否定）。空扫：无锁 2 次清；已锁 4 格要 6 次。
 - 长时间开着会卡：解码超过 400 ms 或相机时间戳不涨或诊断心跳 >2 s，看门狗重绑 CameraX 并重建 zxing 线程。**「清空重收」只清进度，不重绑相机**；只有看门狗判定卡住才重绑。不要为了省电自动关分析流。
 - 收完点「保存文件」，不要自动写盘。诊断 ROI 显示 `格 N`。进度只在内存。
 
@@ -156,7 +156,7 @@ sender/                         浏览器发送：测刷新率、lookahead、画
   dist/airferry-lite-sender.html  提交用的单文件产物
 index.html + app.js + sw.js     GitHub Pages 网页接收端
 web-receiver/                   根目录镜像，必须 byte-identical
-android-receiver/               Kotlin + CameraX + zxing-cpp（0.8.19）
+android-receiver/               Kotlin + CameraX + zxing-cpp（0.8.20）
 shared/ + highspeed-protocol.js AFL1 / AFL2
 vendor/decimen/                 WASM Worker 与 zxing wasm
 third_party/decimen-v0.3/       MIT 源，不要混入后续 AGPL Decimen
@@ -207,7 +207,7 @@ tests/                          npm test
 
 来源：2026-08-21 Cursor 画布 `apk-sender-speed-levers`（未进 git）。已落地：整数放大、交错换对角、1–2 命中跟格、锁满后跳过补扫、Worker 生成、双码 **1732·60**（190.4）、四码 **1465·30 整屏同换**（168.9）。下面不要当回归清单自动执行。
 
-不要做（实测否定）：四码分析改 30；60 Hz 四码 60 FPS **拿太近**（125.6）；**60 Hz 四码四格同刷**（光学/解码，不是生成）；**60 Hz 双码 60 FPS 交错一格**（约 84 KB/s）。
+不要做（实测否定）：四码分析改 30；60 Hz 四码 60 FPS **拿太近**（125.6）；**60 Hz 四码四格同刷**；**60 Hz 双码 60 FPS 交错一格**（约 84 KB/s）；**双码整幅 maxSymbols=4**（0.8.19：1732 每帧 0.01）。
 
 仍不必做：
 
@@ -224,7 +224,7 @@ tests/                          npm test
 | P2 | 发送端 | QR 生成进 Worker | **已落地。** 3 个 Worker + 主线程回退。缓存 256。为 1732·60 解开发送瓶颈 |
 | P2 | 发送端 | 双码 1732·60 | **已落地。** 每帧 1.88，实时 201.7，会话 **190.4 KB/s**。打开双码预填 1732·60 |
 | P2 | 发送端 | 四码 30 整屏同换 | **已落地。** 每帧 2.94，格 4，会话 **168.9 KB/s**。60 FPS 仍交错（154.4） |
-| P2 | 发送端 | 双码 1465·60 | **已落地。** 每帧 1.90，会话 **168.6 KB/s**。久播掉到 84 是 APK 紧格，见 0.8.19 |
+| P2 | 发送端 | 双码 1465·60 | **已落地。** 每帧 1.90，会话 **168.6 KB/s**。久播约 84 是跟丢一格；不要再用整幅 maxSymbols=4 修 |
 | P3 | 协议 | LT → RaptorQ（MIT/Apache） | 不要 AGPL Decimen；现在不是瓶颈 |
 
 ## 13. 许可证

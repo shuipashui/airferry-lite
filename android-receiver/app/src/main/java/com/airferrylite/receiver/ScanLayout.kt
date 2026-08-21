@@ -11,8 +11,6 @@ internal object ScanLayout {
     const val ROI_MISS_LIMIT = 8
     private const val MIN_SIDE = 64
 
-    fun usesTightTiles(hitCount: Int) = hitCount >= 3
-
     fun centerSquare(width: Int, height: Int): ScanRegion {
         val side = min(width, height).coerceAtLeast(1)
         return ScanRegion((width - side) / 2, (height - side) / 2, side, side)

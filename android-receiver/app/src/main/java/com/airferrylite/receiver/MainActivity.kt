@@ -578,7 +578,6 @@ class MainActivity : AppCompatActivity() {
         return when {
             tiles >= 4 -> "格 4"
             tiles > 0 -> "格 $tiles"
-            stats?.multiLayout == true && stats.roiTracked -> "双码并集"
             stats?.roiTracked == true -> "跟踪中"
             else -> "全图"
         }
