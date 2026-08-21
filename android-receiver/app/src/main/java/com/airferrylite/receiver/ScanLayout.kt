@@ -117,6 +117,42 @@ internal object ScanLayout {
         )
     }
 
+    fun tileIndexContaining(tiles: List<ScanRegion>, x: Float, y: Float): Int {
+        var owner = -1
+        for (index in tiles.indices) {
+            val tile = tiles[index]
+            if (x >= tile.left && x < tile.left + tile.width && y >= tile.top && y < tile.top + tile.height) {
+                if (owner >= 0) return -1
+                owner = index
+            }
+        }
+        return owner
+    }
+
+    fun followContainedHits(
+        tiles: List<ScanRegion>,
+        hits: List<List<Pair<Float, Float>>>,
+        imageWidth: Int,
+        imageHeight: Int
+    ): List<ScanRegion> {
+        if (tiles.isEmpty() || hits.isEmpty()) return tiles
+        val next = tiles.toMutableList()
+        val claimed = BooleanArray(tiles.size)
+        for (points in hits) {
+            if (points.isEmpty()) continue
+            val cx = points.map { it.first }.average().toFloat()
+            val cy = points.map { it.second }.average().toFloat()
+            val index = tileIndexContaining(tiles, cx, cy)
+            if (index < 0 || claimed[index]) continue
+            val tile = regionFromPoints(points, imageWidth, imageHeight, 1)?.let {
+                inflate(it, 1.18f, imageWidth, imageHeight)
+            } ?: continue
+            claimed[index] = true
+            next[index] = tile
+        }
+        return next
+    }
+
     fun inflate(region: ScanRegion, factor: Float, width: Int, height: Int): ScanRegion {
         val side = (max(region.width, region.height) * factor.coerceAtLeast(1f)).toInt().coerceAtLeast(MIN_SIDE)
         val cx = region.left + region.width / 2

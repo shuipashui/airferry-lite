@@ -460,9 +460,9 @@ class MainActivity : AppCompatActivity() {
             "分析：提交 ${stats?.submittedFrames ?: 0} · 完成 ${stats?.analysisFps?.let { "%.1f".format(it) } ?: "0"} FPS · 丢帧 ${stats?.droppedFrames ?: 0}",
             "解码：zxing-cpp · 平均 ${stats?.averageDecodeMs?.let { "%.1f ms".format(it) } ?: "—"} · 单码命中 ${stats?.singleHits ?: 0} · 多码扫描 ${stats?.multiScans ?: 0}（命中 ${stats?.multiHits ?: 0}${perFrameLabel(stats)}）",
             "分析器：线程 ${stats?.workerCount ?: "?"} · 忙 ${stats?.workerBusy ?: "?"} · 空结果 ${stats?.emptyDecodes ?: 0} · 异常 ${stats?.decodeErrors ?: 0} · 新缓冲 ${stats?.bufferAllocations ?: 0}",
-            "ROI：${if (stats?.roiTracked == true) "跟踪中" else "全图"} · 连续未命中 ${stats?.roiMisses ?: 0} · 布局 ${if (stats?.multiLayout == true) "四码" else "单码"}",
+            "ROI：${roiLabel(stats)} · 连续未命中 ${stats?.roiMisses ?: 0} · 布局 ${if (stats?.multiLayout == true) "四码" else "单码"}",
             "协议：二维码 ${decodedQrCount.get()} · AFL2 ${highFrameCount} · 唯一 ${highUniqueFrameCount} · 重复 ${highDuplicateCount} · 无效 ${invalidFrameCount.get()} · 错误 ${highProtocolErrors} · 队列 ${pendingProtocolFrames.get()} · 解块 ${lastHighSolved}/${lastHighTotal}",
-            "高速会话：最近帧 ${highAge} · 接收字节 ${formatBytes(highBytesReceived)} · 速度 ${latestSpeedLabel} · 会话 ${formatRate(sessionAverageBytesPerSecond)}",
+            "高速会话：最近帧 ${highAge} · 唯一载荷 ${formatBytes(sessionUniquePayloadBytes)} · 光学 ${formatBytes(highBytesReceived)} · 速度 ${latestSpeedLabel} · 会话 ${formatRate(sessionAverageBytesPerSecond)}",
             "无效样本：$invalidFrameSample",
             "设备标识：${Build.FINGERPRINT}"
         )
@@ -504,6 +504,16 @@ class MainActivity : AppCompatActivity() {
         }
         val saved = saveFile(pending.name, pending.mime, pending.bytes)
         statusText.text = saved?.let { "已保存到 Download/AirFerry Lite/$it" } ?: "保存失败"
+    }
+
+    private fun roiLabel(stats: ScanStats?): String {
+        val tiles = stats?.tileCount ?: 0
+        return when {
+            tiles >= 4 -> "格 4"
+            tiles > 0 -> "格 $tiles"
+            stats?.roiTracked == true -> "跟踪中"
+            else -> "全图"
+        }
     }
 
     private fun perFrameLabel(stats: ScanStats?): String {

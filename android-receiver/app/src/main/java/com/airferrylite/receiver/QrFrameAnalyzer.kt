@@ -31,7 +31,8 @@ data class ScanStats(
     val bufferAllocations: Long,
     val roiMisses: Int,
     val roiTracked: Boolean,
-    val multiLayout: Boolean
+    val multiLayout: Boolean,
+    val tileCount: Int
 )
 
 /** Latest-frame zxing-cpp scan on the CameraX analyzer thread. */
@@ -139,6 +140,7 @@ class QrFrameAnalyzer(
             add(readCropsParallel(image, previousTiles.filter { !tileCovered(it, merged) }, retryBinarizer = false))
         }
         if (transferCount(merged) >= 4) return merged
+        if (previousTiles.size >= 4 && transferCount(merged) >= 3) return merged
         val exclusive = ScanLayout.exclusiveQuadrants(region)
         val overlays = ScanLayout.overlappingQuadrants(region)
         val pending = overlays.indices.mapNotNull { index ->
@@ -146,6 +148,7 @@ class QrFrameAnalyzer(
         }
         add(readCropsSerial(image, pending, retryBinarizer = false))
         if (transferCount(merged) >= 4) return merged
+        if (previousTiles.size >= 4 && transferCount(merged) >= 3) return merged
         val retries = exclusive.mapNotNull { tile ->
             if (tileCovered(tile, merged)) null
             else ScanLayout.inflate(tile, 1.28f, image.width, image.height)
@@ -205,7 +208,10 @@ class QrFrameAnalyzer(
         val transferHits = hits.filter { QrPayload.isTransfer(QrPayload.bytesFrom(it.bytes, it.text)) }
         if (transferHits.isEmpty()) {
             emptyDecodes.incrementAndGet()
-            if (roiMisses.incrementAndGet() >= 2) trackedTiles.set(null)
+            val miss = roiMisses.incrementAndGet()
+            val lockedTiles = trackedTiles.get()?.size ?: 0
+            val missLimit = if (lockedTiles >= 4) 6 else 2
+            if (miss >= missLimit) trackedTiles.set(null)
             return
         }
         roiMisses.set(0)
@@ -237,6 +243,7 @@ class QrFrameAnalyzer(
                 points += (hit.originLeft + x) to (hit.originTop + y)
             }
         }
+        val existingRoi = trackedRoi.get()
         ScanLayout.regionFromPoints(
             points,
             imageWidth,
@@ -248,22 +255,34 @@ class QrFrameAnalyzer(
                 when {
                     hits.size >= 4 -> next
                     hits.size >= 3 -> ScanLayout.union(
-                        trackedRoi.get() ?: ScanLayout.centerSquare(imageWidth, imageHeight),
+                        existingRoi ?: ScanLayout.centerSquare(imageWidth, imageHeight),
                         next,
                         imageWidth,
                         imageHeight
                     )
+                    multiLayout.get() && existingRoi != null -> ScanLayout.union(
+                        existingRoi,
+                        next,
+                        imageWidth,
+                        imageHeight
+                    )
+                    multiLayout.get() && hits.size >= 2 -> next
+                    multiLayout.get() -> existingRoi ?: next
                     else -> ScanLayout.centerSquare(imageWidth, imageHeight)
                 }
             )
         }
-        if (multiLayout.get() && hits.size >= 3) {
-            val perCode = hits.map { hit ->
-                hit.points.map { (x, y) -> (hit.originLeft + x) to (hit.originTop + y) }
+        if (!multiLayout.get()) return
+        val previous = trackedTiles.get()
+        val perCode = hits.map { hit ->
+            hit.points.map { (x, y) -> (hit.originLeft + x) to (hit.originTop + y) }
+        }
+        when {
+            hits.size >= 3 -> trackedTiles.set(ScanLayout.tilesFromHits(perCode, imageWidth, imageHeight))
+            previous != null && previous.isNotEmpty() -> {
+                trackedTiles.set(ScanLayout.followContainedHits(previous, perCode, imageWidth, imageHeight))
             }
-            trackedTiles.set(ScanLayout.tilesFromHits(perCode, imageWidth, imageHeight))
-        } else if (hits.size < 2) {
-            trackedTiles.set(null)
+            hits.size >= 2 -> trackedTiles.set(ScanLayout.tilesFromHits(perCode, imageWidth, imageHeight))
         }
     }
 
@@ -295,7 +314,8 @@ class QrFrameAnalyzer(
                 bufferAllocations = 0,
                 roiMisses = roiMisses.get(),
                 roiTracked = trackedRoi.get() != null && roiMisses.get() < ScanLayout.ROI_MISS_LIMIT,
-                multiLayout = multiLayout.get()
+                multiLayout = multiLayout.get(),
+                tileCount = trackedTiles.get()?.size ?: 0
             )
         )
     }

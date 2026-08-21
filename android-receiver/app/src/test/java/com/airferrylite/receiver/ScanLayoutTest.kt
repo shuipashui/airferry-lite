@@ -95,6 +95,45 @@ class ScanLayoutTest {
     }
 
     @Test
+    fun followContainedHitsUpdatesOnlyTheOwningTile() {
+        val tiles = listOf(
+            ScanRegion(80, 80, 240, 240),
+            ScanRegion(520, 80, 240, 240),
+            ScanRegion(80, 520, 240, 240),
+            ScanRegion(520, 520, 240, 240)
+        )
+        val next = ScanLayout.followContainedHits(
+            tiles,
+            listOf(
+                listOf(600f to 120f, 780f to 120f, 600f to 280f, 780f to 280f)
+            ),
+            1440,
+            1440
+        )
+        assertEquals(tiles[0], next[0])
+        assertEquals(tiles[2], next[2])
+        assertEquals(tiles[3], next[3])
+        assertTrue(next[1].left > tiles[1].left)
+        assertTrue(ScanLayout.tileIndexContaining(tiles, 690f, 200f) == 1)
+    }
+
+    @Test
+    fun oneHitDoesNotClearOtherTilesViaOverlap() {
+        val tiles = listOf(
+            ScanRegion(0, 0, 400, 400),
+            ScanRegion(400, 0, 400, 400)
+        )
+        val next = ScanLayout.followContainedHits(
+            tiles,
+            listOf(listOf(100f to 100f, 180f to 100f, 100f to 180f, 180f to 180f)),
+            1440,
+            1440
+        )
+        assertEquals(tiles[1], next[1])
+        assertTrue(next[0].width >= 64)
+    }
+
+    @Test
     fun exclusiveQuadrantsDoNotOverlap() {
         val region = ScanRegion(0, 0, 1000, 1000)
         val tiles = ScanLayout.exclusiveQuadrants(region)
