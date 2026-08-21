@@ -23,14 +23,14 @@
           <select id="fps"><option value="20">20 FPS</option><option value="24">24 FPS</option><option value="30" selected>30 FPS</option></select>
         </label>
         <label>二维码布局
-          <select id="qrMode"><option value="single" selected>单码（兼容）</option><option value="quad">四码（多码吞吐）</option></select>
+          <select id="qrMode"><option value="single" selected>单码（兼容）</option><option value="quad">四码（多码吞吐）</option><option value="dual">双码 V30（实验）</option></select>
         </label>
       </div>
       <p class="tip" id="rateHint">理论速度：—</p>
       <div class="actions"><button id="prepareBtn" class="primary" disabled>生成二维码流</button><button id="playBtn" disabled>开始播放</button><button id="fullscreenBtn" disabled>全屏</button><button id="resetBtn" disabled>重置</button><a id="openReceiver" class="jump" target="_blank" rel="noopener">打开接收端</a></div>
       <div class="status"><div><span>状态</span><strong id="statusText">等待文件</strong></div><div><span>传输</span><strong id="compressText">—</strong></div><div><span>会话</span><strong id="sessionText">—</strong></div><div><span>片段</span><strong id="frameText">—</strong></div></div>
       <div class="progress"><i id="progressBar"></i></div>
-      <p class="tip">打开单码或四码时，按这台屏能稳定达到的最高速度预填参数。四码每帧只列出 1003 / 1273 / 1465 B。窗口里也能播，全屏模块更大。60 Hz 用 30 FPS；120 Hz 四码可用 60 FPS。四码交错换对角。空格键暂停，全屏后右上角同样有效。</p>
+      <p class="tip">打开单码或四码时，按这台屏能稳定达到的最高速度预填参数。四码每帧只列出 1003 / 1273 / 1465 B。窗口里也能播，全屏模块更大。60 Hz 用 30 FPS；120 Hz 四码可用 60 FPS。四码交错换对角。双码是实验：只占 2×2 上排；60 FPS 用 1465 B 拿远，30 FPS 可用 1732 B。不能替代冻结四码 1465 B · 30 FPS。空格键暂停，全屏后右上角同样有效。</p>
     </section>
     <section class="panel viewer">
       <canvas id="qrCanvas" width="1080" height="1080"></canvas>

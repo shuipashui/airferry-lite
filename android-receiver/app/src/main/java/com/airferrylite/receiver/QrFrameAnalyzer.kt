@@ -379,6 +379,9 @@ class QrFrameAnalyzer(
         }
         when {
             hits.size >= 3 -> trackedTiles.set(ScanLayout.tilesFromHits(perCode, imageWidth, imageHeight))
+            hits.size >= 2 && (previous == null || previous.size <= 2) -> {
+                trackedTiles.set(ScanLayout.tilesFromHits(perCode, imageWidth, imageHeight))
+            }
             previous != null && previous.isNotEmpty() -> {
                 trackedTiles.set(ScanLayout.followContainedHits(previous, perCode, imageWidth, imageHeight))
             }

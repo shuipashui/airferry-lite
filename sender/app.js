@@ -28,6 +28,8 @@
   const RECEIVER_URL = "https://shuipashui.github.io/airferry-lite/";
   const QR_CACHE_LIMIT = 64;
   const QUAD_MAX_FRAME_BYTES = 1465;
+  const DUAL_FRAME_BYTES = 1732;
+  const DUAL_60FPS_MAX_BYTES = 1465;
   const FPS_CHOICES = {
     single: [
       ["20", "20 FPS"],
@@ -41,6 +43,12 @@
       ["60", "60 FPS（高刷）"],
       ["90", "90 FPS（高刷）"],
       ["120", "120 FPS（高刷）"]
+    ],
+    dual: [
+      ["20", "20 FPS"],
+      ["24", "24 FPS"],
+      ["30", "30 FPS"],
+      ["60", "60 FPS"]
     ]
   };
   const CHUNK_CHOICES = {
@@ -53,6 +61,12 @@
       ["1003", "1003 B"],
       ["1273", "1273 B"],
       ["1465", "1465 B"]
+    ],
+    dual: [
+      ["1003", "1003 B"],
+      ["1273", "1273 B"],
+      ["1465", "1465 B（60 FPS）"],
+      ["1732", "1732 B（V30）"]
     ]
   };
   const HIGH_QUEUE_LIMIT = 8;
@@ -61,6 +75,7 @@
   const LINK_QUIET_MODULES = 4;
   const COMMON_HZ = [60, 75, 90, 120, 144, 165, 240];
   const QUAD_PAIRS = [[0, 3], [1, 2]];
+  const DUAL_SLOTS = [0, 1];
   let file = null;
   let transfer = null;
   let animationFrame = 0;
@@ -80,6 +95,24 @@
   let lastRafAt = 0;
   let measuredRefreshHz = 0;
   const rafSamples = [];
+
+  function codesForMode(mode) {
+    if (mode === "quad") return 4;
+    if (mode === "dual") return 2;
+    return 1;
+  }
+
+  function layoutShape(codes) {
+    if (codes === 4) return { columns: 2, rows: 2, quiet: QUAD_QUIET_MODULES };
+    if (codes === 4 || codes === 2) return { columns: 2, rows: 2, quiet: QUAD_QUIET_MODULES };
+    return { columns: 1, rows: 1, quiet: QUIET_MODULES };
+  }
+
+  function capFrameBytes(codes, frameBytes) {
+    if (codes === 4) return Math.min(frameBytes, QUAD_MAX_FRAME_BYTES);
+    if (codes === 2) return Math.min(frameBytes, DUAL_FRAME_BYTES);
+    return frameBytes;
+  }
 
   function selectFile(next) {
     file = next || null;
@@ -112,9 +145,9 @@
       const sourceBytes = new Uint8Array(await file.arrayBuffer());
       if (!H) throw new Error("高速协议未加载");
       const packed = await H.packFile(file.name, file.type || "application/octet-stream", sourceBytes);
-      codesPerScreen = qrMode.value === "quad" ? 4 : 1;
+      codesPerScreen = codesForMode(qrMode.value);
       const frameBytes = Number(chunkSize.value);
-      const effectiveFrameBytes = codesPerScreen === 4 ? Math.min(frameBytes, QUAD_MAX_FRAME_BYTES) : frameBytes;
+      const effectiveFrameBytes = capFrameBytes(codesPerScreen, frameBytes);
       const blockLen = effectiveFrameBytes - H.HEADER_LEN;
       const sessionId = (Math.floor(Math.random() * 0xffff) + 1) & 0xffff;
       const encoder = new H.LTEncoder(packed.container, blockLen, sessionId);
@@ -127,7 +160,7 @@
           blockLen,
           totalLen: packed.container.length,
           payloadFnv: H.fnv1a(packed.container),
-          layoutCodes: codesPerScreen === 4 ? 4 : 1,
+          layoutCodes: codesPerScreen === 1 ? 1 : 4,
           systematic: true
         },
         session: sessionId.toString(16).padStart(4, "0"),
@@ -143,7 +176,7 @@
       liveSeqs = [0, 0, 0, 0];
       emitted = 0;
       qrCache.clear();
-      if (codesPerScreen === 4) {
+      if (codesPerScreen === 4 || codesPerScreen === 2) {
         fillHighQueue(2);
         paintQueued(highQueue.shift());
         paintQueued(highQueue.shift());
@@ -304,15 +337,17 @@
   function playbackStatus() {
     const playing = codesPerScreen === 4
       ? "正在循环播放 · 四码交错换对角"
-      : "正在循环播放";
+      : codesPerScreen === 2
+        ? "正在循环播放 · 双码上排交替更新"
+        : "正在循环播放";
     if (!measuredRefreshHz) return playing;
     const interval = updateIntervalVsyncs();
-    const unit = codesPerScreen === 4 ? "一对" : "一屏";
+    const unit = codesPerScreen === 4 ? "一对" : codesPerScreen === 2 ? "一格" : "一屏";
     return playing + " · 屏 " + measuredRefreshHz + " Hz · 每 " + interval + " vsync 换" + unit;
   }
 
   function updateIntervalVsyncs() {
-    if (codesPerScreen === 4) return Math.max(1, Math.round(vsyncsPerQr / 2));
+    if (codesPerScreen === 4 || codesPerScreen === 2) return Math.max(1, Math.round(vsyncsPerQr / 2));
     return vsyncsPerQr;
   }
 
@@ -326,14 +361,16 @@
     emitted += next.seqs.length;
     frameText.textContent = codesPerScreen === 4
       ? "四码 " + liveSeqs.join(",") + " · K=" + transfer.total
-      : "喷泉帧 " + next.seqs.join(",") + " · K=" + transfer.total;
+      : codesPerScreen === 2
+        ? "双码 " + DUAL_SLOTS.map((slot) => liveSeqs[slot]).join(",") + " · K=" + transfer.total
+        : "喷泉帧 " + next.seqs.join(",") + " · K=" + transfer.total;
     progressBar.style.width = Math.min(100, emitted / Math.ceil(transfer.total * 1.15) * 100) + "%";
     fillHighQueue(2);
   }
 
   function paintQueued(item) {
     if (!item) return;
-    if (codesPerScreen === 4 && item.indices) {
+    if ((codesPerScreen === 4 || codesPerScreen === 2) && item.indices) {
       for (let index = 0; index < item.indices.length; index += 1) {
         liveSeqs[item.indices[index]] = item.seqs[index];
         livePatterns[item.indices[index]] = item.patterns[index];
@@ -374,9 +411,25 @@
         highQueue.push({ pair, indices, seqs, patterns });
         continue;
       }
+      if (codesPerScreen === 2) {
+        const slot = DUAL_SLOTS[highNextPair & 1];
+        highNextPair ^= 1;
+        const encoded = encodeNextCode();
+        highQueue.push({ indices: [slot], seqs: [encoded.seq], patterns: [encoded.pattern] });
+        continue;
+      }
       const encoded = encodeNextCode();
       highQueue.push({ seqs: [encoded.seq], patterns: [encoded.pattern] });
     }
+  }
+
+  function qrVersionForBytes(frameBytes) {
+    if (frameBytes === 2953) return 40;
+    if (frameBytes === DUAL_FRAME_BYTES) return 30;
+    if (frameBytes === 1465) return 27;
+    if (frameBytes === 1273) return 25;
+    if (frameBytes === 1003) return 22;
+    return 0;
   }
 
   function getHighSpeedQrPattern(bytes, seq) {
@@ -384,7 +437,7 @@
     const hit = qrCache.get(key);
     if (hit) return hit;
     const frameBytes = bytes.length;
-    const qr = qrcode(frameBytes === 2953 ? 40 : 0, "L");
+    const qr = qrcode(qrVersionForBytes(frameBytes), "L");
     qr.addBytes(bytes);
     qr.make(4);
     const pattern = extractPattern(qr);
@@ -453,24 +506,21 @@
     drawScreen([pattern]);
   }
 
-  function viewerContentSide(viewer) {
+  function viewerContentBox() {
+    const viewer = canvas.closest(".viewer") || canvas.parentElement;
+    if (!viewer) return { width: 256, height: 256 };
     const style = getComputedStyle(viewer);
     const padX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
     const padY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
-    const width = Math.max(0, viewer.clientWidth - padX);
-    const height = Math.max(0, viewer.clientHeight - padY);
-    return Math.floor(Math.min(width, height));
+    return {
+      width: Math.max(1, viewer.clientWidth - padX),
+      height: Math.max(1, viewer.clientHeight - padY)
+    };
   }
 
   function devicePixelRatioValue() {
     const value = window.devicePixelRatio;
     return Number.isFinite(value) && value > 0 ? value : 1;
-  }
-
-  function cssBudgetSide() {
-    const viewer = canvas.closest(".viewer") || canvas.parentElement;
-    if (!viewer) return 256;
-    return Math.max(1, viewerContentSide(viewer));
   }
 
   function integerModuleScale(cssBudget, dpr, moduleCount) {
@@ -484,16 +534,32 @@
   }
 
   function layoutMetrics(patterns) {
-    const quad = patterns.length === 4;
-    const columns = quad ? 2 : 1;
-    const quiet = quad ? QUAD_QUIET_MODULES : QUIET_MODULES;
+    const codes = patterns.length;
+    const shape = layoutShape(codes);
+    const quiet = shape.quiet;
     const modules = patterns[0].count + quiet * 2;
     const dpr = devicePixelRatioValue();
-    const cssBudget = cssBudgetSide();
-    const scale = integerModuleScale(cssBudget, dpr, modules * columns);
+    const box = viewerContentBox();
+    const scale = Math.min(
+      integerModuleScale(box.width, dpr, modules * shape.columns),
+      integerModuleScale(box.height, dpr, modules * shape.rows)
+    );
     const tilePx = modules * scale;
-    const canvasPx = tilePx * columns;
-    return { quad, columns, quiet, scale, tilePx, canvasPx, cssSide: canvasPx / dpr };
+    const canvasW = tilePx * shape.columns;
+    const canvasH = tilePx * shape.rows;
+    return {
+      quad: codes === 4,
+      dual: codes === 2,
+      columns: shape.columns,
+      rows: shape.rows,
+      quiet,
+      scale,
+      tilePx,
+      canvasW,
+      canvasH,
+      cssWidth: canvasW / dpr,
+      cssHeight: canvasH / dpr
+    };
   }
 
   function syncCanvasSize(patterns) {
@@ -506,11 +572,11 @@
     const metrics = layoutMetrics(patterns);
     canvas.style.maxWidth = "none";
     canvas.style.maxHeight = "none";
-    canvas.style.width = metrics.cssSide + "px";
-    canvas.style.height = metrics.cssSide + "px";
-    if (canvas.width !== metrics.canvasPx || canvas.height !== metrics.canvasPx) {
-      canvas.width = metrics.canvasPx;
-      canvas.height = metrics.canvasPx;
+    canvas.style.width = metrics.cssWidth + "px";
+    canvas.style.height = metrics.cssHeight + "px";
+    if (canvas.width !== metrics.canvasW || canvas.height !== metrics.canvasH) {
+      canvas.width = metrics.canvasW;
+      canvas.height = metrics.canvasH;
     }
     return metrics;
   }
@@ -598,6 +664,7 @@
     if (bytes <= 1273) return 117;
     if (bytes <= 1367) return 121;
     if (bytes <= 1465) return 125;
+    if (bytes <= 1732) return 137;
     if (bytes <= 1952) return 145;
     if (bytes <= 2188) return 153;
     if (bytes <= 2303) return 157;
@@ -606,17 +673,19 @@
   }
 
   function currentLayout() {
-    const codes = qrMode.value === "quad" ? 4 : 1;
+    const codes = codesForMode(qrMode.value);
     const frameBytes = Number(chunkSize.value);
-    const bytes = codes === 4 ? Math.min(frameBytes, QUAD_MAX_FRAME_BYTES) : frameBytes;
+    const bytes = capFrameBytes(codes, frameBytes);
     const frameRate = Number(fps.value);
     const header = H?.HEADER_LEN || HEADER_LEN;
-    const quiet = codes === 4 ? QUAD_QUIET_MODULES : QUIET_MODULES;
-    const columns = codes === 4 ? 2 : 1;
-    const modules = qrModules(bytes) + quiet * 2;
+    const shape = layoutShape(codes);
+    const modules = qrModules(bytes) + shape.quiet * 2;
     const dpr = devicePixelRatioValue();
-    const cssBudget = cssBudgetSide();
-    const scale = integerModuleScale(cssBudget, dpr, modules * columns);
+    const box = viewerContentBox();
+    const scale = Math.min(
+      integerModuleScale(box.width, dpr, modules * shape.columns),
+      integerModuleScale(box.height, dpr, modules * shape.rows)
+    );
     return {
       codes,
       bytes,
@@ -634,7 +703,9 @@
     let text = "理论速度：" + formatRate(rate.screen) + "（" + rate.bytes + " B × " + rate.codes + " 码 × " + rate.fps + " FPS）· 载荷约 " + formatRate(rate.payload);
     if (rate.scale) text += " · 每模块 " + rate.scale + " 设备像素（整数）";
     if (rate.codes === 4) text += "。四码交错换对角，每次只换两个";
+    if (rate.codes === 2) text += "。双码只占 2×2 上排。60 FPS 用 1465 B（拿远）。1732 B 只给 30 FPS。不能替代冻结四码 1465 B · 30 FPS";
     if (rate.codes === 4 && rate.cell && rate.cell < 3) text += "。模块偏小，请全屏后再播";
+    if (rate.codes === 2 && rate.cell && rate.cell < 3) text += "。模块偏小，请全屏后再播";
     if (rate.codes === 4 && rate.fps >= 60 && (measuredRefreshHz || 60) < 90) text += "。60 Hz 屏上四码 60 FPS 容易拖影，改用 30 FPS 通常更快";
     if (rate.codes === 1 && rate.fps > 30) text += "。单码超过 30 FPS 时相机会拍到换码拖影，通常更慢";
     if (rate.fps > 60) text += "。分析流约 60 FPS，更高发送帧率不会增加唯一码";
@@ -642,7 +713,8 @@
   }
 
   function layoutName() {
-    return qrMode.value === "quad" ? "quad" : "single";
+    const mode = qrMode.value;
+    return mode === "quad" || mode === "dual" ? mode : "single";
   }
 
   function fillSelect(select, choices) {
@@ -665,6 +737,7 @@
 
   function fastestChunk(layout) {
     const choices = CHUNK_CHOICES[layout] || CHUNK_CHOICES.single;
+    if (layout === "dual" && Number(fps.value) >= 60) return String(DUAL_60FPS_MAX_BYTES);
     return choices[choices.length - 1][0];
   }
 
@@ -674,6 +747,7 @@
     let cap = Math.max(20, Math.floor(hz / 2));
     if (layout === "single") cap = Math.min(cap, 30);
     if (layout === "quad" && hz < 90) cap = Math.min(cap, 30);
+    if (layout === "dual" && hz < 90) cap = Math.min(cap, 30);
     const picked = [...allowed].reverse().find((value) => value <= cap);
     return String(picked || 30);
   }
@@ -682,9 +756,16 @@
     const layout = layoutName();
     fillChunkChoices(layout);
     fillFpsChoices(layout);
-    chunkSize.value = fastestChunk(layout);
     fps.value = fastestFps(layout);
+    chunkSize.value = fastestChunk(layout);
     renderRateHint();
+  }
+
+  function syncDualChunkToFps() {
+    if (layoutName() !== "dual") return;
+    if (Number(fps.value) >= 60 && Number(chunkSize.value) > DUAL_60FPS_MAX_BYTES) {
+      chunkSize.value = String(DUAL_60FPS_MAX_BYTES);
+    }
   }
 
   function probeRefreshHz() {
@@ -711,7 +792,10 @@
   }
 
   chunkSize.addEventListener("change", renderRateHint);
-  fps.addEventListener("change", renderRateHint);
+  fps.addEventListener("change", () => {
+    syncDualChunkToFps();
+    renderRateHint();
+  });
   qrMode.addEventListener("change", applyFastestLayout);
   function relayoutQr() {
     if (lastPatterns) drawScreen(lastPatterns);

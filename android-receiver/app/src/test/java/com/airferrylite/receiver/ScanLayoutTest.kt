@@ -134,7 +134,21 @@ class ScanLayoutTest {
     }
 
     @Test
-    fun exclusiveQuadrantsDoNotOverlap() {
+    fun twoHitsRebuildTwoTiles() {
+        val previous = listOf(
+            ScanRegion(80, 80, 200, 200),
+            ScanRegion(900, 80, 200, 200)
+        )
+        val hits = listOf(
+            listOf(120f to 140f, 280f to 140f, 120f to 280f, 280f to 280f),
+            listOf(620f to 140f, 780f to 140f, 620f to 280f, 780f to 280f)
+        )
+        val next = ScanLayout.tilesFromHits(hits, 1440, 1440)
+        assertEquals(2, next.size)
+        assertTrue(next[0].left < next[1].left)
+        assertTrue(next[1].left + next[1].width < 1440)
+        assertTrue(next[0].left != previous[0].left || next[0].width != previous[0].width)
+    }
         val region = ScanRegion(0, 0, 1000, 1000)
         val tiles = ScanLayout.exclusiveQuadrants(region)
         assertEquals(4, tiles.size)
