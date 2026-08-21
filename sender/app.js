@@ -176,7 +176,11 @@
       liveSeqs = [0, 0, 0, 0];
       emitted = 0;
       qrCache.clear();
-      if (codesPerScreen === 4 || dualStaggers()) {
+      if (quadRefreshesAll()) {
+        fillHighQueue(1);
+        paintQueued(highQueue.shift());
+        fillHighQueue(4);
+      } else if (codesPerScreen === 4 || dualStaggers()) {
         fillHighQueue(2);
         paintQueued(highQueue.shift());
         paintQueued(highQueue.shift());
@@ -340,13 +344,15 @@
 
   function playbackStatus() {
     const playing = codesPerScreen === 4
-      ? "正在循环播放 · 四码交错换对角"
+      ? (quadRefreshesAll() ? "正在循环播放 · 四码整屏同换" : "正在循环播放 · 四码交错换对角")
       : codesPerScreen === 2
         ? (dualUpdatesBoth() ? "正在循环播放 · 双码上排同时更新" : "正在循环播放 · 双码上排交替更新")
         : "正在循环播放";
     if (!measuredRefreshHz) return playing;
     const interval = updateIntervalVsyncs();
-    const unit = codesPerScreen === 4 ? "一对" : codesPerScreen === 2 ? (dualUpdatesBoth() ? "一屏" : "一格") : "一屏";
+    const unit = codesPerScreen === 4
+      ? (quadRefreshesAll() ? "一屏" : "一对")
+      : codesPerScreen === 2 ? (dualUpdatesBoth() ? "一屏" : "一格") : "一屏";
     return playing + " · 屏 " + measuredRefreshHz + " Hz · 每 " + interval + " vsync 换" + unit;
   }
 
@@ -358,7 +364,16 @@
     return codesPerScreen === 2 && Number(fps.value) < 60;
   }
 
+  function quadRefreshesAll() {
+    return codesPerScreen === 4 && Number(fps.value) < 60;
+  }
+
+  function encodeAheadCount() {
+    return dualUpdatesBoth() || quadRefreshesAll() ? 1 : 2;
+  }
+
   function updateIntervalVsyncs() {
+    if (quadRefreshesAll()) return vsyncsPerQr;
     if (codesPerScreen === 4 || dualStaggers()) return Math.max(1, Math.round(vsyncsPerQr / 2));
     return vsyncsPerQr;
   }
@@ -377,7 +392,7 @@
         ? "双码 " + DUAL_SLOTS.map((slot) => liveSeqs[slot]).join(",") + " · K=" + transfer.total
         : "喷泉帧 " + next.seqs.join(",") + " · K=" + transfer.total;
     progressBar.style.width = Math.min(100, emitted / Math.ceil(transfer.total * 1.15) * 100) + "%";
-    fillHighQueue(dualUpdatesBoth() ? 1 : 2);
+    fillHighQueue(encodeAheadCount());
   }
 
   function paintQueued(item) {
@@ -410,6 +425,18 @@
     if (!transfer) return;
     for (let count = 0; count < max && highQueue.length < HIGH_QUEUE_LIMIT; count += 1) {
       if (codesPerScreen === 4) {
+        if (quadRefreshesAll()) {
+          const indices = [0, 1, 2, 3];
+          const seqs = [];
+          const patterns = [];
+          for (let code = 0; code < indices.length; code += 1) {
+            const encoded = encodeNextCode();
+            seqs.push(encoded.seq);
+            patterns.push(encoded.pattern);
+          }
+          highQueue.push({ indices, seqs, patterns });
+          continue;
+        }
         const pair = highNextPair;
         highNextPair ^= 1;
         const indices = QUAD_PAIRS[pair];
@@ -726,7 +753,7 @@
     const rate = currentLayout();
     let text = "理论速度：" + formatRate(rate.screen) + "（" + rate.bytes + " B × " + rate.codes + " 码 × " + rate.fps + " FPS）· 载荷约 " + formatRate(rate.payload);
     if (rate.scale) text += " · 每模块 " + rate.scale + " 设备像素（整数）";
-    if (rate.codes === 4) text += "。四码交错换对角，每次只换两个";
+    if (rate.codes === 4) text += "。30 FPS 四码整屏同换；60 FPS 仍交错换对角，避免四格同刷拖影";
     if (rate.codes === 2) text += "。双码只占 2×2 上排。60 FPS 两格同时更新，用 1465 B。1732 B 只给 30 FPS";
     if (rate.codes === 4 && rate.cell && rate.cell < 3) text += "。模块偏小，请全屏后再播";
     if (rate.codes === 2 && rate.cell && rate.cell < 3) text += "。模块偏小，请全屏后再播";

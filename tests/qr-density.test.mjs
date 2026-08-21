@@ -36,7 +36,8 @@ assert.ok(senderApp.includes("function integerModuleScale"), "QR size must pick 
 assert.ok(senderApp.includes("viewer.clientWidth") && senderApp.includes("viewer.clientHeight"), "QR budget must follow the viewer box, including windowed mode");
 assert.ok(!senderStyles.includes("max-width:96vmin"), "windowed QR must not be capped at 96vmin");
 assert.ok(senderApp.includes("tile.width * scale"), "QR blit destination must be integer module scale");
-assert.ok(senderApp.includes("QUAD_PAIRS = [[0, 3], [1, 2]]"), "quad playback must stagger checkerboard pairs");
+assert.ok(senderApp.includes("QUAD_PAIRS = [[0, 3], [1, 2]]"), "quad 60 FPS must keep checkerboard pair stagger");
+assert.ok(senderApp.includes("function quadRefreshesAll"), "quad 30 FPS should refresh all four codes together");
 assert.ok(senderApp.includes("Math.round(vsyncsPerQr / 2)"), "quad pair updates must keep the same unique-code rate as four-at-once");
 assert.ok(senderApp.includes("function setPlayLabel"));
 assert.ok(senderApp.includes("hudPlayBtn"));
