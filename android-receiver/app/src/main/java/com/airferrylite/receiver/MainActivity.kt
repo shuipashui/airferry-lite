@@ -42,6 +42,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 @OptIn(ExperimentalCamera2Interop::class)
 class MainActivity : AppCompatActivity() {
@@ -110,6 +111,8 @@ class MainActivity : AppCompatActivity() {
     private var lastRecoverAt = 0L
     private var recoverBurst = 0
     private var recoverBurstStartedAt = 0L
+    private val lastAfl2Session = AtomicReference<String?>(null)
+    private var lowHitWindows = 0
 
     private data class PendingSave(val name: String, val mime: String, val bytes: ByteArray)
 
@@ -187,6 +190,7 @@ class MainActivity : AppCompatActivity() {
                     lastStats = stats
                     lastStatsAt = SystemClock.elapsedRealtime()
                     recoverBurst = 0
+                    maybeRecoverLowDualHits(stats)
                     renderDiagnostics()
                 }
             }
@@ -359,6 +363,14 @@ class MainActivity : AppCompatActivity() {
         highBytesReceived += bytes.size.toLong()
         highLastFrameAt = SystemClock.elapsedRealtime()
         val update = highSpeedAssembler.accept(bytes)
+        val session = update.session
+        if (session != null && lastAfl2Session.getAndSet(session) != session) {
+            ContextCompat.getMainExecutor(this).execute {
+                frameAnalyzer.resetSession()
+                if (HighSpeedAssembler.isMultiLayoutFrame(bytes)) frameAnalyzer.setMultiLayout(true)
+                lowHitWindows = 0
+            }
+        }
         if (update.error != null) highProtocolErrors += 1
         lastHighSolved = update.solvedBlocks
         lastHighTotal = update.totalBlocks
@@ -397,6 +409,11 @@ class MainActivity : AppCompatActivity() {
         }
         if (file != null && update.session != null) {
             offerCompletedFile("high:${update.session}", file.name, file.mime, file.bytes)
+            lastAfl2Session.set(null)
+            ContextCompat.getMainExecutor(this).execute {
+                frameAnalyzer.resetSession()
+                lowHitWindows = 0
+            }
         }
     }
 
@@ -462,6 +479,8 @@ class MainActivity : AppCompatActivity() {
         lastHighUnique = 0
         lastHighSolved = 0
         lastHighTotal = 0
+        lastAfl2Session.set(null)
+        lowHitWindows = 0
         val stalled = frameAnalyzer.isPaused() ||
             (lastStatsAt != 0L && SystemClock.elapsedRealtime() - lastStatsAt > SCAN_STALL_MS)
         if (stalled) {
@@ -495,6 +514,31 @@ class MainActivity : AppCompatActivity() {
         }
         restartScanner(countRecovery = true, forceRebind = true)
         statusText.text = "扫描卡住，已重启相机"
+    }
+
+    private fun maybeRecoverLowDualHits(stats: ScanStats) {
+        if (!cameraStarted || bindingCamera || isDestroyed) return
+        val analysis = stats.analysisFps
+        val perFrame = if (analysis > 5) stats.validQrFps / analysis else 2.0
+        val stuckOnOneCode = stats.multiLayout &&
+            stats.tileCount in 1..2 &&
+            perFrame in 0.4..1.35
+        if (stuckOnOneCode) {
+            lowHitWindows += 1
+            if (lowHitWindows >= 2) {
+                lowHitWindows = 0
+                val now = SystemClock.elapsedRealtime()
+                if (lastRecoverAt != 0L && now - lastRecoverAt < RECOVER_COOLDOWN_MS) {
+                    frameAnalyzer.resetSession()
+                    frameAnalyzer.setMultiLayout(true)
+                    return
+                }
+                restartScanner(countRecovery = true, forceRebind = true)
+                statusText.text = "双码只扫到一格，已重启相机"
+            }
+            return
+        }
+        if (perFrame >= 1.5 || perFrame < 0.2) lowHitWindows = 0
     }
 
     private fun restartScanner(countRecovery: Boolean, forceRebind: Boolean = false) {
@@ -639,6 +683,13 @@ class MainActivity : AppCompatActivity() {
         size < 1024 -> "$size B"
         size < 1048576 -> "%.1f KB".format(size / 1024.0)
         else -> "%.1f MB".format(size / 1048576.0)
+    }
+
+    override fun onStop() {
+        if (::frameAnalyzer.isInitialized) frameAnalyzer.resetSession()
+        lastAfl2Session.set(null)
+        lowHitWindows = 0
+        super.onStop()
     }
 
     override fun onDestroy() {
