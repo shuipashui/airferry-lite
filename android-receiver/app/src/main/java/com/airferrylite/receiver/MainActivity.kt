@@ -238,7 +238,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun continueReceive() {
         resetTransfer()
-        beginReceive()
+        showScanning()
+        startScanner()
     }
 
     private fun beginReceive() {
@@ -288,21 +289,34 @@ class MainActivity : AppCompatActivity() {
         null
     }
 
-    private fun stopScanner() {
+    private fun pauseScanner() {
         imageAnalysis?.clearAnalyzer()
-        cameraProvider?.unbindAll()
-        imageAnalysis = null
         cameraStarted = false
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (::frameAnalyzer.isInitialized) frameAnalyzer.setAnalysisIdle(true)
     }
 
+    private fun stopScanner() {
+        pauseScanner()
+        cameraProvider?.unbindAll()
+        imageAnalysis = null
+    }
+
     private fun startScanner() {
         if (isDestroyed) return
-        if (cameraStarted && imageAnalysis != null) return
-        cameraStarted = true
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (::frameAnalyzer.isInitialized) frameAnalyzer.setAnalysisIdle(false)
+        val bound = imageAnalysis
+        if (bound != null) {
+            cameraStarted = true
+            bound.setAnalyzer(cameraExecutor, frameAnalyzer)
+            return
+        }
+        if (cameraStarted && cameraProvider != null) {
+            bindCamera()
+            return
+        }
+        cameraStarted = true
         val existing = cameraProvider
         if (existing != null) {
             bindCamera()
@@ -312,7 +326,7 @@ class MainActivity : AppCompatActivity() {
         providerFuture.addListener({
             try {
                 cameraProvider = providerFuture.get()
-                if (cameraStarted && !isDestroyed) bindCamera()
+                if (cameraStarted && !isDestroyed && imageAnalysis == null) bindCamera()
             } catch (error: Exception) {
                 cameraStarted = false
                 window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -574,7 +588,7 @@ class MainActivity : AppCompatActivity() {
         lastHighTotal = 0
         frameAnalyzer.consumeRecoverRequest()
         recoverBurst = 0
-        frameAnalyzer.resetSession()
+        frameAnalyzer.resetProtocol()
         updateUi(TransferUpdate(null, 0, 0))
         fileText.text = "等待文件"
         progress.progress = 0
@@ -657,7 +671,7 @@ class MainActivity : AppCompatActivity() {
             saveButton.isEnabled = true
             fileText.text = "$name · ${formatBytes(bytes.size.toLong())}"
             progress.progress = 100
-            stopScanner()
+            pauseScanner()
             showResult(pending)
         }
     }

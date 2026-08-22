@@ -174,12 +174,7 @@ class QrFrameAnalyzer(
         }
     }
 
-    fun resetSession() {
-        setMultiLayout(false)
-        singleLayoutConfirmed.set(false)
-        trackedRoi.set(null)
-        trackedTiles.set(null)
-        tileUndercount.set(0)
+    fun resetProtocol() {
         roiMisses.set(0)
         droppedFrames.set(0)
         submittedFrames.set(0)
@@ -195,6 +190,15 @@ class QrFrameAnalyzer(
         recoverRequested.set(false)
         skipUntilRecover.set(false)
         analysisIdle.set(false)
+    }
+
+    fun resetSession() {
+        setMultiLayout(false)
+        singleLayoutConfirmed.set(false)
+        trackedRoi.set(null)
+        trackedTiles.set(null)
+        tileUndercount.set(0)
+        resetProtocol()
     }
 
     private fun chooseRegion(width: Int, height: Int): ScanRegion {
