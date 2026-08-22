@@ -482,17 +482,15 @@ class QrFrameAnalyzer(
         roiMisses.set(0)
         validQrInWindow.addAndGet(transferHits.size.toLong())
         noteLayoutFromHits(transferHits)
-        val lockedMulti = transferHits.size >= 2
+        val hasDualLayout = transferHits.any { QrPayload.isDualLayout(QrPayload.bytesFrom(it.bytes, it.text)) }
+        val hasQuadLayout = transferHits.any { QrPayload.isQuadLayout(QrPayload.bytesFrom(it.bytes, it.text)) }
+        val lockedMulti = transferHits.size >= 2 || hasDualLayout || hasQuadLayout
         if (lockedMulti) {
             lockMultiLayout()
-            multiHits.addAndGet(transferHits.size.toLong())
-        } else {
-            if (multiLayout.get() && (trackedTiles.get()?.size ?: 0) < 2) {
-                multiLayout.set(false)
-                trackedRoi.set(null)
-                singleLayoutConfirmed.set(false)
-                tileUndercount.set(0)
+            if (transferHits.size >= 2) {
+                multiHits.addAndGet(transferHits.size.toLong())
             }
+        } else {
             val bytes = QrPayload.bytesFrom(transferHits.first().bytes, transferHits.first().text)
             if (QrPayload.isMultiLayout(bytes)) {
                 singleLayoutConfirmed.set(false)
@@ -565,6 +563,14 @@ class QrFrameAnalyzer(
             hits.size >= 2 && (previous == null || previous.size < 2) -> {
                 tileUndercount.set(0)
                 trackedTiles.set(ScanLayout.tilesFromHits(perCode, imageWidth, imageHeight))
+            }
+            dualStream.get() && hits.size == 1 && (previous == null || previous.size < 2) -> {
+                tileUndercount.set(0)
+                val pair = ScanLayout.pairFromHit(perCode.first(), imageWidth, imageHeight)
+                trackedTiles.set(
+                    if (pair.size >= 2) pair
+                    else ScanLayout.tilesFromHits(perCode, imageWidth, imageHeight)
+                )
             }
             previous != null && previous.size >= 4 && hits.size < 2 -> {
                 tileUndercount.set(0)
