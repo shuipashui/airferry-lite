@@ -228,9 +228,23 @@ class QrFrameAnalyzer(
     fun noteStreamLayout(layoutCodes: Int) {
         if (layoutCodes <= 0) return
         streamLayoutCodes.set(maxOf(streamLayoutCodes.get(), layoutCodes))
-        if (layoutCodes >= 2) dualHint.set(true)
-        singleLayoutConfirmed.set(false)
+        when {
+            layoutCodes >= 4 -> {
+                dualLayout.set(false)
+                dualSettled.set(false)
+                dualHint.set(false)
+                sawThreeOrMore.set(false)
+                twoTileStreak.set(0)
+                singleLayoutConfirmed.set(false)
+            }
+            layoutCodes == 2 -> {
+                dualHint.set(true)
+                singleLayoutConfirmed.set(false)
+            }
+        }
     }
+
+    private fun activeQuadStream(): Boolean = streamLayoutCodes.get() >= 4
 
     private fun chooseRegion(width: Int, height: Int): ScanRegion {
         return ScanLayout.activeRegion(trackedRoi.get(), roiMisses.get(), width, height)
@@ -273,7 +287,8 @@ class QrFrameAnalyzer(
             add(decoder.read(luma, region, maxSymbols))
             if (
                 transferCount(merged) == 1 &&
-                (dualHint.get() || streamLayoutCodes.get() >= 2 || anyDualLayout(merged) || anyMultiLayout(merged))
+                !activeQuadStream() &&
+                (dualHint.get() || anyDualLayout(merged) || anyMultiLayout(merged))
             ) {
                 add(
                     readCropsParallel(
@@ -293,7 +308,7 @@ class QrFrameAnalyzer(
         }
         // Dual header (layoutCodes=2): never run the 8-way quad fill. Old
         // layoutCodes=4 dual still settles after six 2-of-2 frames.
-        if (dualLayout.get() || dualTilesSettled(previousTiles.size)) {
+        if (!activeQuadStream() && (dualLayout.get() || dualTilesSettled(previousTiles.size))) {
             if (previousTiles.size < 2) {
                 add(decoder.read(luma, ScanLayout.centerSquare(luma.width, luma.height), 4))
                 if (transferCount(merged) == 1) acquireDualSibling()
@@ -464,8 +479,8 @@ class QrFrameAnalyzer(
         }
         roiMisses.set(0)
         validQrInWindow.addAndGet(transferHits.size.toLong())
-        if (anyDualLayout(transferHits)) dualHint.set(true)
-        if (transferHits.size >= 2 && dualHint.get()) {
+        if (!activeQuadStream() && anyDualLayout(transferHits)) dualHint.set(true)
+        if (transferHits.size >= 2 && dualHint.get() && !activeQuadStream()) {
             lockDualLayout()
             multiHits.addAndGet(transferHits.size.toLong())
         } else if (transferHits.size >= 2) {

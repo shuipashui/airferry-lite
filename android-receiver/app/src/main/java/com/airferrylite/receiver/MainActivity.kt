@@ -139,6 +139,7 @@ class MainActivity : AppCompatActivity() {
     private var restartStartedAt = 0L
     private var settlePreviewBeforeAnalyze = false
     private var skipHalWaitOnBeginReceive = false
+    private var softDecoderRecoverAttempted = false
     private var restartDelayMs = PROCESS_RESTART_DELAY_MS
     private val restartProgressTick = object : Runnable {
         override fun run() {
@@ -245,6 +246,7 @@ class MainActivity : AppCompatActivity() {
                     lastStats = stats
                     lastStatsAt = SystemClock.elapsedRealtime()
                     recoverBurst = 0
+                    maybeSoftDecoderRecover(stats)
                     renderDiagnostics()
                 }
             }
@@ -253,15 +255,23 @@ class MainActivity : AppCompatActivity() {
         saveButton.setOnClickListener { savePendingFile() }
         watchdog.postDelayed(watchdogTick, WATCHDOG_INTERVAL_MS)
         if (consumeAutostartScan()) {
-            settlePreviewBeforeAnalyze = true
-            showOpeningCamera()
             val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            val fromContinue = prefs.getBoolean(PREF_AUTOSTART_FROM_CONTINUE, false)
+            if (fromContinue) {
+                prefs.edit().remove(PREF_AUTOSTART_FROM_CONTINUE).apply()
+            }
             val override = prefs.getLong(PREF_AUTOSTART_BIND_DELAY_OVERRIDE_MS, -1L)
             if (override >= 0L) {
                 prefs.edit().remove(PREF_AUTOSTART_BIND_DELAY_OVERRIDE_MS).apply()
             }
-            val bindDelay = if (override >= 0L) override else AUTOSTART_BIND_DELAY_MS
+            val bindDelay = when {
+                fromContinue && override == 0L -> 0L
+                override >= 0L -> override
+                else -> AUTOSTART_BIND_DELAY_MS
+            }
             skipHalWaitOnBeginReceive = override >= 0L
+            settlePreviewBeforeAnalyze = !fromContinue
+            if (fromContinue) showScanning() else showOpeningCamera()
             previewView.post {
                 watchdog.postDelayed({
                     requestStartReceive()
@@ -296,15 +306,21 @@ class MainActivity : AppCompatActivity() {
         if (processRestarting) return
         findViewById<Button>(R.id.continueReceiveButton).isEnabled = false
         val (preKill, postKill) = planColdRestart()
-        scheduleColdRestart(preKill, postKill, "正在释放相机")
+        scheduleColdRestart(preKill, postKill, "正在释放相机", fromContinue = true)
     }
 
-    private fun scheduleColdRestart(preKillWaitMs: Long, postKillBindDelayMs: Long, statusMessage: String) {
+    private fun scheduleColdRestart(
+        preKillWaitMs: Long,
+        postKillBindDelayMs: Long,
+        statusMessage: String,
+        fromContinue: Boolean = false
+    ) {
         if (processRestarting) return
         processRestarting = true
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             .edit()
             .putBoolean(PREF_AUTOSTART_SCAN, true)
+            .putBoolean(PREF_AUTOSTART_FROM_CONTINUE, fromContinue)
             .putLong(PREF_AUTOSTART_BIND_DELAY_OVERRIDE_MS, postKillBindDelayMs)
             .commit()
         showRestarting(preKillWaitMs, statusMessage)
@@ -363,11 +379,28 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun launchReceiveAfterHalWait() {
+        softDecoderRecoverAttempted = false
         showScanning()
         if (imageAnalysis == null) {
             settlePreviewBeforeAnalyze = true
         }
         previewView.post { startScanner() }
+    }
+
+    private fun maybeSoftDecoderRecover(stats: ScanStats) {
+        if (!cameraStarted || processRestarting || softDecoderRecoverAttempted) return
+        if (stats.submittedFrames < 120 || stats.submittedFrames > 500) return
+        val emptyRatio = stats.emptyDecodes.toDouble() / stats.submittedFrames.toDouble()
+        if (emptyRatio < 0.55) return
+        if (highUniqueFrameCount >= 20) return
+        softDecoderRecoverAttempted = true
+        imageAnalysis?.clearAnalyzer()
+        frameAnalyzer.replaceDecoders()
+        watchdog.postDelayed({
+            if (isDestroyed) return@postDelayed
+            imageAnalysis?.setAnalyzer(cameraExecutor, frameAnalyzer)
+            frameAnalyzer.setAnalysisIdle(false)
+        }, 800L)
     }
 
     private fun showIdle() {
@@ -1020,6 +1053,7 @@ class MainActivity : AppCompatActivity() {
         private const val PREFS_NAME = "airferry-lite"
         private const val PREF_FPS = "preview_fps"
         private const val PREF_AUTOSTART_SCAN = "autostart_scan"
+        private const val PREF_AUTOSTART_FROM_CONTINUE = "autostart_from_continue"
         private const val PREF_AUTOSTART_BIND_DELAY_OVERRIDE_MS = "autostart_bind_delay_ms"
         private const val PREF_CAMERA_HELD = "camera_held"
         private const val PREF_LAST_CAMERA_RELEASE_MS = "camera_release_ms"
