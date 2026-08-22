@@ -30,7 +30,7 @@
       <div class="actions"><button id="prepareBtn" class="primary" disabled>生成二维码流</button><button id="playBtn" disabled>开始播放</button><button id="fullscreenBtn" disabled>全屏</button><button id="resetBtn" disabled>重置</button><a id="openReceiver" class="jump" target="_blank" rel="noopener">打开接收端</a></div>
       <div class="status"><div><span>状态</span><strong id="statusText">等待文件</strong></div><div><span>传输</span><strong id="compressText">—</strong></div><div><span>会话</span><strong id="sessionText">—</strong></div><div><span>片段</span><strong id="frameText">—</strong></div></div>
       <div class="progress"><i id="progressBar"></i></div>
-      <p class="tip">打开单码、四码或双码时，按这台屏能稳定达到的最高速度预填参数。四码每帧只列出 1003 / 1273 / 1465 B。窗口里也能播，全屏模块更大。60 Hz：单码/四码预填 30 FPS，双码预填 1732 B · 60 FPS。四码 30 FPS 整屏同换，60 FPS 交错换对角。双码只占 2×2 上排；60 FPS 两格同时更新。空格键暂停，全屏后右上角同样有效。</p>
+      <p class="tip">打开单码、四码或双码时，按这台屏能稳定达到的最高速度预填参数。四码每帧只列出 1003 / 1273 / 1465 B。窗口里也能播，全屏模块更大。60 Hz：单码/四码预填 30 FPS，双码预填 2068 B · 60 FPS。四码 30 FPS 整屏同换，60 FPS 交错换对角。双码占 2×2 左上和右下；60 FPS 两格同时更新。空格键暂停，全屏后右上角同样有效。</p>
     </section>
     <section class="panel viewer">
       <canvas id="qrCanvas" width="1080" height="1080"></canvas>

@@ -27,9 +27,9 @@
   const HEADER_LEN = 20;
   const RECEIVER_URL = "https://shuipashui.github.io/airferry-lite/";
   const QR_CACHE_LIMIT = 256;
-  const QR_WORKER_COUNT = 3;
+  const QR_WORKER_COUNT = 4;
   const QUAD_MAX_FRAME_BYTES = 1465;
-  const DUAL_FRAME_BYTES = 1732;
+  const DUAL_FRAME_BYTES = 2068;
   const FPS_CHOICES = {
     single: [
       ["20", "20 FPS"],
@@ -66,7 +66,9 @@
       ["1003", "1003 B"],
       ["1273", "1273 B"],
       ["1465", "1465 B"],
-      ["1732", "1732 B"]
+      ["1732", "1732 B"],
+      ["1952", "1952 B"],
+      ["2068", "2068 B"]
     ]
   };
   const HIGH_QUEUE_LIMIT = 8;
@@ -75,7 +77,7 @@
   const LINK_QUIET_MODULES = 4;
   const COMMON_HZ = [60, 75, 90, 120, 144, 165, 240];
   const QUAD_PAIRS = [[0, 3], [1, 2]];
-  const DUAL_SLOTS = [0, 1];
+  const DUAL_SLOTS = [0, 3];
   let file = null;
   let transfer = null;
   let animationFrame = 0;
@@ -364,7 +366,7 @@
     const playing = codesPerScreen === 4
       ? (quadRefreshesAll() ? "正在循环播放 · 四码整屏同换" : "正在循环播放 · 四码交错换对角")
       : codesPerScreen === 2
-        ? (dualUpdatesBoth() ? "正在循环播放 · 双码上排同时更新" : "正在循环播放 · 双码上排交替更新")
+        ? (dualUpdatesBoth() ? "正在循环播放 · 双码对角同时更新" : "正在循环播放 · 双码对角交替更新")
         : "正在循环播放";
     if (!measuredRefreshHz) return playing;
     const interval = updateIntervalVsyncs();
@@ -644,7 +646,9 @@
 
   function qrVersionForBytes(frameBytes) {
     if (frameBytes === 2953) return 40;
-    if (frameBytes === DUAL_FRAME_BYTES) return 30;
+    if (frameBytes === 2068) return 33;
+    if (frameBytes === 1952) return 32;
+    if (frameBytes === 1732) return 30;
     if (frameBytes === 1465) return 27;
     if (frameBytes === 1273) return 25;
     if (frameBytes === 1003) return 22;
@@ -884,6 +888,7 @@
     if (bytes <= 1465) return 125;
     if (bytes <= 1732) return 137;
     if (bytes <= 1952) return 145;
+    if (bytes <= 2068) return 149;
     if (bytes <= 2188) return 153;
     if (bytes <= 2303) return 157;
     if (bytes <= 2431) return 161;
@@ -921,7 +926,7 @@
     let text = "理论速度：" + formatRate(rate.screen) + "（" + rate.bytes + " B × " + rate.codes + " 码 × " + rate.fps + " FPS）· 载荷约 " + formatRate(rate.payload);
     if (rate.scale) text += " · 每模块 " + rate.scale + " 设备像素（整数）";
     if (rate.codes === 4) text += "。30 FPS 四码整屏同换；60 FPS 仍交错换对角，避免四格同刷拖影";
-    if (rate.codes === 2) text += "。双码只占 2×2 上排。60 FPS 两格同时更新。打开预填 1732 B · 60 FPS";
+    if (rate.codes === 2) text += "。双码占 2×2 左上和右下。60 FPS 两格同时更新。打开预填 2068 B · 60 FPS";
     if (rate.codes === 4 && rate.cell && rate.cell < 3) text += "。模块偏小，请全屏后再播";
     if (rate.codes === 2 && rate.cell && rate.cell < 3) text += "。模块偏小，请全屏后再播";
     if (rate.codes === 4 && rate.fps >= 60 && (measuredRefreshHz || 60) < 90) text += "。60 Hz 屏上四码 60 FPS 容易拖影，改用 30 FPS 通常更快";
