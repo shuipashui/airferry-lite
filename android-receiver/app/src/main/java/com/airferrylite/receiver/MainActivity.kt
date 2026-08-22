@@ -700,10 +700,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleHighSpeedFrame(bytes: ByteArray) {
-        when {
-            HighSpeedAssembler.isDualLayoutFrame(bytes) -> frameAnalyzer.noteStreamLayout(2)
-            HighSpeedAssembler.isMultiLayoutFrame(bytes) -> frameAnalyzer.noteStreamLayout(4)
-        }
         highFrameCount += 1
         highBytesReceived += bytes.size.toLong()
         highLastFrameAt = SystemClock.elapsedRealtime()

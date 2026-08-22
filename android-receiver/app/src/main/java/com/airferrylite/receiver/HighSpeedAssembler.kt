@@ -45,6 +45,8 @@ class HighSpeedAssembler {
 
         fun isDualLayoutFrame(bytes: ByteArray) = looksLikeFrame(bytes) && layoutCodesOf(bytes) == 2
 
+        fun isQuadLayoutFrame(bytes: ByteArray) = looksLikeFrame(bytes) && layoutCodesOf(bytes) == 4
+
         private fun layoutCodesOf(bytes: ByteArray) = layoutCodesFromMagic(u8(bytes[1]))
 
         private fun layoutCodesFromMagic(magic: Int) = when (magic) {
