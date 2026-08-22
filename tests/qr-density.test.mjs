@@ -28,7 +28,8 @@ assert.ok(senderStyles.includes("#qrCanvas{") && senderStyles.includes("border-r
 const senderApp = fs.readFileSync(new URL("../sender/app.js", import.meta.url), "utf8");
 assert.ok(senderApp.includes("QUIET_MODULES = 2"), "single-code QR quiet zone should stay tight so modules can use the canvas");
 assert.ok(senderApp.includes("QUAD_QUIET_MODULES = 4"), "quad codes need a spec quiet zone so adjacent finders do not merge");
-assert.ok(senderApp.includes("codes === 4 || codes === 2) return { columns: 2, rows: 2, quiet: QUAD_QUIET_MODULES }"), "dual must use the same square 2x2 canvas as quad so both codes stay in frame");
+assert.ok(senderApp.includes("codes === 2) return { columns: 2, rows: 1, quiet: QUAD_QUIET_MODULES }"), "dual must sit side by side so V33 tiles stay as large as 1003 B");
+assert.ok(senderApp.includes("qrModules(1003)"), "higher dual versions must size tiles against the 1003 B reference");
 assert.ok(!senderStyles.includes("html.quad-send,body.quad-send{height:auto"), "quad sender must keep the same fixed window as single-code");
 assert.ok(!senderApp.includes("size * 0.04"), "quad tiles should fill the original 2x2 canvas instead of shrinking for an extra gutter");
 assert.ok(!senderApp.includes("offsetY, side, side)"), "file QR must not stretch modules to a non-integer pixel size");
@@ -37,7 +38,7 @@ assert.ok(senderApp.includes("viewer.clientWidth") && senderApp.includes("viewer
 assert.ok(!senderStyles.includes("max-width:96vmin"), "windowed QR must not be capped at 96vmin");
 assert.ok(senderApp.includes("tile.width * scale"), "QR blit destination must be integer module scale");
 assert.ok(senderApp.includes("QUAD_PAIRS = [[0, 3], [1, 2]]"), "quad 60 FPS must keep checkerboard pair stagger");
-assert.ok(senderApp.includes("DUAL_SLOTS = [0, 1]"), "dual occupies the top row of the 2x2 canvas");
+assert.ok(senderApp.includes("DUAL_SLOTS = [0, 1]"), "dual occupies two side-by-side tiles");
 assert.ok(senderApp.includes("function quadRefreshesAll"), "quad 30 FPS should refresh all four codes together");
 assert.ok(senderApp.includes("Math.round(vsyncsPerQr / 2)"), "quad pair updates must keep the same unique-code rate as four-at-once");
 assert.ok(senderApp.includes("function setPlayLabel"));
