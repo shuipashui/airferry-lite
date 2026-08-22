@@ -4,7 +4,7 @@
 
 对外说明只写 [README.md](README.md)。不要在 README 里放版本号、实测 KB/s、Worker / VideoFrame 细节或本文链接。
 
-**交接时点：** 2026-08-22。网页接收端 **v86**。Android APK **0.8.52**。给蓝只发 Artifacts 直链。**0.8.43 冻结：** 首次 234.6、继续 238.4、强杀 236.2。**0.8.44–0.8.46 已否。** 发送端双码仍是 2×2 上排，帧头 **`layoutCodes=2`（magic 0x1c/0x1d）**，下排白底。**0.8.50 已否**（深色块 + 一枚就锁）。**0.8.51：** 空白后首次 240；继续接收 0 命中；杀掉重开只打到单枚（36 KB/s）。**0.8.52：** 见过一枚 `0x1c` 后补扫找兄妹；继续接收冷启动先预览 1.2 秒再分析。不要 onStop unbind。不要看门狗 unbind。
+**交接时点：** 2026-08-22。网页接收端 **v86**。Android APK **0.8.53**。给蓝只发 Artifacts 直链。**0.8.43 冻结：** 首次 234.6、继续 238.4、强杀 236.2。**0.8.44–0.8.46 已否。** 发送端双码仍是 2×2 上排，帧头 **`layoutCodes=2`**，下排白底。**0.8.52 已否：** `dualHint` 后空帧也串行补扫 → 空白后首次 20.6 ms / 5 KB/s，微动掉速。**0.8.53：** 只在本帧已有 1 枚双码时补扫兄妹；空扫清格后回到未确认 max4。不要 onStop unbind。不要看门狗 unbind。
 
 ## 1. 项目一句话
 
@@ -31,10 +31,10 @@
 | 部件 | 版本 | 对照 |
 |---|---|---|
 | 网页接收端 | **v86** | 预览可选手动 30/60 FPS（默认 60）。四码 33 ms · inflight 1；锁格后 Worker 切格。识别 `layoutCodes=2` |
-| Android APK | **0.8.52**（versionCode 67） | 一枚 `0x1c` 后补扫找兄妹。继续接收预览 1.2 秒再分析。0.8.43 满速仍要保住 |
+| Android APK | **0.8.53**（versionCode 68） | 只在 1 命中帧补扫双码兄妹。空扫清格解锁。0.8.52 空帧串行已否。0.8.43 满速仍要保住 |
 | 发送端 | AFL2 单文件 HTML | 打开单码预填 **2953 B · 30 FPS**；打开四码预填 **1465 B · 30 FPS**（整屏同换）；打开双码预填 **2068 B · 60 FPS**（V33）。QR 在 4 个 Worker 里生成。60 FPS 四码仍交错。无 45 FPS |
 
-诊断第一行必须是 `网页：v86` 或 `App 0.8.52`。
+诊断第一行必须是 `网页：v86` 或 `App 0.8.53`。
 
 ## 4. 实测对照（只认这些）
 
@@ -170,15 +170,15 @@
 - 停止：冻最后一帧到 `#cameraFreeze` 再清 `srcObject`。`finishing` 时不要清布局字段。
 - SW：`claim` 即可。不要 `client.navigate`，不要 `controllerchange` 时 `reload`。WASM 第一次用再缓存。
 
-## 7. Android APK 实现（0.8.52）
+## 7. Android APK 实现（0.8.53）
 
-源码：`android-receiver/app/src/main/java/com/airferrylite/receiver/`。构建：`android-receiver/build-local.ps1` 或 GitHub Actions `Build Android receiver`。Java 17，SDK 35。`versionName 0.8.52` / `versionCode 67`。不要改解码选项（`tryHarder` / rotate / invert / downscale / `isPure`），除非明确要求动分析管线。
+源码：`android-receiver/app/src/main/java/com/airferrylite/receiver/`。构建：`android-receiver/build-local.ps1` 或 GitHub Actions `Build Android receiver`。Java 17，SDK 35。`versionName 0.8.53` / `versionCode 68`。不要改解码选项（`tryHarder` / rotate / invert / downscale / `isPure`），除非明确要求动分析管线。
 
 APK 比网页快，是因为同一帧 Y 平面上原生 zxing-cpp 能扫多个码，CameraX 丢旧帧，没有 `createImageBitmap` 整帧读回。网页不要搬 APK 的 midX/midY 重排。
 
 - 分析流：**1920×1440** · `YUV_420_888` · `KEEP_ONLY_LATEST`。标题行 30/60/120 只改 AE 档。高速录像管道不能扫码。
 - `NativeQrDecoder`：先拷 Y 平面再 `readYBuffer`，**rotation 0**。不要 `ImageProxy.read()`（会旋转）。`tryHarder` / rotate / invert / downscale 全关。先 `LOCAL_AVERAGE`，空再 `GLOBAL_HISTOGRAM`。`LumaScaler` 热路径不用。
-- 一帧 ≥2 个传输码锁四码路径。双码见过一枚 `layoutCodes=2` 后**补扫找兄妹**，两枚同时命中才锁双码路径并跳过串行四格。0.8.51 只 max4 → 杀掉重开每帧 1 枚。0.8.50 一枚就锁且跳过补扫 → 半速。单枚四码帧头不锁补扫、不确认单码。确认单码后才 `maxSymbols = 1`。
+- 一帧 ≥2 个传输码锁四码路径。双码**只在本帧已有 1 枚** `layoutCodes=2` 时补扫兄妹；空帧不要串行四格（0.8.52：20.6 ms）。两枚同时命中才锁双码并跳过串行。空扫清格后解锁回到未确认 max4。单枚四码帧头不锁补扫、不确认单码。确认单码后才 `maxSymbols = 1`。
 - 四码：已有格子则 4 路并行；锁满且本帧 ≥3 命中则返回，不再串行补扫。≥3 命中才 `tilesFromHits`。已锁 ≥3 格时 1–2 命中只 `followContainedHits`。格 2 **尚未**连续 6 帧 2 命中且不是双码帧头时仍四格补扫（0.8.36 一锁 格 2 就 return → 四码约 84）。一旦本会话出现过 3 命中，格 2 补扫一直开、收束作废。已锁 2 格且两枚都打中时不要整幅 max4（0.8.19）。
 - **双码：** ≥2 真命中才 `tilesFromHits`，**已锁 格 2 后只要本帧仍有 2 命中就重排**。1 命中 `followContainedHits`。双码路径下格子 <2 才整幅 max4，再左右两裁。漏一枚只 inflate 漏格 + 左右两裁。已锁 ≥2 格即使本帧只中 1 枚也不要整幅 max4（0.8.35：28 FPS / 67.7）。空扫：无锁 2 次清格和 ROI；已锁 ≥2 格要 6 次。清格时 6 帧收束作废，双码帧头锁保持到 `resetSession`。
 - 长时间开着会卡：解码超过 400 ms 只换 zxing 对象，不要停分析。看门狗心跳死了或解码超时**只 `replaceDecoders`，不要 `unbindAll`**。**进应用不开相机**。这台小米**每个进程只能成功 bind 一次**。收完 `unbindAll`。「继续接收」按下后再等 2 秒冷启动；新进程先预览 1.2 秒再挂分析。不要 `onStop` unbind。不要 `shutdownAsync`。扫描中清空 `resetSession`。不要空扫自动冷启动。不要首帧预热。不要独立 Lifecycle。诊断始终完整文本，高度 48dp。
@@ -192,7 +192,7 @@ sender/                         浏览器发送：测刷新率、lookahead、画
   dist/airferry-lite-sender.html  提交用的单文件产物
 index.html + app.js + sw.js     GitHub Pages 网页接收端
 web-receiver/                   根目录镜像，必须 byte-identical
-android-receiver/               Kotlin + CameraX + zxing-cpp（0.8.52）
+android-receiver/               Kotlin + CameraX + zxing-cpp（0.8.53）
 shared/ + highspeed-protocol.js AFL1 / AFL2
 vendor/decimen/                 WASM Worker 与 zxing wasm
 third_party/decimen-v0.3/       MIT 源，不要混入后续 AGPL Decimen
@@ -223,7 +223,7 @@ tests/                          npm test
 - 不要 `ImageProxy.read()`、不要高速录像接到 ImageAnalysis、不要 `LumaScaler` 回热路径。
 - 不要锁 AF 为 manual/none；不要把四码分析流改成 30；不要 60 Hz 四码四格同刷。
 - 不要收完 `unbindAll` 再在同一进程 bind（0.8.38：20.1）。不要立刻 `exit(0)` 再 bind（0.8.41 继续接收：6.1）。不要 `onStop` unbind 再 `onStart` bind（0.8.40：首次 85.9）。不要让收完后的会话一直占着相机直到杀进程（0.8.39：重开 0 命中）。继续接收点下去仍要再等 **2 秒** 再冷启动；不要因为看结果已经超过 2 秒就立刻 `killProcess`（0.8.49/0.8.50：继续 0 命中）。扫描中清空必须 `resetSession` 清格子和 ROI。不要 `shutdownAsync`。
-- 不要一锁 格 2 就跳过四格补扫（0.8.36：四码约 84）。不要凭单枚 **四码** `layoutCodes=4` 锁多码。不要凭单枚 `layoutCodes=2` 锁双码并跳过补扫（0.8.50）。见过一枚 `0x1c` 后要补扫兄妹，两枚命中才跳过串行四格。不要空扫 3 秒就 `killProcess`。不要下排复制 QR / 第三枚标记码 / 深色块（0.8.50 已否）。
+- 不要一锁 格 2 就跳过四格补扫（0.8.36：四码约 84）。不要凭单枚 **四码** `layoutCodes=4` 锁多码。不要凭单枚 `layoutCodes=2` 锁双码并跳过补扫（0.8.50）。不要在见过一枚双码之后对空帧串行补扫（0.8.52：空白后首次 5 KB/s）。只在本帧 1 命中时找兄妹。不要空扫 3 秒就 `killProcess`。不要下排复制 QR / 第三枚标记码 / 深色块（0.8.50 已否）。
 - 不要看门狗 `unbindAll`（0.8.42 清空会话 151）。超时只换 zxing。
 - 不要 `shutdownAsync` / 首帧 unbind / 独立 Lifecycle 去“修杀后台”。resume 重建 zxing 已否。清空不要 `unbindAll`。
 - 不要在已锁 2 格且两枚都打中时整幅 `maxSymbols=4`（0.8.19：1732 每帧 0.01）。不要 60 Hz 双码 60 FPS 交错一格。

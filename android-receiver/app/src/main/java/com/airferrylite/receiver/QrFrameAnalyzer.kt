@@ -246,11 +246,11 @@ class QrFrameAnalyzer(
             }
             add(readCropsSerial(luma, retries, retryBinarizer = true))
         }
-        // Dual layoutCodes=2 still needs two hits to lock. One 0x1c header
-        // must not skip sibling search (0.8.51 kill+reopen: 1-at-a-time).
+        // Sibling hunt only on a 1-hit frame. dualHint plus empty wall
+        // serial-filled every frame (0.8.52 first-from-blank: 20.6 ms / 5 KB/s).
         if (!multiLayout.get()) {
             add(decoder.read(luma, region, maxSymbols))
-            if (dualHint.get() && transferCount(merged) < 2) {
+            if (transferCount(merged) == 1 && (dualHint.get() || anyDualLayout(merged))) {
                 acquireDualSibling()
             } else if (transferCount(merged) == 1 && anyMultiLayout(merged)) {
                 add(
@@ -274,9 +274,7 @@ class QrFrameAnalyzer(
         if (dualLayout.get() || dualTilesSettled(previousTiles.size)) {
             if (previousTiles.size < 2) {
                 add(decoder.read(luma, ScanLayout.centerSquare(luma.width, luma.height), 4))
-                if (transferCount(merged) < 2) {
-                    add(readCropsParallel(luma, ScanLayout.dualHalves(ScanLayout.centerSquare(luma.width, luma.height)), retryBinarizer = false))
-                }
+                if (transferCount(merged) == 1) acquireDualSibling()
             } else if (transferCount(merged) >= 2) {
                 return merged
             } else {
@@ -423,6 +421,10 @@ class QrFrameAnalyzer(
                 twoTileStreak.set(0)
                 dualSettled.set(false)
                 sawThreeOrMore.set(false)
+                dualLayout.set(false)
+                dualHint.set(false)
+                multiLayout.set(false)
+                singleLayoutConfirmed.set(false)
             }
             return
         }
