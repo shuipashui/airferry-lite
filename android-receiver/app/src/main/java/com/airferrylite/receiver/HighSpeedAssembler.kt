@@ -37,11 +37,21 @@ class HighSpeedAssembler {
 
         fun looksLikeFrame(bytes: ByteArray): Boolean {
             if (bytes.size <= FRAME_HEADER_SIZE || u8(bytes[0]) != 0xd1) return false
-            return u8(bytes[1]) in 0x0c..0x0f
+            val magic = u8(bytes[1])
+            return magic in 0x0c..0x0f || magic == 0x1c || magic == 0x1d
         }
 
-        fun isMultiLayoutFrame(bytes: ByteArray) = looksLikeFrame(bytes) &&
-            (u8(bytes[1]) == 0x0d || u8(bytes[1]) == 0x0f)
+        fun isMultiLayoutFrame(bytes: ByteArray) = looksLikeFrame(bytes) && layoutCodesOf(bytes) >= 2
+
+        fun isDualLayoutFrame(bytes: ByteArray) = looksLikeFrame(bytes) && layoutCodesOf(bytes) == 2
+
+        private fun layoutCodesOf(bytes: ByteArray) = layoutCodesFromMagic(u8(bytes[1]))
+
+        private fun layoutCodesFromMagic(magic: Int) = when (magic) {
+            0x0d, 0x0f -> 4
+            0x1c, 0x1d -> 2
+            else -> 1
+        }
 
         private fun u8(value: Byte) = value.toInt() and 0xff
         private fun u16le(bytes: ByteArray, offset: Int) = u8(bytes[offset]) or (u8(bytes[offset + 1]) shl 8)
@@ -197,8 +207,8 @@ class HighSpeedAssembler {
         if (blocks != ceil(totalLength.toDouble() / blockLength).toInt()) return null
         if (bytes.size != FRAME_HEADER_SIZE + blockLength) return null
         val magic = u8(bytes[1])
-        val layoutCodes = if (magic == 0x0d || magic == 0x0f) 4 else 1
-        val systematic = magic == 0x0e || magic == 0x0f
+        val layoutCodes = layoutCodesFromMagic(magic)
+        val systematic = magic == 0x0e || magic == 0x0f || magic == 0x1d
         return FrameHeader(sessionId, sequence, blocks, blockLength, totalLength.toInt(), payloadFnv, layoutCodes, systematic)
     }
 

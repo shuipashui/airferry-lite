@@ -174,7 +174,7 @@
           blockLen,
           totalLen: packed.container.length,
           payloadFnv: H.fnv1a(packed.container),
-          layoutCodes: codesPerScreen === 1 ? 1 : 4,
+          layoutCodes: codesPerScreen === 1 ? 1 : codesPerScreen === 2 ? 2 : 4,
           systematic: true
         },
         session: sessionId.toString(16).padStart(4, "0"),
@@ -803,6 +803,14 @@
     return metrics;
   }
 
+  function drawDualBallast(context, x, y, tilePx, quiet, scale) {
+    const inset = Math.max(scale, quiet * scale);
+    const inner = tilePx - inset * 2;
+    if (inner < 8) return;
+    context.fillStyle = "#111111";
+    context.fillRect(x + inset, y + inset, inner, inner);
+  }
+
   function drawScreen(patterns) {
     try {
       lastPatterns = patterns;
@@ -811,11 +819,14 @@
       context.imageSmoothingEnabled = false;
       context.fillStyle = "#fff";
       context.fillRect(0, 0, canvas.width, canvas.height);
+      const ballast = codesPerScreen === 2;
       patterns.forEach((pattern, index) => {
-        if (!pattern) return;
         const col = index % metrics.columns;
         const row = Math.floor(index / metrics.columns);
-        drawPatternTile(context, pattern, col * metrics.tilePx, row * metrics.tilePx, metrics.quiet, metrics.scale);
+        const x = col * metrics.tilePx;
+        const y = row * metrics.tilePx;
+        if (pattern) drawPatternTile(context, pattern, x, y, metrics.quiet, metrics.scale);
+        else if (ballast) drawDualBallast(context, x, y, metrics.tilePx, metrics.quiet, metrics.scale);
       });
     } catch (error) {
       stop();

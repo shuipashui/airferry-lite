@@ -1,5 +1,5 @@
 (() => {
-  const RECEIVER_BUILD = "v85";
+  const RECEIVER_BUILD = "v86";
   if ("serviceWorker" in navigator) {
     Promise.resolve(navigator.serviceWorker.register("sw.js?v=" + RECEIVER_BUILD)).then(reg => {
       reg?.update?.()?.catch?.(() => {});
@@ -1370,8 +1370,11 @@
       return;
     }
     highScanMisses = 0;
-    const quadFrame = transferHits.some(hit => H.parseFrame(hit.bytes)?.header.layoutCodes === 4);
-    if (quadFrame || transferHits.length >= 2) {
+    const multiFrame = transferHits.some(hit => {
+      const codes = H.parseFrame(hit.bytes)?.header.layoutCodes;
+      return codes === 2 || codes === 4;
+    });
+    if (multiFrame || transferHits.length >= 2) {
       highMultiLayout = true;
       highSingleConfirmed = false;
       if (transferHits.length < 2 && (highTrackedTiles || []).filter(Boolean).length < 2) highScanRoi = null;
@@ -2098,7 +2101,7 @@
     highFramesSeen += 1;
     const parsed = H?.parseFrame(bytes);
     if (parsed) {
-      if (parsed.header.layoutCodes === 4) highMultiLayout = true;
+      if (parsed.header.layoutCodes === 2 || parsed.header.layoutCodes === 4) highMultiLayout = true;
       const before = highDecoder?.framesNew || 0;
       acceptHighSpeedFrame(parsed);
       const after = highDecoder?.framesNew || 0;
