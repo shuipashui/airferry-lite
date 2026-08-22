@@ -139,13 +139,16 @@ class MainActivity : AppCompatActivity() {
     private var restartStartedAt = 0L
     private var settlePreviewBeforeAnalyze = false
     private var halRecoveryRestartAttempted = false
+    private var halWaitSkippedForAutostart = false
+    private var restartDelayMs = PROCESS_RESTART_DELAY_MS
     private val restartProgressTick = object : Runnable {
         override fun run() {
             if (!processRestarting) return
             val elapsed = (SystemClock.elapsedRealtime() - restartStartedAt).coerceAtLeast(0L)
-            val remaining = (PROCESS_RESTART_DELAY_MS - elapsed).coerceAtLeast(0L)
+            val remaining = (restartDelayMs - elapsed).coerceAtLeast(0L)
             restartCountdown.text = ((remaining + 999) / 1000).toInt().coerceAtLeast(0).toString()
-            restartProgress.progress = ((elapsed * restartProgress.max) / PROCESS_RESTART_DELAY_MS).toInt()
+            restartProgress.progress = if (restartDelayMs <= 0L) restartProgress.max
+            else ((elapsed * restartProgress.max) / restartDelayMs).toInt()
                 .coerceIn(0, restartProgress.max)
             if (remaining > 0) watchdog.postDelayed(this, 50)
         }
@@ -254,10 +257,17 @@ class MainActivity : AppCompatActivity() {
         if (consumeAutostartScan()) {
             settlePreviewBeforeAnalyze = true
             showOpeningCamera()
+            val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            val override = prefs.getLong(PREF_AUTOSTART_BIND_DELAY_OVERRIDE_MS, -1L)
+            if (override >= 0L) {
+                prefs.edit().remove(PREF_AUTOSTART_BIND_DELAY_OVERRIDE_MS).apply()
+            }
+            val bindDelay = if (override >= 0L) override else AUTOSTART_BIND_DELAY_MS
+            halWaitSkippedForAutostart = override >= 0L
             previewView.post {
                 watchdog.postDelayed({
                     requestStartReceive()
-                }, AUTOSTART_BIND_DELAY_MS)
+                }, bindDelay)
             }
         } else {
             clearStaleCameraHeld()
@@ -286,17 +296,37 @@ class MainActivity : AppCompatActivity() {
 
     private fun continueReceive() {
         if (processRestarting) return
-        processRestarting = true
         findViewById<Button>(R.id.continueReceiveButton).isEnabled = false
+        val (preKill, postKill) = planColdRestart()
+        scheduleColdRestart(preKill, postKill, "正在释放相机")
+    }
+
+    private fun scheduleColdRestart(preKillWaitMs: Long, postKillBindDelayMs: Long, statusMessage: String) {
+        if (processRestarting) return
+        processRestarting = true
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             .edit()
             .putBoolean(PREF_AUTOSTART_SCAN, true)
+            .putLong(PREF_AUTOSTART_BIND_DELAY_OVERRIDE_MS, postKillBindDelayMs)
             .commit()
-        showRestarting()
+        showRestarting(preKillWaitMs, statusMessage)
         watchdog.postDelayed({
-            markCameraReleased()
+            if (postKillBindDelayMs > 0L || msUntilCameraBindAllowed() > 0L) {
+                markCameraReleased()
+            }
             restartProcessForScan()
-        }, PROCESS_RESTART_DELAY_MS)
+        }, preKillWaitMs)
+    }
+
+    private fun planColdRestart(): Pair<Long, Long> {
+        val elapsed = elapsedSinceCameraRelease()
+        if (elapsed >= CAMERA_HAL_COOLDOWN_MS) {
+            return CONTINUE_RESTART_MIN_MS to CAMERA_HAL_COOLDOWN_MS
+        }
+        val remaining = CAMERA_HAL_COOLDOWN_MS - elapsed
+        val preKill = remaining.coerceIn(CONTINUE_RESTART_MIN_MS, PROCESS_RESTART_DELAY_MS)
+        val postKill = (CAMERA_HAL_COOLDOWN_MS - preKill).coerceAtLeast(0L)
+        return preKill to postKill
     }
 
     private fun restartProcessForScan() {
@@ -317,7 +347,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun beginReceive() {
-        val waitMs = msUntilCameraBindAllowed()
+        val waitMs = if (halWaitSkippedForAutostart) {
+            halWaitSkippedForAutostart = false
+            0L
+        } else {
+            msUntilCameraBindAllowed()
+        }
         if (waitMs > 0) {
             showOpeningCamera()
             watchdog.postDelayed({
@@ -349,18 +384,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun restartScanForHalRecovery() {
-        if (processRestarting) return
-        processRestarting = true
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-            .edit()
-            .putBoolean(PREF_AUTOSTART_SCAN, true)
-            .commit()
-        showRestarting()
-        statusText.text = "相机未就绪，正在恢复"
-        watchdog.postDelayed({
-            markCameraReleased()
-            restartProcessForScan()
-        }, PROCESS_RESTART_DELAY_MS)
+        val (preKill, postKill) = planColdRestart()
+        scheduleColdRestart(preKill, postKill, "相机未就绪，正在恢复")
     }
 
     private fun showIdle() {
@@ -426,16 +451,17 @@ class MainActivity : AppCompatActivity() {
         statusText.text = "正在打开相机"
     }
 
-    private fun showRestarting() {
+    private fun showRestarting(delayMs: Long = PROCESS_RESTART_DELAY_MS, statusMessage: String = "正在释放相机") {
         idlePanel.visibility = View.GONE
         resultPanel.visibility = View.GONE
         scanMetaRow.visibility = View.GONE
         resetButton.visibility = View.GONE
         restartingPanel.visibility = View.VISIBLE
         restartStartedAt = SystemClock.elapsedRealtime()
-        restartCountdown.text = ((PROCESS_RESTART_DELAY_MS + 999) / 1000).toString()
+        restartDelayMs = delayMs.coerceAtLeast(CONTINUE_RESTART_MIN_MS)
+        restartCountdown.text = ((restartDelayMs + 999) / 1000).toInt().coerceAtLeast(1).toString()
         restartProgress.progress = 0
-        statusText.text = "正在释放相机"
+        statusText.text = statusMessage
         watchdog.removeCallbacks(restartProgressTick)
         watchdog.post(restartProgressTick)
     }
@@ -980,6 +1006,13 @@ class MainActivity : AppCompatActivity() {
         return (lastRelease + CAMERA_HAL_COOLDOWN_MS - System.currentTimeMillis()).coerceAtLeast(0L)
     }
 
+    private fun elapsedSinceCameraRelease(): Long {
+        val lastRelease = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .getLong(PREF_LAST_CAMERA_RELEASE_MS, 0L)
+        if (lastRelease == 0L) return CAMERA_HAL_COOLDOWN_MS
+        return (System.currentTimeMillis() - lastRelease).coerceAtLeast(0L)
+    }
+
     override fun onDestroy() {
         watchdog.removeCallbacks(watchdogTick)
         watchdog.removeCallbacks(restartProgressTick)
@@ -1003,11 +1036,13 @@ class MainActivity : AppCompatActivity() {
         private const val PREFS_NAME = "airferry-lite"
         private const val PREF_FPS = "preview_fps"
         private const val PREF_AUTOSTART_SCAN = "autostart_scan"
+        private const val PREF_AUTOSTART_BIND_DELAY_OVERRIDE_MS = "autostart_bind_delay_ms"
         private const val PREF_CAMERA_HELD = "camera_held"
         private const val PREF_LAST_CAMERA_RELEASE_MS = "camera_release_ms"
         private const val EXTRA_AUTOSTART_SCAN = "autostart_scan"
         private const val PROCESS_RESTART_DELAY_MS = 2000L
         private const val AUTOSTART_BIND_DELAY_MS = 2000L
+        private const val CONTINUE_RESTART_MIN_MS = 400L
         private const val CAMERA_HAL_COOLDOWN_MS = 2000L
         private const val ANALYZER_SETTLE_MS = 1200L
         private const val HAL_EMPTY_BURST_MIN_FRAMES = 250L
