@@ -638,7 +638,7 @@ class MainActivity : AppCompatActivity() {
             "解码：zxing-cpp · 平均 ${stats?.averageDecodeMs?.let { "%.1f ms".format(it) } ?: "—"} · 单码命中 ${stats?.singleHits ?: 0} · 多码扫描 ${stats?.multiScans ?: 0}（命中 ${stats?.multiHits ?: 0}${perFrameLabel(stats)}）",
             "分析器：线程 ${stats?.workerCount ?: "?"} · 忙 ${stats?.workerBusy ?: "?"} · 空结果 ${stats?.emptyDecodes ?: 0} · 异常 ${stats?.decodeErrors ?: 0} · 新缓冲 ${stats?.bufferAllocations ?: 0}",
             "看门狗：恢复 ${stats?.pipelineRecoveries ?: 0} 次 · 心跳 ${if (lastStatsAt == 0L) "—" else "${(now - lastStatsAt).coerceAtLeast(0)} ms"}",
-            "ROI：${roiLabel(stats)} · 连续未命中 ${stats?.roiMisses ?: 0} · 布局 ${if (stats?.multiLayout == true) "四码" else "单码"}",
+            "ROI：${roiLabel(stats)} · 连续未命中 ${stats?.roiMisses ?: 0} · 布局 ${layoutLabel(stats)}",
             "协议：二维码 ${decodedQrCount.get()} · AFL2 ${highFrameCount} · 唯一 ${highUniqueFrameCount} · 重复 ${highDuplicateCount} · 无效 ${invalidFrameCount.get()} · 错误 ${highProtocolErrors} · 队列 ${pendingProtocolFrames.get()} · 解块 ${lastHighSolved}/${lastHighTotal}",
             "高速会话：最近帧 ${highAge} · 唯一载荷 ${formatBytes(sessionUniquePayloadBytes)} · 光学 ${formatBytes(highBytesReceived)} · 速度 ${latestSpeedLabel} · 会话 ${formatRate(sessionAverageBytesPerSecond)}",
             "无效样本：$invalidFrameSample",
@@ -679,6 +679,16 @@ class MainActivity : AppCompatActivity() {
             tiles > 0 -> "格 $tiles"
             stats?.roiTracked == true -> "跟踪中"
             else -> "全图"
+        }
+    }
+
+    private fun layoutLabel(stats: ScanStats?): String {
+        val tiles = stats?.tileCount ?: 0
+        return when {
+            tiles >= 4 -> "四码"
+            tiles >= 2 -> "双码"
+            stats?.multiLayout == true -> "多码未锁格"
+            else -> "单码"
         }
     }
 

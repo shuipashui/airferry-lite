@@ -160,4 +160,36 @@ class ScanLayoutTest {
         assertEquals(tiles[1].left, tiles[0].left + tiles[0].width)
         assertEquals(tiles[2].top, tiles[0].top + tiles[0].height)
     }
+
+    @Test
+    fun dualHalvesOverlapOnTheMidline() {
+        val region = ScanRegion(240, 0, 1440, 1440)
+        val halves = ScanLayout.dualHalves(region)
+        assertEquals(2, halves.size)
+        val crop = ((0.5f + ScanLayout.QUAD_OVERLAP) * 1440).toInt()
+        assertEquals(crop, halves[0].width)
+        assertEquals(crop, halves[1].width)
+        assertTrue(halves[0].left + halves[0].width > halves[1].left)
+        assertEquals(region.left + region.width, halves[1].left + halves[1].width)
+        assertEquals(region.height, halves[0].height)
+    }
+
+    @Test
+    fun pairFromHitPlacesSiblingToTheRightWhenThereIsRoom() {
+        val points = listOf(120f to 140f, 280f to 140f, 120f to 280f, 280f to 280f)
+        val pair = ScanLayout.pairFromHit(points, 1920, 1440)
+        assertEquals(2, pair.size)
+        assertTrue(pair[0].left < pair[1].left)
+        assertTrue(pair[1].left >= pair[0].left + pair[0].width / 2)
+        assertTrue(pair[1].left + pair[1].width <= 1920)
+    }
+
+    @Test
+    fun pairFromHitPlacesSiblingToTheLeftNearTheRightEdge() {
+        val points = listOf(1600f to 140f, 1760f to 140f, 1600f to 280f, 1760f to 280f)
+        val pair = ScanLayout.pairFromHit(points, 1920, 1440)
+        assertEquals(2, pair.size)
+        assertTrue(pair[0].left < pair[1].left)
+        assertTrue(pair[0].left + pair[0].width / 2 < 1600)
+    }
 }

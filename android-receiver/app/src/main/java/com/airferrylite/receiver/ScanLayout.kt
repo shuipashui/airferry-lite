@@ -16,6 +16,39 @@ internal object ScanLayout {
         return ScanRegion((width - side) / 2, (height - side) / 2, side, side)
     }
 
+    fun dualHalves(region: ScanRegion): List<ScanRegion> {
+        val cropW = ((0.5f + QUAD_OVERLAP) * region.width).toInt().coerceIn(1, region.width)
+        val right = region.left + region.width - cropW
+        return listOf(
+            ScanRegion(region.left, region.top, cropW, region.height),
+            ScanRegion(right, region.top, cropW, region.height)
+        )
+    }
+
+    fun horizontalSibling(tile: ScanRegion, width: Int, height: Int): ScanRegion {
+        val shift = (tile.width * 1.08f).toInt().coerceAtLeast(1)
+        val right = clamp(ScanRegion(tile.left + shift, tile.top, tile.width, tile.height), width, height)
+        val left = clamp(ScanRegion(tile.left - shift, tile.top, tile.width, tile.height), width, height)
+        val tileMid = tile.left + tile.width / 2
+        val rightSep = kotlin.math.abs((right.left + right.width / 2) - tileMid)
+        val leftSep = kotlin.math.abs((left.left + left.width / 2) - tileMid)
+        val roomRight = tile.left + shift + tile.width <= width
+        return if (roomRight && rightSep >= tile.width / 2) right
+        else if (leftSep >= tile.width / 2) left
+        else right
+    }
+
+    fun pairFromHit(
+        points: List<Pair<Float, Float>>,
+        imageWidth: Int,
+        imageHeight: Int
+    ): List<ScanRegion> {
+        val tile = regionFromPoints(points, imageWidth, imageHeight, 1)?.let {
+            inflate(it, 1.18f, imageWidth, imageHeight)
+        } ?: return emptyList()
+        return listOf(tile, horizontalSibling(tile, imageWidth, imageHeight)).sortedBy { it.left }
+    }
+
     fun exclusiveQuadrants(region: ScanRegion): List<ScanRegion> {
         val halfW = (region.width / 2).coerceAtLeast(1)
         val halfH = (region.height / 2).coerceAtLeast(1)
