@@ -358,7 +358,7 @@ class MainActivity : AppCompatActivity() {
         statusText.text = "正在重置相机"
         val resetThenBind = { provider: ProcessCameraProvider ->
             provider.unbindAll()
-            provider.shutdown().addListener({
+            provider.shutdownAsync().addListener({
                 cameraProvider = null
                 if (isDestroyed || !cameraStarted) return@addListener
                 obtainProviderAndBind()
@@ -825,7 +825,7 @@ class MainActivity : AppCompatActivity() {
         cameraStarted = false
         if (provider != null) {
             provider.unbindAll()
-            runCatching { provider.shutdown() }
+            runCatching { provider.shutdownAsync() }
         }
         if (::frameAnalyzer.isInitialized) frameAnalyzer.close()
         if (::cameraExecutor.isInitialized) cameraExecutor.shutdownNow()
