@@ -244,17 +244,42 @@ class QrFrameAnalyzer(
         }
         if (transferCount(merged) >= 4) return merged
         if (previousTiles.size >= 4 && transferCount(merged) >= 3) return merged
-        // Quad 格 4: parallel per-tile only — serial 8-way overlay was ~21 ms / ~37 FPS (0.8.68).
+        // Quad 格 4: parallel overlay + inflate only — serial 8-way was ~21 ms (0.8.68).
+        // Must keep filling past 2 hits; early return at 2 codes caused ~1.98/frame (0.8.73).
         if (quadStream.get() && previousTiles.size >= 4) {
-            if (transferCount(merged) < 2) {
+            if (transferCount(merged) < 4) {
                 val exclusive = ScanLayout.exclusiveQuadrants(region)
                 val overlays = ScanLayout.overlappingQuadrants(region)
                 val pending = overlays.indices.mapNotNull { index ->
                     overlays[index].takeUnless { tileCovered(exclusive[index], merged, exclusive) }
                 }
-                add(readCropsParallel(luma, pending.take(TILE_WORKERS), retryBinarizer = false))
+                if (pending.isNotEmpty()) {
+                    add(readCropsParallel(luma, pending.take(TILE_WORKERS), retryBinarizer = false))
+                }
+            }
+            if (transferCount(merged) >= 4) return merged
+            if (transferCount(merged) >= 3) return merged
+            if (transferCount(merged) < 4) {
+                val exclusive = ScanLayout.exclusiveQuadrants(region)
+                val retries = exclusive.mapNotNull { tile ->
+                    if (tileCovered(tile, merged, exclusive)) null
+                    else ScanLayout.inflate(tile, 1.28f, luma.width, luma.height)
+                }
+                if (retries.isNotEmpty()) {
+                    add(readCropsParallel(luma, retries.take(TILE_WORKERS), retryBinarizer = true))
+                }
             }
             return merged
+        }
+        if (!quadStream.get() && !sawThreeOrMore.get() && previousTiles.size == 2) {
+            if (transferCount(merged) < 2) {
+                val retries = previousTiles.map { ScanLayout.inflate(it, 1.28f, luma.width, luma.height) }
+                add(readCropsParallel(luma, retries, retryBinarizer = true))
+            }
+            if (transferCount(merged) < 2) {
+                add(readCropsParallel(luma, ScanLayout.dualHalves(region), retryBinarizer = false))
+            }
+            if (dualFastPath(previousTiles.size, transferCount(merged))) return merged
         }
         if (dualFastPath(previousTiles.size, transferCount(merged))) return merged
         val exclusive = ScanLayout.exclusiveQuadrants(region)
@@ -361,9 +386,17 @@ class QrFrameAnalyzer(
     }
 
     private fun noteLayoutFromHits(hits: List<NativeHit>) {
+        var sawDual = false
         for (hit in hits) {
             val bytes = QrPayload.bytesFrom(hit.bytes, hit.text) ?: continue
-            if (QrPayload.isQuadLayout(bytes)) quadStream.set(true)
+            when {
+                QrPayload.isQuadLayout(bytes) -> quadStream.set(true)
+                QrPayload.isDualLayout(bytes) -> sawDual = true
+            }
+        }
+        if (sawDual) {
+            quadStream.set(false)
+            sawThreeOrMore.set(false)
         }
     }
 

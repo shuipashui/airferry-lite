@@ -140,6 +140,7 @@ class MainActivity : AppCompatActivity() {
     private var settlePreviewBeforeAnalyze = false
     private var skipHalWaitOnBeginReceive = false
     private var softDecoderRecoverAttempted = false
+    private var lastSoftRecoverAt = 0L
     private var restartDelayMs = PROCESS_RESTART_DELAY_MS
     private val restartProgressTick = object : Runnable {
         override fun run() {
@@ -388,14 +389,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun maybeSoftDecoderRecover(stats: ScanStats) {
-        if (!cameraStarted || processRestarting || softDecoderRecoverAttempted) return
-        if (stats.submittedFrames < 120 || stats.submittedFrames > 500) return
-        val emptyRatio = stats.emptyDecodes.toDouble() / stats.submittedFrames.toDouble()
-        if (emptyRatio < 0.55) return
+        if (!cameraStarted || processRestarting) return
+        if (stats.submittedFrames < 120) return
         if (highUniqueFrameCount >= 20) return
+        val emptyRatio = stats.emptyDecodes.toDouble() / stats.submittedFrames.toDouble()
+        if (emptyRatio < 0.80) {
+            if (stats.emptyDecodes == 0L) softDecoderRecoverAttempted = false
+            return
+        }
+        val now = SystemClock.elapsedRealtime()
+        if (softDecoderRecoverAttempted && now - lastSoftRecoverAt < 4000L) return
         softDecoderRecoverAttempted = true
+        lastSoftRecoverAt = now
         imageAnalysis?.clearAnalyzer()
+        frameAnalyzer.setAnalysisIdle(true)
+        frameAnalyzer.resetSession()
         frameAnalyzer.replaceDecoders()
+        resetExposureSession()
         watchdog.postDelayed({
             if (isDestroyed) return@postDelayed
             imageAnalysis?.setAnalyzer(cameraExecutor, frameAnalyzer)
@@ -809,18 +819,21 @@ class MainActivity : AppCompatActivity() {
         lastHighTotal = 0
         frameAnalyzer.consumeRecoverRequest()
         recoverBurst = 0
+        softDecoderRecoverAttempted = false
+        lastSoftRecoverAt = 0L
         frameAnalyzer.setAnalysisIdle(true)
         val bound = imageAnalysis
         if (bound != null) {
             bound.clearAnalyzer()
         }
         frameAnalyzer.recoverPipeline(false)
-        frameAnalyzer.resetSession()
+        resetExposureSession()
         if (bound != null) {
             cameraStarted = true
             watchdog.postDelayed({
-                if (isDestroyed || imageAnalysis !== bound) return@postDelayed
-                bound.setAnalyzer(cameraExecutor, frameAnalyzer)
+                if (!isDestroyed && imageAnalysis === bound) {
+                    bound.setAnalyzer(cameraExecutor, frameAnalyzer)
+                }
                 frameAnalyzer.setAnalysisIdle(false)
             }, ANALYZER_SETTLE_MS)
         } else {
