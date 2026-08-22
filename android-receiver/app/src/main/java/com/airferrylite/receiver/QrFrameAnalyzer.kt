@@ -214,20 +214,13 @@ class QrFrameAnalyzer(
         val previousTiles = trackedTiles.get().orEmpty().map {
             ScanLayout.clamp(it, luma.width, luma.height)
         }
-        if (previousTiles.size < 2) {
-            val seeds = if (previousTiles.size == 1) {
-                listOf(
-                    previousTiles[0],
-                    ScanLayout.horizontalSibling(previousTiles[0], luma.width, luma.height)
-                )
-            } else {
-                ScanLayout.dualHalves(region)
-            }
-            add(readCropsParallel(luma, seeds, retryBinarizer = true))
-            return merged
+        if (previousTiles.isNotEmpty()) {
+            add(readCropsParallel(luma, previousTiles.filter { !tileCovered(it, merged) }, retryBinarizer = false))
         }
-        add(readCropsParallel(luma, previousTiles.filter { !tileCovered(it, merged) }, retryBinarizer = false))
-        if (transferCount(merged) < 2) {
+        // 0.8.25: tiles < 2 still need a full-frame max4 so one multi-layout hit
+        // does not leave later frames on maxSymbols=1 quadrants (half speed).
+        // Skip max4 when two real tiles already both hit (0.8.19).
+        if (previousTiles.size < 2 || transferCount(merged) < 2) {
             add(decoder.read(luma, ScanLayout.centerSquare(luma.width, luma.height), 4))
         }
         if (transferCount(merged) >= 4) return merged
@@ -415,13 +408,9 @@ class QrFrameAnalyzer(
                 tileUndercount.set(0)
                 trackedTiles.set(ScanLayout.tilesFromHits(perCode, imageWidth, imageHeight))
             }
-            previous != null && previous.size >= 3 -> {
+            previous != null && previous.size >= 2 && hits.size < 2 -> {
                 tileUndercount.set(0)
                 trackedTiles.set(ScanLayout.followContainedHits(previous, perCode, imageWidth, imageHeight))
-            }
-            previous != null && previous.size >= 2 && hits.size == 1 -> {
-                tileUndercount.set(0)
-                trackedTiles.set(ScanLayout.pairFromHit(perCode[0], imageWidth, imageHeight))
             }
             previous != null && previous.size >= 2 -> {
                 tileUndercount.set(0)
@@ -433,10 +422,6 @@ class QrFrameAnalyzer(
             hits.size >= 2 -> {
                 tileUndercount.set(0)
                 trackedTiles.set(ScanLayout.tilesFromHits(perCode, imageWidth, imageHeight))
-            }
-            hits.size == 1 -> {
-                tileUndercount.set(0)
-                trackedTiles.set(ScanLayout.pairFromHit(perCode[0], imageWidth, imageHeight))
             }
         }
     }
