@@ -138,7 +138,6 @@ class MainActivity : AppCompatActivity() {
     private var processRestarting = false
     private var restartStartedAt = 0L
     private var settlePreviewBeforeAnalyze = false
-    private var halSettleAlreadyWaited = false
     private val restartProgressTick = object : Runnable {
         override fun run() {
             if (!processRestarting) return
@@ -255,11 +254,11 @@ class MainActivity : AppCompatActivity() {
             showOpeningCamera()
             previewView.post {
                 watchdog.postDelayed({
-                    halSettleAlreadyWaited = true
                     requestStartReceive()
                 }, AUTOSTART_BIND_DELAY_MS)
             }
         } else {
+            markCameraReleased()
             showIdle()
         }
         renderDiagnostics()
@@ -316,17 +315,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun beginReceive() {
-        if (needsHalSettle()) {
-            showOpeningCamera()
-            watchdog.postDelayed({
-                if (isDestroyed) return@postDelayed
-                markCameraReleased()
-                showScanning()
-                startScanner()
-            }, PROCESS_RESTART_DELAY_MS)
-            return
-        }
         showScanning()
+        if (imageAnalysis == null) {
+            settlePreviewBeforeAnalyze = true
+        }
         previewView.post { startScanner() }
     }
 
@@ -419,7 +411,7 @@ class MainActivity : AppCompatActivity() {
         cameraProvider?.unbindAll()
         imageAnalysis = null
         boundCamera = null
-        watchdog.postDelayed({ markCameraReleased() }, PROCESS_RESTART_DELAY_MS)
+        markCameraReleased()
     }
 
     private fun startScanner() {
@@ -733,14 +725,22 @@ class MainActivity : AppCompatActivity() {
         lastHighTotal = 0
         frameAnalyzer.consumeRecoverRequest()
         recoverBurst = 0
-        frameAnalyzer.replaceDecoders()
-        frameAnalyzer.resetSession()
-        frameAnalyzer.setAnalysisIdle(false)
+        frameAnalyzer.setAnalysisIdle(true)
         val bound = imageAnalysis
         if (bound != null) {
-            cameraStarted = true
             bound.clearAnalyzer()
-            bound.setAnalyzer(cameraExecutor, frameAnalyzer)
+        }
+        frameAnalyzer.recoverPipeline(false)
+        frameAnalyzer.resetSession()
+        if (bound != null) {
+            cameraStarted = true
+            watchdog.postDelayed({
+                if (isDestroyed || imageAnalysis !== bound) return@postDelayed
+                bound.setAnalyzer(cameraExecutor, frameAnalyzer)
+                frameAnalyzer.setAnalysisIdle(false)
+            }, ANALYZER_SETTLE_MS)
+        } else {
+            frameAnalyzer.setAnalysisIdle(false)
         }
         updateUi(TransferUpdate(null, 0, 0))
         fileText.text = "等待文件"
@@ -911,11 +911,6 @@ class MainActivity : AppCompatActivity() {
         size < 1024 -> "$size B"
         size < 1048576 -> "%.1f KB".format(size / 1024.0)
         else -> "%.1f MB".format(size / 1048576.0)
-    }
-
-    private fun needsHalSettle(): Boolean {
-        if (halSettleAlreadyWaited) return false
-        return getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_CAMERA_HELD, false)
     }
 
     private fun markCameraHeld() {

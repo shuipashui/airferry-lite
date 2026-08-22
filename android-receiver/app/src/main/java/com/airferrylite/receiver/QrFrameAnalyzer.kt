@@ -313,16 +313,13 @@ class QrFrameAnalyzer(
         }
         if (transferCount(merged) >= 4) return merged
         if (previousTiles.size >= 4 && transferCount(merged) >= 3) return merged
-        val exclusive = ScanLayout.exclusiveQuadrants(region)
         val overlays = ScanLayout.overlappingQuadrants(region)
-        val pending = overlays.indices.mapNotNull { index ->
-            overlays[index].takeUnless { tileCovered(exclusive[index], merged, exclusive) }
-        }
+        val pending = overlays.filter { !tileCovered(it, merged, overlays) }
         add(readCropsSerial(luma, pending, retryBinarizer = false))
         if (transferCount(merged) >= 4) return merged
         if (previousTiles.size >= 4 && transferCount(merged) >= 3) return merged
-        val retries = exclusive.mapNotNull { tile ->
-            if (tileCovered(tile, merged, exclusive)) null
+        val retries = overlays.mapNotNull { tile ->
+            if (tileCovered(tile, merged, overlays)) null
             else ScanLayout.inflate(tile, 1.28f, luma.width, luma.height)
         }
         add(readCropsSerial(luma, retries, retryBinarizer = true))
@@ -431,7 +428,12 @@ class QrFrameAnalyzer(
             emptyDecodes.incrementAndGet()
             val miss = roiMisses.incrementAndGet()
             val lockedTiles = trackedTiles.get()?.size ?: 0
-            val missLimit = if (lockedTiles >= 2) 6 else 2
+            val missLimit = when {
+                lockedTiles >= 2 -> 6
+                dualHint.get() || dualLayout.get() -> 12
+                multiLayout.get() -> 8
+                else -> 2
+            }
             if (miss >= missLimit) {
                 trackedTiles.set(null)
                 trackedRoi.set(null)
@@ -457,7 +459,7 @@ class QrFrameAnalyzer(
             multiHits.addAndGet(transferHits.size.toLong())
         } else if (dualHint.get() || anyMultiLayout(transferHits)) {
             singleLayoutConfirmed.set(false)
-        } else {
+        } else if (!dualLayout.get()) {
             singleLayoutConfirmed.set(true)
             singleHits.addAndGet(transferHits.size.toLong())
         }
