@@ -246,13 +246,17 @@ class QrFrameAnalyzer(
             }
             add(readCropsSerial(luma, retries, retryBinarizer = true))
         }
-        // Sibling hunt only on a 1-hit frame. dualHint plus empty wall
-        // serial-filled every frame (0.8.52 first-from-blank: 20.6 ms / 5 KB/s).
+        // Unconfirmed: cheap max4, then at most parallel halves. A 1-hit 0x1c
+        // must not run acquireDualSibling — that serial 8-way dropped first-from-blank
+        // to 16.4 ms / 35 FPS / 38 KB/s and never produced 2-in-one-frame (0.8.53).
+        // Empty-frame serial after dualHint was worse (0.8.52: 20.6 ms / 5 KB/s).
+        // Lock dual only when the same frame already has two transfer hits.
         if (!multiLayout.get()) {
             add(decoder.read(luma, region, maxSymbols))
-            if (transferCount(merged) == 1 && (dualHint.get() || anyDualLayout(merged))) {
-                acquireDualSibling()
-            } else if (transferCount(merged) == 1 && anyMultiLayout(merged)) {
+            if (
+                transferCount(merged) == 1 &&
+                (dualHint.get() || anyDualLayout(merged) || anyMultiLayout(merged))
+            ) {
                 add(
                     readCropsParallel(
                         luma,
