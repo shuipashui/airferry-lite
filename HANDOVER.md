@@ -4,7 +4,7 @@
 
 对外说明只写 [README.md](README.md)。不要在 README 里放版本号、实测 KB/s、Worker / VideoFrame 细节或本文链接。
 
-**交接时点：** 2026-08-22。网页接收端 **v85**。Android APK **0.8.33**。点「接收文件」才开相机；PreviewView 始终 VISIBLE，遮罩盖闲置/结果。收完 `unbind`。扫描中清空只 `resetSession`。**0.8.32 诊断：** 相机 60.5 FPS / 7.7 ms 仍会话 24.3 KB/s，是整幅 `maxSymbols=4` 锁不住双格（903 扫描、命中 2、ROI 全图）。**0.8.33：** 一枚双码就推断邻格，用两路 `maxSymbols=1`，禁止格子不足时整幅 max4。当前最快：双码 **2068 B · 60 FPS** 首次 **240.0 / 233.9**。
+**交接时点：** 2026-08-22。网页接收端 **v85**。Android APK **0.8.34**。点「接收文件」才开相机；PreviewView 始终 VISIBLE。收完 `unbind`。扫描中清空只 `resetSession`。**0.8.32：** 相机满速仍 24.3 KB/s，整幅 max4 锁不住双格。**0.8.33 误伤单码/四码发现路径，已在 0.8.34 收回。** 双码：1 命中推断邻格；格子 <2 才左右两裁。单码确认前后、四码已锁 ≥3 格仍走原路径。当前最快：双码 **2068 B · 60 FPS** 首次 **240.0 / 233.9**。
 
 ## 1. 项目一句话
 
@@ -30,10 +30,10 @@
 | 部件 | 版本 | 对照 |
 |---|---|---|
 | 网页接收端 | **v85** | 预览可选手动 30/60 FPS（默认 60）。四码 33 ms · inflight 1；锁格后 Worker 切格 |
-| Android APK | **0.8.33**（versionCode 48） | 双码用左右两裁 `maxSymbols=1` 锁格；1 命中推断邻格。PreviewView 一直 VISIBLE。收完 unbind。清空不重绑。0.8.29–0.8.32 相机/整幅 max4 已否 |
+| Android APK | **0.8.34**（versionCode 49） | 双码 1 命中推断邻格；格子 <2 左右两裁。单码/四码锁满后不改。PreviewView VISIBLE。收完 unbind。清空不重绑 |
 | 发送端 | AFL2 单文件 HTML | 打开单码预填 **2953 B · 30 FPS**；打开四码预填 **1465 B · 30 FPS**（整屏同换）；打开双码预填 **2068 B · 60 FPS**（V33）。QR 在 4 个 Worker 里生成。60 FPS 四码仍交错。无 45 FPS |
 
-诊断第一行必须是 `网页：v85` 或 `App 0.8.33`。
+诊断第一行必须是 `网页：v85` 或 `App 0.8.34`。
 
 ## 4. 实测对照（只认这些）
 
@@ -141,16 +141,17 @@
 - 停止：冻最后一帧到 `#cameraFreeze` 再清 `srcObject`。`finishing` 时不要清布局字段。
 - SW：`claim` 即可。不要 `client.navigate`，不要 `controllerchange` 时 `reload`。WASM 第一次用再缓存。
 
-## 7. Android APK 实现（0.8.33）
+## 7. Android APK 实现（0.8.34）
 
-源码：`android-receiver/app/src/main/java/com/airferrylite/receiver/`。构建：`android-receiver/build-local.ps1` 或 GitHub Actions `Build Android receiver`。Java 17，SDK 35。`versionName 0.8.33` / `versionCode 48`。不要改解码选项（`tryHarder` / rotate / invert / downscale / `isPure`），除非明确要求动分析管线。
+源码：`android-receiver/app/src/main/java/com/airferrylite/receiver/`。构建：`android-receiver/build-local.ps1` 或 GitHub Actions `Build Android receiver`。Java 17，SDK 35。`versionName 0.8.34` / `versionCode 49`。不要改解码选项（`tryHarder` / rotate / invert / downscale / `isPure`），除非明确要求动分析管线。
 
 APK 比网页快，是因为同一帧 Y 平面上原生 zxing-cpp 能扫多个码，CameraX 丢旧帧，没有 `createImageBitmap` 整帧读回。网页不要搬 APK 的 midX/midY 重排。
 
 - 分析流：**1920×1440** · `YUV_420_888` · `KEEP_ONLY_LATEST`。标题行 30/60/120 只改 AE 档。高速录像管道不能扫码。
 - `NativeQrDecoder`：先拷 Y 平面再 `readYBuffer`，**rotation 0**。不要 `ImageProxy.read()`（会旋转）。`tryHarder` / rotate / invert / downscale 全关。先 `LOCAL_AVERAGE`，空再 `GLOBAL_HISTOGRAM`。`LumaScaler` 热路径不用。
-- 帧头 `0x0d` / `0x0f` 或一帧 ≥2 个传输码 → 多码。未确认前不要整幅 `maxSymbols=4`（0.8.32：V33 双码 903 扫描只 2 次双命中，会话 24.3 KB/s）；改左右两裁 `maxSymbols=1`，空了再整幅 `maxSymbols=1`。
-- 四码：已有格子则 4 路并行；锁满且本帧 ≥3 命中则返回，不再串行补扫。≥3 命中才 `tilesFromHits`。**双码：1 个多码帧头命中就 `multiLayout` 并 `pairFromHit` 推断邻格。** 已锁 2 格后保持格子；只打中 1 枚时按该枚重推邻格，不要清格。格子 <2：左右两裁 `maxSymbols=1`，**不要整幅 max4**（0.8.19 / 0.8.32）。已锁 2 格且两枚都打中时也不要整幅 max4。空扫：无锁 2 次清；已锁 ≥2 格要 6 次。诊断布局：格 2=双码，格 4=四码，多码但无格=多码未锁格。
+- 帧头 `0x0d` / `0x0f` 或一帧 ≥2 个传输码 → 多码；否则单码 `maxSymbols = 1`。未确认前（单码/尚未锁多码）仍整幅 `maxSymbols=4`，不要改成左右两裁。
+- 四码：已有格子则 4 路并行；锁满且本帧 ≥3 命中则返回，不再串行补扫。≥3 命中才 `tilesFromHits`。**已锁 ≥3 格时 1–2 命中只 `followContainedHits`，不要 `pairFromHit` 打成 2 格。** 已锁 ≥2 格却只命中 1 枚：整幅补扫。已锁 2 格且两枚都打中时不要整幅 max4（0.8.19）。
+- **双码专用：** 1 个多码帧头命中且格子 <2 才 `pairFromHit` 推断邻格。格子 <2：左右两裁 `maxSymbols=1`，不要整幅 max4（0.8.32：V33 903 扫描命中 2，会话 24.3 KB/s）。空扫：无锁 2 次清；已锁 ≥2 格要 6 次。诊断：格 2=双码，格 4=四码，多码但无格=多码未锁格。
 - 长时间开着会卡：解码超过 400 ms 只换 zxing 对象，不要停分析。相机时间戳不涨或诊断心跳 >2 s，看门狗才重绑 CameraX。**进应用不开相机**；点「接收文件」才 `bindToLifecycle(Activity)`。**PreviewView 始终 VISIBLE**（开源 AirFerry 同款），闲置/结果用面板盖住，不要 `gone`/`invisible`（0.8.31 假 Surface，分析 60 FPS 仍 0 命中）。收完 `unbindAll` 进预览；「继续接收」再绑。扫描中清空只 `resetSession`。不要 `shutdownAsync`、不要独立 Lifecycle、不要首帧 `unbind` 预热。诊断始终完整文本，高度 48dp。
 - 收完点「保存文件」，不要自动写盘。诊断 ROI 显示 `格 N`。进度只在内存。
 
@@ -161,7 +162,7 @@ sender/                         浏览器发送：测刷新率、lookahead、画
   dist/airferry-lite-sender.html  提交用的单文件产物
 index.html + app.js + sw.js     GitHub Pages 网页接收端
 web-receiver/                   根目录镜像，必须 byte-identical
-android-receiver/               Kotlin + CameraX + zxing-cpp（0.8.33）
+android-receiver/               Kotlin + CameraX + zxing-cpp（0.8.34）
 shared/ + highspeed-protocol.js AFL1 / AFL2
 vendor/decimen/                 WASM Worker 与 zxing wasm
 third_party/decimen-v0.3/       MIT 源，不要混入后续 AGPL Decimen
