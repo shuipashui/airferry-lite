@@ -51,9 +51,7 @@ class QrFrameAnalyzer(
     private val workerBusy = AtomicInteger(0)
     private val skipUntilRecover = AtomicBoolean(false)
     private val analysisIdle = AtomicBoolean(false)
-    private val firstFrameArmed = AtomicBoolean(false)
     private val recoverRequested = AtomicBoolean(false)
-    @Volatile private var firstFrameCallback: (() -> Unit)? = null
     private val pipelineRecoveries = AtomicLong(0)
     private val lastImageTimestamp = AtomicLong(0)
     private val staleTimestampFrames = AtomicInteger(0)
@@ -81,11 +79,6 @@ class QrFrameAnalyzer(
 
     override fun analyze(image: ImageProxy) {
         capturedInWindow.incrementAndGet()
-        if (firstFrameArmed.getAndSet(false)) {
-            val callback = firstFrameCallback
-            firstFrameCallback = null
-            callback?.invoke()
-        }
         reportStatsIfDue(image.width, image.height)
         if (skipUntilRecover.get()) {
             droppedFrames.incrementAndGet()
@@ -140,16 +133,6 @@ class QrFrameAnalyzer(
 
     fun setAnalysisIdle(idle: Boolean) {
         analysisIdle.set(idle)
-    }
-
-    fun armFirstFrame(callback: () -> Unit) {
-        firstFrameCallback = callback
-        firstFrameArmed.set(true)
-    }
-
-    fun disarmFirstFrame() {
-        firstFrameArmed.set(false)
-        firstFrameCallback = null
     }
 
     fun replaceDecoders() {
