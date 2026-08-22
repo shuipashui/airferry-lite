@@ -227,13 +227,12 @@ class QrFrameAnalyzer(
         if (previousTiles.size < 2) {
             add(decoder.read(luma, ScanLayout.centerSquare(luma.width, luma.height), 4))
             if (transferCount(merged) < 2) {
-                add(readCropsParallel(luma, ScanLayout.dualHalves(ScanLayout.centerSquare(luma.width, luma.height)), retryBinarizer = false))
+                add(readCropsParallel(luma, ScanLayout.dualDiagonal(ScanLayout.centerSquare(luma.width, luma.height)), retryBinarizer = false))
             }
         }
         if (transferCount(merged) >= 4) return merged
         if (previousTiles.size >= 4 && transferCount(merged) >= 3) return merged
-        // Empty miss path: max4 + halves only. Serial quadrants here drop analysis to ~26 FPS (0.8.43 清空 / 0.8.44 首次).
-        if (previousTiles.isEmpty() && transferCount(merged) < 2) return merged
+        if (previousTiles.isEmpty() && transferCount(merged) == 0) return merged
         val exclusive = ScanLayout.exclusiveQuadrants(region)
         val overlays = ScanLayout.overlappingQuadrants(region)
         val pending = overlays.indices.mapNotNull { index ->

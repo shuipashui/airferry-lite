@@ -77,7 +77,7 @@
   const LINK_QUIET_MODULES = 4;
   const COMMON_HZ = [60, 75, 90, 120, 144, 165, 240];
   const QUAD_PAIRS = [[0, 3], [1, 2]];
-  const DUAL_SLOTS = [0, 1];
+  const DUAL_SLOTS = [0, 3];
   let file = null;
   let transfer = null;
   let animationFrame = 0;
@@ -366,7 +366,7 @@
     const playing = codesPerScreen === 4
       ? (quadRefreshesAll() ? "正在循环播放 · 四码整屏同换" : "正在循环播放 · 四码交错换对角")
       : codesPerScreen === 2
-        ? (dualUpdatesBoth() ? "正在循环播放 · 双码上排同时更新" : "正在循环播放 · 双码上排交替更新")
+        ? (dualUpdatesBoth() ? "正在循环播放 · 双码对角同时更新" : "正在循环播放 · 双码对角交替更新")
         : "正在循环播放";
     if (!measuredRefreshHz) return playing;
     const interval = updateIntervalVsyncs();
@@ -926,7 +926,7 @@
     let text = "理论速度：" + formatRate(rate.screen) + "（" + rate.bytes + " B × " + rate.codes + " 码 × " + rate.fps + " FPS）· 载荷约 " + formatRate(rate.payload);
     if (rate.scale) text += " · 每模块 " + rate.scale + " 设备像素（整数）";
     if (rate.codes === 4) text += "。30 FPS 四码整屏同换；60 FPS 仍交错换对角，避免四格同刷拖影";
-    if (rate.codes === 2) text += "。双码只占 2×2 上排。60 FPS 两格同时更新。打开预填 2068 B · 60 FPS";
+    if (rate.codes === 2) text += "。双码占 2×2 左上和右下。60 FPS 两格同时更新。打开预填 2068 B · 60 FPS";
     if (rate.codes === 4 && rate.cell && rate.cell < 3) text += "。模块偏小，请全屏后再播";
     if (rate.codes === 2 && rate.cell && rate.cell < 3) text += "。模块偏小，请全屏后再播";
     if (rate.codes === 4 && rate.fps >= 60 && (measuredRefreshHz || 60) < 90) text += "。60 Hz 屏上四码 60 FPS 容易拖影，改用 30 FPS 通常更快";

@@ -212,6 +212,7 @@ class MainActivity : AppCompatActivity() {
                     lastStatsAt = SystemClock.elapsedRealtime()
                     recoverBurst = 0
                     renderDiagnostics()
+                    maybeRestartDeadHal(stats)
                 }
             }
         )
@@ -241,6 +242,26 @@ class MainActivity : AppCompatActivity() {
             return
         }
         beginReceive()
+    }
+
+    private fun maybeRestartDeadHal(stats: ScanStats) {
+        if (processRestarting) return
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        if (stats.singleHits + stats.multiHits > 0) {
+            if (prefs.contains(PREF_HAL_ZERO_RESTART_AT)) {
+                prefs.edit().remove(PREF_HAL_ZERO_RESTART_AT).apply()
+            }
+            return
+        }
+        if (stats.submittedFrames < HAL_ZERO_HIT_FRAMES) return
+        if (stats.emptyDecodes < HAL_ZERO_HIT_FRAMES) return
+        if (stats.captureFps < 45.0 || stats.analysisFps < 45.0) return
+        val now = System.currentTimeMillis()
+        val lastAt = prefs.getLong(PREF_HAL_ZERO_RESTART_AT, 0L)
+        if (lastAt != 0L && now - lastAt < HAL_ZERO_RESTART_COOLDOWN_MS) return
+        prefs.edit().putLong(PREF_HAL_ZERO_RESTART_AT, now).commit()
+        statusText.text = "相机未读到码，正在冷启动"
+        continueReceive()
     }
 
     private fun continueReceive() {
@@ -804,7 +825,10 @@ class MainActivity : AppCompatActivity() {
         private const val PREFS_NAME = "airferry-lite"
         private const val PREF_FPS = "preview_fps"
         private const val PREF_AUTOSTART_SCAN = "autostart_scan"
+        private const val PREF_HAL_ZERO_RESTART_AT = "hal_zero_hit_restart_at"
         private const val EXTRA_AUTOSTART_SCAN = "autostart_scan"
+        private const val HAL_ZERO_HIT_FRAMES = 180L
+        private const val HAL_ZERO_RESTART_COOLDOWN_MS = 20_000L
         private const val PROCESS_RESTART_DELAY_MS = 2000L
         private const val AUTOSTART_BIND_DELAY_MS = 400L
         private const val WATCHDOG_INTERVAL_MS = 1000L

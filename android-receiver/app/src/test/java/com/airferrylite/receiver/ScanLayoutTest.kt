@@ -162,16 +162,15 @@ class ScanLayoutTest {
     }
 
     @Test
-    fun dualHalvesOverlapOnTheMidline() {
+    fun dualDiagonalUsesTopLeftAndBottomRight() {
         val region = ScanRegion(240, 0, 1440, 1440)
-        val halves = ScanLayout.dualHalves(region)
-        assertEquals(2, halves.size)
-        val crop = ((0.5f + ScanLayout.QUAD_OVERLAP) * 1440).toInt()
-        assertEquals(crop, halves[0].width)
-        assertEquals(crop, halves[1].width)
-        assertTrue(halves[0].left + halves[0].width > halves[1].left)
-        assertEquals(region.left + region.width, halves[1].left + halves[1].width)
-        assertEquals(region.height, halves[0].height)
+        val pair = ScanLayout.dualDiagonal(region)
+        assertEquals(2, pair.size)
+        val overlays = ScanLayout.overlappingQuadrants(region)
+        assertEquals(overlays[0], pair[0])
+        assertEquals(overlays[3], pair[1])
+        assertTrue(pair[0].left < pair[1].left)
+        assertTrue(pair[0].top < pair[1].top)
     }
 
     @Test
