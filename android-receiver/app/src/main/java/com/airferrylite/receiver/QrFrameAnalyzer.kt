@@ -348,6 +348,7 @@ class QrFrameAnalyzer(
             val missLimit = if (lockedTiles >= 2) 6 else 2
             if (miss >= missLimit) {
                 trackedTiles.set(null)
+                trackedRoi.set(null)
                 tileUndercount.set(0)
             }
             return

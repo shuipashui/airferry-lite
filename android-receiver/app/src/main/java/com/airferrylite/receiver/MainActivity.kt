@@ -619,7 +619,7 @@ class MainActivity : AppCompatActivity() {
         lastHighTotal = 0
         frameAnalyzer.consumeRecoverRequest()
         recoverBurst = 0
-        frameAnalyzer.resetProtocol()
+        frameAnalyzer.resetSession()
         updateUi(TransferUpdate(null, 0, 0))
         fileText.text = "等待文件"
         progress.progress = 0
