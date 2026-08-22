@@ -215,6 +215,22 @@ class QrFrameAnalyzer(
         resetProtocol()
     }
 
+    fun noteStreamLayout(layoutCodes: Int) {
+        when (layoutCodes) {
+            2 -> {
+                dualStream.set(true)
+                quadStream.set(false)
+                sawThreeOrMore.set(false)
+                singleLayoutConfirmed.set(false)
+            }
+            4 -> {
+                quadStream.set(true)
+                dualStream.set(false)
+                singleLayoutConfirmed.set(false)
+            }
+        }
+    }
+
     private fun chooseRegion(width: Int, height: Int): ScanRegion {
         return ScanLayout.activeRegion(trackedRoi.get(), roiMisses.get(), width, height)
     }
@@ -250,10 +266,15 @@ class QrFrameAnalyzer(
             ScanLayout.clamp(it, luma.width, luma.height)
         }
         if (previousTiles.isNotEmpty()) {
+            val tileCrops = if (previousTiles.size >= 2) {
+                previousTiles.map { ScanLayout.inflate(it, 1.14f, luma.width, luma.height) }
+            } else {
+                previousTiles
+            }
             add(
                 readCropsParallel(
                     luma,
-                    previousTiles.filter { !tileCovered(it, merged, previousTiles) },
+                    tileCrops.filter { !tileCovered(it, merged, previousTiles) },
                     retryBinarizer = false
                 )
             )

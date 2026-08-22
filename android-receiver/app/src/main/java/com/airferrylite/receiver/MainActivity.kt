@@ -141,6 +141,7 @@ class MainActivity : AppCompatActivity() {
     private var skipHalWaitOnBeginReceive = false
     private var softDecoderRecoverAttempted = false
     private var lastSoftRecoverAt = 0L
+    private var halRecoveryRestartAttempted = false
     private var restartDelayMs = PROCESS_RESTART_DELAY_MS
     private val restartProgressTick = object : Runnable {
         override fun run() {
@@ -248,6 +249,7 @@ class MainActivity : AppCompatActivity() {
                     lastStatsAt = SystemClock.elapsedRealtime()
                     recoverBurst = 0
                     maybeSoftDecoderRecover(stats)
+                    maybeRestartForHalEmptyBurst(stats)
                     renderDiagnostics()
                 }
             }
@@ -279,7 +281,7 @@ class MainActivity : AppCompatActivity() {
                 }, bindDelay)
             }
         } else {
-            clearStaleCameraHeld()
+            reconcileCameraStateAfterReopen()
             showIdle()
         }
         renderDiagnostics()
@@ -382,6 +384,7 @@ class MainActivity : AppCompatActivity() {
     private fun launchReceiveAfterHalWait() {
         softDecoderRecoverAttempted = false
         lastSoftRecoverAt = 0L
+        halRecoveryRestartAttempted = false
         if (::frameAnalyzer.isInitialized) {
             frameAnalyzer.resetSession()
             frameAnalyzer.setAnalysisIdle(false)
@@ -426,6 +429,31 @@ class MainActivity : AppCompatActivity() {
             imageAnalysis?.setAnalyzer(cameraExecutor, frameAnalyzer)
             frameAnalyzer.setAnalysisIdle(false)
         }, 800L)
+    }
+
+    private fun maybeRestartForHalEmptyBurst(stats: ScanStats) {
+        if (!cameraStarted || processRestarting || halRecoveryRestartAttempted) return
+        if (stats.submittedFrames < HAL_EMPTY_BURST_MIN_FRAMES) return
+        val emptyRatio = stats.emptyDecodes.toDouble() / stats.submittedFrames.toDouble()
+        if (emptyRatio < HAL_EMPTY_BURST_RATIO) return
+        if (highUniqueFrameCount >= HAL_EMPTY_BURST_MAX_UNIQUE) return
+        halRecoveryRestartAttempted = true
+        restartScanForHalRecovery()
+    }
+
+    private fun restartScanForHalRecovery() {
+        if (processRestarting) return
+        processRestarting = true
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .putBoolean(PREF_AUTOSTART_SCAN, true)
+            .commit()
+        showRestarting()
+        statusText.text = "相机未就绪，正在恢复"
+        watchdog.postDelayed({
+            markCameraReleased()
+            restartProcessForScan()
+        }, PROCESS_RESTART_DELAY_MS)
     }
 
     private fun showIdle() {
@@ -726,6 +754,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleHighSpeedFrame(bytes: ByteArray) {
+        when {
+            HighSpeedAssembler.isDualLayoutFrame(bytes) -> frameAnalyzer.noteStreamLayout(2)
+            HighSpeedAssembler.isQuadLayoutFrame(bytes) -> frameAnalyzer.noteStreamLayout(4)
+        }
         highFrameCount += 1
         highBytesReceived += bytes.size.toLong()
         highLastFrameAt = SystemClock.elapsedRealtime()
@@ -1030,8 +1062,25 @@ class MainActivity : AppCompatActivity() {
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_CAMERA_HELD, true).commit()
     }
 
+    private fun reconcileCameraStateAfterReopen() {
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        if (prefs.getBoolean(PREF_CAMERA_HELD, false)) {
+            // Force-kill often skips onDestroy; record HAL release before the next bind.
+            markCameraReleased()
+            pauseScanner()
+            imageAnalysis = null
+            boundCamera = null
+            cameraProvider?.unbindAll()
+        } else {
+            prefs.edit().putBoolean(PREF_CAMERA_HELD, false).apply()
+        }
+    }
+
     private fun clearStaleCameraHeld() {
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_CAMERA_HELD, false).apply()
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val wasHeld = prefs.getBoolean(PREF_CAMERA_HELD, false)
+        prefs.edit().putBoolean(PREF_CAMERA_HELD, false).apply()
+        if (wasHeld) markCameraReleased()
     }
 
     private fun markCameraReleased() {
@@ -1088,6 +1137,9 @@ class MainActivity : AppCompatActivity() {
         private const val CONTINUE_RESTART_MIN_MS = 400L
         private const val CAMERA_HAL_COOLDOWN_MS = 2000L
         private const val ANALYZER_SETTLE_MS = 1200L
+        private const val HAL_EMPTY_BURST_MIN_FRAMES = 250L
+        private const val HAL_EMPTY_BURST_RATIO = 0.80
+        private const val HAL_EMPTY_BURST_MAX_UNIQUE = 25L
         private const val WATCHDOG_INTERVAL_MS = 1000L
         private const val SCAN_STALL_MS = 2000L
         private const val RECOVER_COOLDOWN_MS = 5000L
