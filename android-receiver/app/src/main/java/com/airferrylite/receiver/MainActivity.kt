@@ -228,6 +228,10 @@ class MainActivity : AppCompatActivity() {
                 decodedQrCount.incrementAndGet()
                 val bytes = decoded.bytes
                 if (bytes != null && HighSpeedAssembler.looksLikeFrame(bytes)) {
+                    when {
+                        HighSpeedAssembler.isDualLayoutFrame(bytes) -> frameAnalyzer.noteStreamLayout(2)
+                        HighSpeedAssembler.isQuadLayoutFrame(bytes) -> frameAnalyzer.noteStreamLayout(4)
+                    }
                     highSpeedSessionActive = true
                     val epoch = protocolEpoch.get()
                     pendingProtocolFrames.incrementAndGet()
@@ -391,6 +395,9 @@ class MainActivity : AppCompatActivity() {
         halRecoveryRestartAttempted = false
         if (::frameAnalyzer.isInitialized) {
             frameAnalyzer.resetSession()
+            if (receiveSessionFromContinue) {
+                frameAnalyzer.noteStreamLayout(2)
+            }
             frameAnalyzer.setAnalysisIdle(false)
         }
         protocolEpoch.incrementAndGet()
@@ -411,10 +418,15 @@ class MainActivity : AppCompatActivity() {
         previewView.post { startScanner() }
     }
 
+    private fun inHalRecoveryWarmup(): Boolean {
+        if (cameraBoundAt != 0L && SystemClock.elapsedRealtime() - cameraBoundAt < HAL_WARMUP_MS) return true
+        if (receiveSessionFromContinue && highUniqueFrameCount < HAL_WARMUP_MIN_UNIQUE) return true
+        return false
+    }
+
     private fun maybeSoftDecoderRecover(stats: ScanStats) {
         if (!cameraStarted || processRestarting) return
-        if (receiveSessionFromContinue && highUniqueFrameCount < HAL_WARMUP_MIN_UNIQUE) return
-        if (cameraBoundAt != 0L && SystemClock.elapsedRealtime() - cameraBoundAt < HAL_WARMUP_MS) return
+        if (inHalRecoveryWarmup()) return
         if (stats.submittedFrames < 240) return
         if (highUniqueFrameCount >= 20) return
         val emptyRatio = stats.emptyDecodes.toDouble() / stats.submittedFrames.toDouble()
@@ -439,9 +451,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun maybeRestartForHalEmptyBurst(stats: ScanStats) {
         if (!cameraStarted || processRestarting || halRecoveryRestartAttempted) return
-        // Continue-receive already cold-restarts; extra HAL kills loop on warmup empty frames.
-        if (receiveSessionFromContinue) return
-        if (cameraBoundAt != 0L && SystemClock.elapsedRealtime() - cameraBoundAt < HAL_WARMUP_MS) return
+        if (inHalRecoveryWarmup()) return
+        if (highUniqueFrameCount >= 5 || lastHighSolved >= 20) return
         val lastHalRecovery = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             .getLong(PREF_LAST_HAL_RECOVERY_MS, 0L)
         if (System.currentTimeMillis() - lastHalRecovery < HAL_RECOVERY_COOLDOWN_MS) return
@@ -1159,10 +1170,10 @@ class MainActivity : AppCompatActivity() {
         private const val CONTINUE_RESTART_MIN_MS = 400L
         private const val CAMERA_HAL_COOLDOWN_MS = 2000L
         private const val ANALYZER_SETTLE_MS = 1200L
-        private const val HAL_EMPTY_BURST_MIN_FRAMES = 400L
+        private const val HAL_EMPTY_BURST_MIN_FRAMES = 250L
         private const val HAL_EMPTY_BURST_RATIO = 0.80
         private const val HAL_EMPTY_BURST_MAX_UNIQUE = 25L
-        private const val HAL_WARMUP_MS = 6000L
+        private const val HAL_WARMUP_MS = 4000L
         private const val HAL_WARMUP_MIN_UNIQUE = 10L
         private const val HAL_RECOVERY_COOLDOWN_MS = 60_000L
         private const val WATCHDOG_INTERVAL_MS = 1000L

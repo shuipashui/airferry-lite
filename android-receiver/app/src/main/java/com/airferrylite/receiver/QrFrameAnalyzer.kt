@@ -513,10 +513,13 @@ class QrFrameAnalyzer(
             }
         } else {
             val bytes = QrPayload.bytesFrom(transferHits.first().bytes, transferHits.first().text)
-            if (QrPayload.isMultiLayout(bytes)) {
-                singleLayoutConfirmed.set(false)
-            } else {
-                singleLayoutConfirmed.set(true)
+            when {
+                QrPayload.isMultiLayout(bytes) -> singleLayoutConfirmed.set(false)
+                bytes != null && HighSpeedAssembler.looksLikeFrame(bytes) -> {
+                    // AFL2 file header (magic 0x0c) is not multi-layout but must not lock single-code scan.
+                    singleLayoutConfirmed.set(false)
+                }
+                else -> singleLayoutConfirmed.set(true)
             }
             singleHits.addAndGet(transferHits.size.toLong())
         }
