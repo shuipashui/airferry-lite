@@ -323,13 +323,16 @@ class QrFrameAnalyzer(
         }
         if (transferCount(merged) >= 4) return merged
         if (previousTiles.size >= 4 && transferCount(merged) >= 3) return merged
+        val exclusive = ScanLayout.exclusiveQuadrants(region)
         val overlays = ScanLayout.overlappingQuadrants(region)
-        val pending = overlays.filter { !tileCovered(it, merged, overlays) }
+        val pending = overlays.indices.mapNotNull { index ->
+            overlays[index].takeUnless { tileCovered(exclusive[index], merged, exclusive) }
+        }
         add(readCropsSerial(luma, pending, retryBinarizer = false))
         if (transferCount(merged) >= 4) return merged
         if (previousTiles.size >= 4 && transferCount(merged) >= 3) return merged
-        val retries = overlays.mapNotNull { tile ->
-            if (tileCovered(tile, merged, overlays)) null
+        val retries = exclusive.mapNotNull { tile ->
+            if (tileCovered(tile, merged, exclusive)) null
             else ScanLayout.inflate(tile, 1.28f, luma.width, luma.height)
         }
         add(readCropsSerial(luma, retries, retryBinarizer = true))
