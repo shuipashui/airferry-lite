@@ -4,7 +4,7 @@
 
 对外说明只写 [README.md](README.md)。不要在 README 里放版本号、实测 KB/s、Worker / VideoFrame 细节或本文链接。
 
-**交接时点：** 2026-08-22。网页接收端 **v85**。Android APK **0.8.41**。点「接收文件」才开相机。小米每个进程只能成功 bind 一次。**0.8.40 已否：** `onStop` unbind 把首次打开打成二次 bind（85.9 / 0.63，未锁格）。杀进程仍 0 命中。**0.8.41：** 撤回 onStop；收完 `unbindAll`；「继续接收」杀进程冷启动再扫。扫描中清空仍只 `resetProtocol`。不要 shutdownAsync。当前最快：双码 **2068·60** 首次 **240.0 / 233.9**；四码 **1465·30** **168.9**。
+**交接时点：** 2026-08-22。网页接收端 **v85**。Android APK **0.8.42**。点「接收文件」才开相机。小米每个进程只能成功 bind 一次。**0.8.41：** 强杀后再开 238.8；立刻 `exit(0)` 继续接收 6.1（HAL 没冷却）；装完第一次打开 0 命中（上一版脏 HAL）。**0.8.42：** 收完仍 unbind；继续接收先等 2 秒再杀进程；空扫 60 帧后降解码降温。不要 shutdownAsync。不要 onStop unbind。当前最快：双码 **2068·60** 首次 **240.0 / 233.9**；四码 **1465·30** **168.9**。
 
 ## 1. 项目一句话
 
@@ -30,10 +30,10 @@
 | 部件 | 版本 | 对照 |
 |---|---|---|
 | 网页接收端 | **v85** | 预览可选手动 30/60 FPS（默认 60）。四码 33 ms · inflight 1；锁格后 Worker 切格 |
-| Android APK | **0.8.41**（versionCode 56） | 每进程只 bind 一次。继续接收冷启动。清空保格子 |
+| Android APK | **0.8.42**（versionCode 57） | 继续接收等 2 秒再冷启动。清空保格子 |
 | 发送端 | AFL2 单文件 HTML | 打开单码预填 **2953 B · 30 FPS**；打开四码预填 **1465 B · 30 FPS**（整屏同换）；打开双码预填 **2068 B · 60 FPS**（V33）。QR 在 4 个 Worker 里生成。60 FPS 四码仍交错。无 45 FPS |
 
-诊断第一行必须是 `网页：v85` 或 `App 0.8.41`。
+诊断第一行必须是 `网页：v85` 或 `App 0.8.42`。
 
 ## 4. 实测对照（只认这些）
 
@@ -58,6 +58,9 @@
 
 | 发送 | 距离 | 采集 / 分析 | 每帧 | ROI | 唯一 / 重复 | 实时 / 平均 / 会话 |
 |---|---|---|---|---|---|---|
+| **2068 B · 60 FPS · 双码同刷** | 窗口 · 0.8.41 强杀后重开 | 59.6 / 59.6 · 10.9 ms | **1.95** | 格 2 | 1212 / 6 | 239.8 / 238.8 / **238.8 KB/s** |
+| 2068 B · 60 FPS · 双码同刷 | 窗口 · 0.8.41 首次开 APK | 59.8 / 59.8 · 7.1 ms | **0.00** | 全图 · 单码 | 0 / 0 | 会话 **0 B/s** |
+| 2068 B · 60 FPS · 双码同刷 | 窗口 · 0.8.41 立刻继续接收 | 45.1 / 45.1 · 18.9 ms | **0.03** | 全图 | 15 / 0 | 8.3 / 4.7 / **6.1 KB/s** |
 | 2068 B · 60 FPS · 双码同刷 | 窗口 · 0.8.40 首次 | 55.0 / 55.0 · 13.2 ms | **0.63** | 全图 | 1237 / 2 | 23.1 / 42.6 / **85.9 KB/s** |
 | 2068 B · 60 FPS · 双码同刷 | 窗口 · 0.8.40 继续接收 | 40.1 / 40.1 · 18.6 ms | **0.31** | 格 2 | 322 / 0 | 80.2 / 82.6 / **37.7 KB/s** |
 | 2068 B · 60 FPS · 双码同刷 | 窗口 · 0.8.40 杀进程重开 | 60.1 / 60.1 · 7.4 ms | **0.00** | 全图 · 单码 | 0 / 0 | 会话 **0 B/s** |
@@ -150,9 +153,9 @@
 - 停止：冻最后一帧到 `#cameraFreeze` 再清 `srcObject`。`finishing` 时不要清布局字段。
 - SW：`claim` 即可。不要 `client.navigate`，不要 `controllerchange` 时 `reload`。WASM 第一次用再缓存。
 
-## 7. Android APK 实现（0.8.41）
+## 7. Android APK 实现（0.8.42）
 
-源码：`android-receiver/app/src/main/java/com/airferrylite/receiver/`。构建：`android-receiver/build-local.ps1` 或 GitHub Actions `Build Android receiver`。Java 17，SDK 35。`versionName 0.8.41` / `versionCode 56`。不要改解码选项（`tryHarder` / rotate / invert / downscale / `isPure`），除非明确要求动分析管线。
+源码：`android-receiver/app/src/main/java/com/airferrylite/receiver/`。构建：`android-receiver/build-local.ps1` 或 GitHub Actions `Build Android receiver`。Java 17，SDK 35。`versionName 0.8.42` / `versionCode 57`。不要改解码选项（`tryHarder` / rotate / invert / downscale / `isPure`），除非明确要求动分析管线。
 
 APK 比网页快，是因为同一帧 Y 平面上原生 zxing-cpp 能扫多个码，CameraX 丢旧帧，没有 `createImageBitmap` 整帧读回。网页不要搬 APK 的 midX/midY 重排。
 
@@ -161,7 +164,7 @@ APK 比网页快，是因为同一帧 Y 平面上原生 zxing-cpp 能扫多个�
 - 帧头 `0x0d` / `0x0f` 或一帧 ≥2 个传输码 → 多码；否则单码 `maxSymbols = 1`。未确认前仍整幅 `maxSymbols=4`。
 - 四码：已有格子则 4 路并行；锁满且本帧 ≥3 命中则返回，不再串行补扫。≥3 命中才 `tilesFromHits`。已锁 ≥3 格时 1–2 命中只 `followContainedHits`。格 2 必须继续四格补扫。已锁 2 格且两枚都打中时不要整幅 max4（0.8.19）。
 - **双码：** ≥2 真命中才 `tilesFromHits`。1 命中 `followContainedHits`。**只有格子 <2 才整幅 max4。** 已锁 ≥2 格即使本帧只中 1 枚也不要 max4（0.8.35 慢会话 28 FPS / 0.67 / 67.7 KB/s）；缺的码靠四格补扫找，不要 `return` 掉补扫（0.8.36 四码约 84）。空扫：无锁 2 次清；已锁 ≥2 格要 6 次。
-- 长时间开着会卡：解码超过 400 ms 只换 zxing 对象，不要停分析。相机时间戳不涨或诊断心跳 >2 s，看门狗才重绑 CameraX。**进应用不开相机**；点「接收文件」才第一次 `bindToLifecycle`。这台小米**每个进程只能成功 bind 一次**。收完 `unbindAll` 放 HAL。同一进程里再 bind 会 0 命中或掉到 20–85 KB/s（0.8.38 / 0.8.40）。「继续接收」写 `autostart_scan` 后 `exit(0)` 冷启动再扫。不要 `onStop` unbind（0.8.40：开相机就 onStop，首次变成二次 bind，85.9）。扫描中清空只 `resetProtocol`，保住格子。不要 `shutdownAsync`。不要首帧预热。不要独立 Lifecycle。不要把格 2 提前 return。诊断始终完整文本，高度 48dp。
+- 长时间开着会卡：解码超过 400 ms 只换 zxing 对象，不要停分析。相机时间戳不涨或诊断心跳 >2 s，看门狗才重绑 CameraX。**进应用不开相机**；点「接收文件」才第一次 `bindToLifecycle`。这台小米**每个进程只能成功 bind 一次**。收完 `unbindAll` 放 HAL。同一进程再 bind 会 0 命中或掉到 6–85 KB/s。立刻 `exit(0)` 再 bind 也不行（0.8.41 继续接收 6.1）；强杀后再开可以（238.8）。「继续接收」先停相机等 2 秒再 `killProcess`。空扫连续 60 帧后只解每 4 帧，减轻发热。不要 `onStop` unbind。不要 `shutdownAsync`。扫描中清空只 `resetProtocol`。不要首帧预热。不要独立 Lifecycle。不要把格 2 提前 return。诊断始终完整文本，高度 48dp。
 - 收完点「保存文件」，不要自动写盘。诊断 ROI 显示 `格 N`。进度只在内存。
 
 ## 8. 架构
@@ -171,7 +174,7 @@ sender/                         浏览器发送：测刷新率、lookahead、画
   dist/airferry-lite-sender.html  提交用的单文件产物
 index.html + app.js + sw.js     GitHub Pages 网页接收端
 web-receiver/                   根目录镜像，必须 byte-identical
-android-receiver/               Kotlin + CameraX + zxing-cpp（0.8.41）
+android-receiver/               Kotlin + CameraX + zxing-cpp（0.8.42）
 shared/ + highspeed-protocol.js AFL1 / AFL2
 vendor/decimen/                 WASM Worker 与 zxing wasm
 third_party/decimen-v0.3/       MIT 源，不要混入后续 AGPL Decimen
@@ -201,7 +204,7 @@ tests/                          npm test
 
 - 不要 `ImageProxy.read()`、不要高速录像接到 ImageAnalysis、不要 `LumaScaler` 回热路径。
 - 不要锁 AF 为 manual/none；不要把四码分析流改成 30；不要 60 Hz 四码四格同刷。
-- 不要收完 `unbindAll` 再在同一进程 bind（0.8.38 继续接收：每帧 0.05、20.1 KB/s）。不要 `onStop` unbind 再 `onStart` bind（0.8.40：首次 85.9、杀进程仍 0 命中）。不要让收完后的会话一直占着相机直到杀进程（0.8.39：重开 0 命中）。继续接收必须冷启动。不要清空时 `resetSession` 清格子。不要 `shutdownAsync`。不要把格 2 当双码提前返回。
+- 不要收完 `unbindAll` 再在同一进程 bind（0.8.38：20.1）。不要立刻 `exit(0)` 再 bind（0.8.41 继续接收：6.1）。不要 `onStop` unbind 再 `onStart` bind（0.8.40：首次 85.9）。不要让收完后的会话一直占着相机直到杀进程（0.8.39：重开 0 命中）。继续接收必须停相机等 2 秒再冷启动。不要清空时 `resetSession` 清格子。不要 `shutdownAsync`。不要把格 2 当双码提前返回。
 - 不要把格 2 当双码提前返回、跳过四格补扫（0.8.36：四码约 84 KB/s）。不要用 1 枚命中 `pairFromHit` 猜邻格。不要左右两裁当未锁格路径（0.8.33：双码 0 命中）。不要在已锁 2 格且两枚都打中时整幅 max4（0.8.19）。
 - 不要 `shutdownAsync` / 首帧 unbind / 独立 Lifecycle 去“修杀后台”。resume 重建 zxing 已否。清空不要 `unbindAll`。
 - 不要在已锁 2 格且两枚都打中时整幅 `maxSymbols=4`（0.8.19：1732 每帧 0.01）。不要 60 Hz 双码 60 FPS 交错一格。

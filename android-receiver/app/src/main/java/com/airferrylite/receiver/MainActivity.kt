@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
 import android.os.SystemClock
 import android.provider.MediaStore
 import android.hardware.camera2.CameraCharacteristics
@@ -121,6 +122,7 @@ class MainActivity : AppCompatActivity() {
     private var lastRecoverAt = 0L
     private var recoverBurst = 0
     private var recoverBurstStartedAt = 0L
+    private var processRestarting = false
 
     private data class PendingSave(val name: String, val mime: String, val bytes: ByteArray)
 
@@ -218,7 +220,9 @@ class MainActivity : AppCompatActivity() {
         watchdog.postDelayed(watchdogTick, WATCHDOG_INTERVAL_MS)
         showIdle()
         renderDiagnostics()
-        if (consumeAutostartScan()) previewView.post { requestStartReceive() }
+        if (consumeAutostartScan()) {
+            previewView.post { watchdog.postDelayed({ requestStartReceive() }, AUTOSTART_BIND_DELAY_MS) }
+        }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
@@ -240,13 +244,24 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun continueReceive() {
+        if (processRestarting) return
+        processRestarting = true
+        findViewById<Button>(R.id.continueReceiveButton).isEnabled = false
+        statusText.text = "正在释放相机，约 2 秒后重新扫描"
+        stopScanner()
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             .edit()
             .putBoolean(PREF_AUTOSTART_SCAN, true)
             .commit()
+        watchdog.postDelayed({ restartProcessForScan() }, PROCESS_RESTART_DELAY_MS)
+    }
+
+    private fun restartProcessForScan() {
         val intent = Intent.makeRestartActivityTask(ComponentName(this, MainActivity::class.java))
         intent.putExtra(EXTRA_AUTOSTART_SCAN, true)
         startActivity(intent)
+        finishAffinity()
+        Process.killProcess(Process.myPid())
         Runtime.getRuntime().exit(0)
     }
 
@@ -799,6 +814,8 @@ class MainActivity : AppCompatActivity() {
         private const val PREF_FPS = "preview_fps"
         private const val PREF_AUTOSTART_SCAN = "autostart_scan"
         private const val EXTRA_AUTOSTART_SCAN = "autostart_scan"
+        private const val PROCESS_RESTART_DELAY_MS = 2000L
+        private const val AUTOSTART_BIND_DELAY_MS = 400L
         private const val WATCHDOG_INTERVAL_MS = 1000L
         private const val SCAN_STALL_MS = 2000L
         private const val RECOVER_COOLDOWN_MS = 5000L

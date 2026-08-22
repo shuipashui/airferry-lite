@@ -89,6 +89,10 @@ class QrFrameAnalyzer(
             image.close()
             return
         }
+        if (roiMisses.get() >= 60 && capturedInWindow.get() % 4L != 0L) {
+            image.close()
+            return
+        }
         noteImageTimestamp(image.imageInfo.timestamp)
         val snapshot = try {
             captureLuma(image)
