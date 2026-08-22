@@ -211,7 +211,7 @@ assert.ok(sender.includes("function quadRefreshesAll"));
 assert.ok(sender.includes("四码整屏同换"));
 assert.ok(sender.includes("codesPerScreen === 4 && Number(fps.value) < 60"));
 assert.ok(sender.includes("layoutCodes: codesPerScreen === 1 ? 1 : codesPerScreen === 2 ? 2 : 4"));
-assert.ok(sender.includes("function drawDualBallast"));
+assert.ok(!sender.includes("function drawDualBallast"));
 assert.ok(template.includes('id="hudPlayBtn"') && template.includes('id="hudFsBtn"'));
 assert.ok(sender.includes('if (layout === "dual") cap = Math.min(hz, 60)'));
 assert.ok(template.includes('id="openReceiver"'), "sender must link to the receiver");

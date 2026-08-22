@@ -224,7 +224,7 @@ class QrFrameAnalyzer(
                 if (seen.add(key)) merged += hit
             }
         }
-        // Dual layoutCodes=2 locks after this frame. Quad still needs ≥2 hits.
+        // Dual layoutCodes=2 still needs two hits to lock. Quad still needs ≥2.
         // Dual-halves instead of max4 was 0.8.33.
         if (!multiLayout.get()) {
             add(decoder.read(luma, region, maxSymbols))
@@ -404,13 +404,13 @@ class QrFrameAnalyzer(
         }
         roiMisses.set(0)
         validQrInWindow.addAndGet(transferHits.size.toLong())
-        if (anyDualLayout(transferHits)) {
+        if (transferHits.size >= 2 && anyDualLayout(transferHits)) {
             lockDualLayout()
             multiHits.addAndGet(transferHits.size.toLong())
         } else if (transferHits.size >= 2) {
             lockMultiLayout()
             multiHits.addAndGet(transferHits.size.toLong())
-        } else if (anyMultiLayout(transferHits)) {
+        } else if (anyDualLayout(transferHits) || anyMultiLayout(transferHits)) {
             singleLayoutConfirmed.set(false)
         } else {
             singleLayoutConfirmed.set(true)
