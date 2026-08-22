@@ -72,7 +72,6 @@ class QrFrameAnalyzer(
     private val tileUndercount = AtomicInteger(0)
     private val sawThreeOrMore = AtomicBoolean(false)
     private val quadStream = AtomicBoolean(false)
-    private val dualStream = AtomicBoolean(false)
     private val roiMisses = AtomicInteger(0)
     private val capturedInWindow = AtomicLong(0)
     private val decodedInWindow = AtomicLong(0)
@@ -211,7 +210,6 @@ class QrFrameAnalyzer(
         tileUndercount.set(0)
         sawThreeOrMore.set(false)
         quadStream.set(false)
-        dualStream.set(false)
         resetProtocol()
     }
 
@@ -240,15 +238,6 @@ class QrFrameAnalyzer(
                     retryBinarizer = false
                 )
             )
-        }
-        // Unconfirmed dual: max4 + parallel halves, never serial quad fill (HANDOVER; kill-reopen half-speed).
-        if (multiLayout.get() && previousTiles.isEmpty() && dualStream.get() && !quadStream.get()) {
-            val square = ScanLayout.centerSquare(luma.width, luma.height)
-            if (transferCount(merged) < 2) {
-                add(decoder.read(luma, square, 4))
-                add(readCropsParallel(luma, ScanLayout.dualHalves(square), retryBinarizer = false))
-            }
-            return merged
         }
         if (previousTiles.size in 2..3 && transferCount(merged) < 2) {
             add(decoder.read(luma, ScanLayout.centerSquare(luma.width, luma.height), 4))
@@ -372,29 +361,10 @@ class QrFrameAnalyzer(
     }
 
     private fun noteLayoutFromHits(hits: List<NativeHit>) {
-        var sawQuad = false
-        var sawDual = false
         for (hit in hits) {
             val bytes = QrPayload.bytesFrom(hit.bytes, hit.text) ?: continue
-            if (QrPayload.isQuadLayout(bytes)) sawQuad = true
-            if (QrPayload.isDualLayout(bytes)) sawDual = true
+            if (QrPayload.isQuadLayout(bytes)) quadStream.set(true)
         }
-        if (sawQuad) {
-            if (dualStream.getAndSet(false)) clearTilesForLayoutSwitch()
-            quadStream.set(true)
-        }
-        if (sawDual) {
-            if (quadStream.getAndSet(false)) clearTilesForLayoutSwitch()
-            dualStream.set(true)
-        }
-    }
-
-    private fun clearTilesForLayoutSwitch() {
-        trackedTiles.set(null)
-        trackedRoi.set(null)
-        tileUndercount.set(0)
-        sawThreeOrMore.set(false)
-        roiMisses.set(0)
     }
 
     private fun quadTileGrid(imageWidth: Int, imageHeight: Int): List<ScanRegion> {
