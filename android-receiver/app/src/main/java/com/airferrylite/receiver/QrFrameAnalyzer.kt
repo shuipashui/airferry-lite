@@ -203,6 +203,13 @@ class QrFrameAnalyzer(
         analysisIdle.set(false)
     }
 
+    fun resetTrackedTiles() {
+        trackedRoi.set(null)
+        trackedTiles.set(null)
+        tileUndercount.set(0)
+        roiMisses.set(0)
+    }
+
     fun resetSession() {
         setMultiLayout(false)
         singleLayoutConfirmed.set(false)

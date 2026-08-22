@@ -142,7 +142,9 @@ class MainActivity : AppCompatActivity() {
     private var softDecoderRecoverAttempted = false
     private var lastSoftRecoverAt = 0L
     private var halRecoveryRestartAttempted = false
+    private var lowFpsRebindAttempted = false
     private var receiveSessionFromContinue = false
+    private var scanSessionStartedAt = 0L
     private var cameraBoundAt = 0L
     private var restartDelayMs = PROCESS_RESTART_DELAY_MS
     private val restartProgressTick = object : Runnable {
@@ -255,6 +257,8 @@ class MainActivity : AppCompatActivity() {
                     lastStatsAt = SystemClock.elapsedRealtime()
                     recoverBurst = 0
                     maybeSoftDecoderRecover(stats)
+                    maybeRebindCameraForLowFps(stats)
+                    maybeResetStaleTiles(stats)
                     maybeRestartForHalEmptyBurst(stats)
                     renderDiagnostics()
                 }
@@ -393,11 +397,9 @@ class MainActivity : AppCompatActivity() {
         softDecoderRecoverAttempted = false
         lastSoftRecoverAt = 0L
         halRecoveryRestartAttempted = false
+        lowFpsRebindAttempted = false
         if (::frameAnalyzer.isInitialized) {
             frameAnalyzer.resetSession()
-            if (receiveSessionFromContinue) {
-                frameAnalyzer.noteStreamLayout(2)
-            }
             frameAnalyzer.setAnalysisIdle(false)
         }
         protocolEpoch.incrementAndGet()
@@ -413,6 +415,7 @@ class MainActivity : AppCompatActivity() {
         lastHighSolved = 0
         lastHighTotal = 0
         resetSpeed()
+        scanSessionStartedAt = SystemClock.elapsedRealtime()
         showScanning()
         settlePreviewBeforeAnalyze = true
         previewView.post { startScanner() }
@@ -447,6 +450,37 @@ class MainActivity : AppCompatActivity() {
             imageAnalysis?.setAnalyzer(cameraExecutor, frameAnalyzer)
             frameAnalyzer.setAnalysisIdle(false)
         }, 800L)
+    }
+
+    private fun maybeRebindCameraForLowFps(stats: ScanStats) {
+        if (!cameraStarted || processRestarting || bindingCamera || lowFpsRebindAttempted) return
+        if (cameraBoundAt == 0L) return
+        if (SystemClock.elapsedRealtime() - cameraBoundAt < LOW_FPS_REBIND_DELAY_MS) return
+        if (stats.submittedFrames < LOW_FPS_REBIND_MIN_FRAMES) return
+        val fpsThreshold = if (receiveSessionFromContinue) 48.0 else 50.0
+        if (stats.captureFps >= fpsThreshold) return
+        if (stats.captureFps >= 42.0 && stats.multiHits > stats.multiScans / 4) return
+        lowFpsRebindAttempted = true
+        imageAnalysis?.clearAnalyzer()
+        frameAnalyzer.setAnalysisIdle(true)
+        settlePreviewBeforeAnalyze = true
+        cameraProvider?.unbindAll()
+        imageAnalysis = null
+        boundCamera = null
+        markCameraReleased()
+        val remain = msUntilCameraBindAllowed()
+        watchdog.postDelayed({
+            if (isDestroyed || cameraProvider == null) return@postDelayed
+            bindCamera()
+            frameAnalyzer.setAnalysisIdle(false)
+        }, remain.coerceAtLeast(200L))
+    }
+
+    private fun maybeResetStaleTiles(stats: ScanStats) {
+        if (stats.multiScans < 180 || stats.tileCount < 2) return
+        val hitsPerScan = stats.multiHits.toDouble() / stats.multiScans.toDouble()
+        if (hitsPerScan >= 0.35) return
+        frameAnalyzer.resetTrackedTiles()
     }
 
     private fun maybeRestartForHalEmptyBurst(stats: ScanStats) {
@@ -969,6 +1003,7 @@ class MainActivity : AppCompatActivity() {
         val stats = lastStats
         val now = SystemClock.elapsedRealtime()
         val highAge = if (highLastFrameAt == 0L) "—" else "${(now - highLastFrameAt).coerceAtLeast(0)} ms"
+        val sessionElapsed = if (scanSessionStartedAt == 0L) "—" else formatDuration(now - scanSessionStartedAt)
         val lines = listOf(
             "设备：${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} · App ${BuildConfig.VERSION_NAME}",
             "相机：${stats?.width ?: "?"}×${stats?.height ?: "?"} · 采集 ${stats?.captureFps?.let { "%.1f".format(it) } ?: "?"} FPS · 选择 $requestedFps · 目标 ${preferredFpsLabel()}",
@@ -981,7 +1016,7 @@ class MainActivity : AppCompatActivity() {
             "曝光：点测 $aeMeterCount · 补偿 $lastEvIndex · 轻推 $aeNudgeCount",
             "ROI：${roiLabel(stats)} · 连续未命中 ${stats?.roiMisses ?: 0} · 布局 ${layoutLabel(stats)}",
             "协议：二维码 ${decodedQrCount.get()} · AFL2 ${highFrameCount} · 唯一 ${highUniqueFrameCount} · 重复 ${highDuplicateCount} · 无效 ${invalidFrameCount.get()} · 错误 ${highProtocolErrors} · 队列 ${pendingProtocolFrames.get()} · 解块 ${lastHighSolved}/${lastHighTotal}",
-            "高速会话：最近帧 ${highAge} · 唯一载荷 ${formatBytes(sessionUniquePayloadBytes)} · 光学 ${formatBytes(highBytesReceived)} · 速度 ${latestSpeedLabel} · 会话 ${formatRate(sessionAverageBytesPerSecond)}",
+            "高速会话：总耗时 $sessionElapsed · 最近帧 $highAge · 唯一载荷 ${formatBytes(sessionUniquePayloadBytes)} · 光学 ${formatBytes(highBytesReceived)} · 速度 ${latestSpeedLabel} · 会话 ${formatRate(sessionAverageBytesPerSecond)}",
             "无效样本：$invalidFrameSample",
             "设备标识：${Build.FINGERPRINT}"
         )
@@ -1054,6 +1089,7 @@ class MainActivity : AppCompatActivity() {
         speedWindowBytes = 0
         speedBytesPerSecond = 0.0
         sessionStartedAt = 0
+        scanSessionStartedAt = 0
         sessionUniquePayloadBytes = 0
         sessionAverageBytesPerSecond = 0.0
         rollingCount = 0
@@ -1082,6 +1118,15 @@ class MainActivity : AppCompatActivity() {
         value < 1024 -> "%.0f B/s".format(value)
         value < 1048576 -> "%.1f KB/s".format(value / 1024.0)
         else -> "%.2f MB/s".format(value / 1048576.0)
+    }
+
+    private fun formatDuration(ms: Long): String {
+        if (ms < 1000L) return "${ms} ms"
+        val seconds = ms / 1000.0
+        if (seconds < 60.0) return "%.1f s".format(seconds)
+        val minutes = (ms / 60_000).toInt()
+        val rem = (ms % 60_000) / 1000.0
+        return "%d:%04.1f".format(minutes, rem)
     }
 
     private fun formatBytes(size: Long) = when {
@@ -1176,6 +1221,8 @@ class MainActivity : AppCompatActivity() {
         private const val HAL_WARMUP_MS = 4000L
         private const val HAL_WARMUP_MIN_UNIQUE = 10L
         private const val HAL_RECOVERY_COOLDOWN_MS = 60_000L
+        private const val LOW_FPS_REBIND_DELAY_MS = 4500L
+        private const val LOW_FPS_REBIND_MIN_FRAMES = 120L
         private const val WATCHDOG_INTERVAL_MS = 1000L
         private const val SCAN_STALL_MS = 2000L
         private const val RECOVER_COOLDOWN_MS = 5000L
