@@ -142,7 +142,7 @@ class MainActivity : AppCompatActivity() {
     private var softDecoderRecoverAttempted = false
     private var lastSoftRecoverAt = 0L
     private var halRecoveryRestartAttempted = false
-    private var lowFpsRebindAttempted = false
+    private var staleTilesResetAttempted = false
     private var receiveSessionFromContinue = false
     private var scanSessionStartedAt = 0L
     private var cameraBoundAt = 0L
@@ -257,7 +257,6 @@ class MainActivity : AppCompatActivity() {
                     lastStatsAt = SystemClock.elapsedRealtime()
                     recoverBurst = 0
                     maybeSoftDecoderRecover(stats)
-                    maybeRebindCameraForLowFps(stats)
                     maybeResetStaleTiles(stats)
                     maybeRestartForHalEmptyBurst(stats)
                     renderDiagnostics()
@@ -397,7 +396,7 @@ class MainActivity : AppCompatActivity() {
         softDecoderRecoverAttempted = false
         lastSoftRecoverAt = 0L
         halRecoveryRestartAttempted = false
-        lowFpsRebindAttempted = false
+        staleTilesResetAttempted = false
         if (::frameAnalyzer.isInitialized) {
             frameAnalyzer.resetSession()
             frameAnalyzer.setAnalysisIdle(false)
@@ -452,34 +451,13 @@ class MainActivity : AppCompatActivity() {
         }, 800L)
     }
 
-    private fun maybeRebindCameraForLowFps(stats: ScanStats) {
-        if (!cameraStarted || processRestarting || bindingCamera || lowFpsRebindAttempted) return
-        if (cameraBoundAt == 0L) return
-        if (SystemClock.elapsedRealtime() - cameraBoundAt < LOW_FPS_REBIND_DELAY_MS) return
-        if (stats.submittedFrames < LOW_FPS_REBIND_MIN_FRAMES) return
-        val fpsThreshold = if (receiveSessionFromContinue) 48.0 else 50.0
-        if (stats.captureFps >= fpsThreshold) return
-        if (stats.captureFps >= 42.0 && stats.multiHits > stats.multiScans / 4) return
-        lowFpsRebindAttempted = true
-        imageAnalysis?.clearAnalyzer()
-        frameAnalyzer.setAnalysisIdle(true)
-        settlePreviewBeforeAnalyze = true
-        cameraProvider?.unbindAll()
-        imageAnalysis = null
-        boundCamera = null
-        markCameraReleased()
-        val remain = msUntilCameraBindAllowed()
-        watchdog.postDelayed({
-            if (isDestroyed || cameraProvider == null) return@postDelayed
-            bindCamera()
-            frameAnalyzer.setAnalysisIdle(false)
-        }, remain.coerceAtLeast(200L))
-    }
-
     private fun maybeResetStaleTiles(stats: ScanStats) {
-        if (stats.multiScans < 180 || stats.tileCount < 2) return
+        if (staleTilesResetAttempted) return
+        if (stats.multiScans < 300 || stats.tileCount < 2) return
+        if (highUniqueFrameCount >= 20 || lastHighSolved >= 30) return
         val hitsPerScan = stats.multiHits.toDouble() / stats.multiScans.toDouble()
-        if (hitsPerScan >= 0.35) return
+        if (hitsPerScan >= 0.12) return
+        staleTilesResetAttempted = true
         frameAnalyzer.resetTrackedTiles()
     }
 
@@ -723,11 +701,12 @@ class MainActivity : AppCompatActivity() {
             analysis.setAnalyzer(cameraExecutor, frameAnalyzer)
             return
         }
+        val settleMs = if (receiveSessionFromContinue) CONTINUE_ANALYZER_SETTLE_MS else ANALYZER_SETTLE_MS
         watchdog.postDelayed({
             if (isDestroyed || imageAnalysis !== analysis) return@postDelayed
             analysis.setAnalyzer(cameraExecutor, frameAnalyzer)
             if (::frameAnalyzer.isInitialized) frameAnalyzer.setAnalysisIdle(false)
-        }, ANALYZER_SETTLE_MS)
+        }, settleMs)
     }
 
     private fun cameraFpsRanges(provider: ProcessCameraProvider): List<Range<Int>> {
@@ -1215,14 +1194,13 @@ class MainActivity : AppCompatActivity() {
         private const val CONTINUE_RESTART_MIN_MS = 400L
         private const val CAMERA_HAL_COOLDOWN_MS = 2000L
         private const val ANALYZER_SETTLE_MS = 1200L
+        private const val CONTINUE_ANALYZER_SETTLE_MS = 500L
         private const val HAL_EMPTY_BURST_MIN_FRAMES = 250L
         private const val HAL_EMPTY_BURST_RATIO = 0.80
         private const val HAL_EMPTY_BURST_MAX_UNIQUE = 25L
         private const val HAL_WARMUP_MS = 4000L
         private const val HAL_WARMUP_MIN_UNIQUE = 10L
         private const val HAL_RECOVERY_COOLDOWN_MS = 60_000L
-        private const val LOW_FPS_REBIND_DELAY_MS = 4500L
-        private const val LOW_FPS_REBIND_MIN_FRAMES = 120L
         private const val WATCHDOG_INTERVAL_MS = 1000L
         private const val SCAN_STALL_MS = 2000L
         private const val RECOVER_COOLDOWN_MS = 5000L

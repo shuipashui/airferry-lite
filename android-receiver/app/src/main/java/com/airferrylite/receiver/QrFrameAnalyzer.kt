@@ -278,16 +278,26 @@ class QrFrameAnalyzer(
             } else {
                 previousTiles
             }
-            add(
-                readCropsParallel(
-                    luma,
-                    tileCrops.filter { !tileCovered(it, merged, previousTiles) },
-                    retryBinarizer = false
-                )
-            )
+            val pendingTiles = tileCrops.filter { !tileCovered(it, merged, previousTiles) }
+            val pending = if (
+                dualStream.get() && !quadStream.get() &&
+                previousTiles.size == 2 && transferCount(merged) < 2
+            ) {
+                val halves = ScanLayout.dualHalves(region)
+                (pendingTiles + halves).take(TILE_WORKERS)
+            } else {
+                pendingTiles
+            }
+            if (pending.isNotEmpty()) {
+                add(readCropsParallel(luma, pending, retryBinarizer = false))
+            }
         }
         if (previousTiles.size in 2..3 && transferCount(merged) < 2) {
-            add(decoder.read(luma, ScanLayout.centerSquare(luma.width, luma.height), 4))
+            if (dualStream.get() && !quadStream.get()) {
+                add(readCropsParallel(luma, ScanLayout.dualHalves(region), retryBinarizer = false))
+            } else {
+                add(decoder.read(luma, ScanLayout.centerSquare(luma.width, luma.height), 4))
+            }
         }
         if (transferCount(merged) >= 4) return merged
         if (previousTiles.size >= 4 && transferCount(merged) >= 3) return merged
