@@ -102,7 +102,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:gravity="center"
-                android:text="点接收后打开相机。收完进入预览，相机会话保持，避免下次掉速。"
+                android:text="相机在点接收后才打开，收完进入预览。"
                 android:textColor="@color/af_muted"
                 android:textSize="13sp" />
             <Button

@@ -28,9 +28,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleOwner
-import androidx.lifecycle.LifecycleRegistry
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.camera2.interop.Camera2CameraInfo
@@ -121,9 +118,6 @@ class MainActivity : AppCompatActivity() {
     private var lastRecoverAt = 0L
     private var recoverBurst = 0
     private var recoverBurstStartedAt = 0L
-    private var scanPaused = false
-    private var cameraResetOnce = false
-    private val cameraLifecycleOwner = HeldCameraLifecycle()
 
     private data class PendingSave(val name: String, val mime: String, val bytes: ByteArray)
 
@@ -143,7 +137,7 @@ class MainActivity : AppCompatActivity() {
         }
         ViewCompat.requestApplyInsets(rootLayout)
         previewView = findViewById(R.id.previewView)
-        previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+        previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
         idlePanel = findViewById(R.id.idlePanel)
         resultPanel = findViewById(R.id.resultPanel)
         resultImage = findViewById(R.id.resultImage)
@@ -295,30 +289,18 @@ class MainActivity : AppCompatActivity() {
         null
     }
 
-    private fun pauseScanner() {
-        scanPaused = true
+    private fun stopScanner() {
         imageAnalysis?.clearAnalyzer()
+        cameraProvider?.unbindAll()
+        imageAnalysis = null
+        cameraStarted = false
         if (::frameAnalyzer.isInitialized) frameAnalyzer.setAnalysisIdle(true)
-    }
-
-    private fun resumeScanner() {
-        if (isDestroyed || imageAnalysis == null) return
-        scanPaused = false
-        if (::frameAnalyzer.isInitialized) frameAnalyzer.setAnalysisIdle(false)
-        imageAnalysis?.setAnalyzer(cameraExecutor, frameAnalyzer)
-        lastStatsAt = SystemClock.elapsedRealtime()
     }
 
     private fun startScanner() {
         if (isDestroyed) return
-        cameraLifecycleOwner.resume()
-        if (cameraStarted && imageAnalysis != null) {
-            resumeScanner()
-            return
-        }
-        if (cameraStarted) return
+        if (cameraStarted && imageAnalysis != null) return
         cameraStarted = true
-        scanPaused = false
         if (::frameAnalyzer.isInitialized) frameAnalyzer.setAnalysisIdle(false)
         whenPreviewLaidOut { bindWhenProviderReady() }
     }
@@ -349,40 +331,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun bindWhenProviderReady() {
         if (isDestroyed || !cameraStarted) return
-        if (cameraResetOnce) {
-            if (cameraProvider != null) bindCamera()
-            else obtainProviderAndBind()
-            return
-        }
-        cameraResetOnce = true
-        statusText.text = "正在重置相机"
-        val resetThenBind = { provider: ProcessCameraProvider ->
-            provider.unbindAll()
-            provider.shutdownAsync().addListener({
-                cameraProvider = null
-                if (isDestroyed || !cameraStarted) return@addListener
-                obtainProviderAndBind()
-            }, ContextCompat.getMainExecutor(this))
-        }
         val existing = cameraProvider
         if (existing != null) {
-            resetThenBind(existing)
+            bindCamera()
             return
         }
-        val providerFuture = ProcessCameraProvider.getInstance(this)
-        providerFuture.addListener({
-            try {
-                resetThenBind(providerFuture.get())
-            } catch (error: Exception) {
-                cameraStarted = false
-                showIdle()
-                statusText.text = "摄像头启动失败：${error.message ?: "未知错误"}"
-            }
-        }, ContextCompat.getMainExecutor(this))
-    }
-
-    private fun obtainProviderAndBind() {
-        if (isDestroyed || !cameraStarted) return
         val providerFuture = ProcessCameraProvider.getInstance(this)
         providerFuture.addListener({
             try {
@@ -399,7 +352,7 @@ class MainActivity : AppCompatActivity() {
     private fun setRequestedFps(fps: Int) {
         requestedFps = if (fps == 30 || fps == 120) fps else 60
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putInt(PREF_FPS, requestedFps).apply()
-        if (cameraStarted && cameraProvider != null && !scanPaused) bindCamera()
+        if (cameraStarted && cameraProvider != null) bindCamera()
         else statusText.text = "已选 ${requestedFps} FPS"
     }
 
@@ -422,7 +375,7 @@ class MainActivity : AppCompatActivity() {
             provider.unbindAll()
             analysis.setAnalyzer(cameraExecutor, frameAnalyzer)
             try {
-                provider.bindToLifecycle(cameraLifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
             } catch (preferredError: Exception) {
                 if (fallbackFps == null || fallbackFps == preferredFps) throw preferredError
                 analysis.clearAnalyzer()
@@ -431,13 +384,12 @@ class MainActivity : AppCompatActivity() {
                 preview = buildPreview(rotation, activeFps)
                 analysis = buildAnalysis(rotation, activeFps)
                 analysis.setAnalyzer(cameraExecutor, frameAnalyzer)
-                provider.bindToLifecycle(cameraLifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
                 fellBack = true
             }
             imageAnalysis = analysis
             activeCameraFps = activeFps
             lastStatsAt = SystemClock.elapsedRealtime()
-            scanPaused = false
             val boundFps = activeFps
             statusText.text = if (boundFps != null && (fellBack || requestedFps !in boundFps.lower..boundFps.upper)) {
                 "相机达不到 ${requestedFps} FPS，已落到 ${boundFps.lower}-${boundFps.upper}"
@@ -662,7 +614,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun maybeRecoverStalledScanner() {
-        if (!cameraStarted || bindingCamera || isDestroyed || scanPaused || imageAnalysis == null) return
+        if (!cameraStarted || bindingCamera || isDestroyed || imageAnalysis == null) return
         if (!::frameAnalyzer.isInitialized) return
         val now = SystemClock.elapsedRealtime()
         if (now - lastRecoverAt < RECOVER_COOLDOWN_MS) return
@@ -712,7 +664,7 @@ class MainActivity : AppCompatActivity() {
             "分析：提交 ${stats?.submittedFrames ?: 0} · 完成 ${stats?.analysisFps?.let { "%.1f".format(it) } ?: "0"} FPS · 丢帧 ${stats?.droppedFrames ?: 0}",
             "解码：zxing-cpp · 平均 ${stats?.averageDecodeMs?.let { "%.1f ms".format(it) } ?: "—"} · 单码命中 ${stats?.singleHits ?: 0} · 多码扫描 ${stats?.multiScans ?: 0}（命中 ${stats?.multiHits ?: 0}${perFrameLabel(stats)}）",
             "分析器：线程 ${stats?.workerCount ?: "?"} · 忙 ${stats?.workerBusy ?: "?"} · 空结果 ${stats?.emptyDecodes ?: 0} · 异常 ${stats?.decodeErrors ?: 0} · 新缓冲 ${stats?.bufferAllocations ?: 0}",
-            "看门狗：恢复 ${stats?.pipelineRecoveries ?: 0} 次 · 心跳 ${if (lastStatsAt == 0L) "—" else "${(now - lastStatsAt).coerceAtLeast(0)} ms"} · 会话 ${if (scanPaused) "暂停" else if (cameraStarted) "扫描" else "关闭"}",
+            "看门狗：恢复 ${stats?.pipelineRecoveries ?: 0} 次 · 心跳 ${if (lastStatsAt == 0L) "—" else "${(now - lastStatsAt).coerceAtLeast(0)} ms"}",
             "ROI：${roiLabel(stats)} · 连续未命中 ${stats?.roiMisses ?: 0} · 布局 ${if (stats?.multiLayout == true) "四码" else "单码"}",
             "协议：二维码 ${decodedQrCount.get()} · AFL2 ${highFrameCount} · 唯一 ${highUniqueFrameCount} · 重复 ${highDuplicateCount} · 无效 ${invalidFrameCount.get()} · 错误 ${highProtocolErrors} · 队列 ${pendingProtocolFrames.get()} · 解块 ${lastHighSolved}/${lastHighTotal}",
             "高速会话：最近帧 ${highAge} · 唯一载荷 ${formatBytes(sessionUniquePayloadBytes)} · 光学 ${formatBytes(highBytesReceived)} · 速度 ${latestSpeedLabel} · 会话 ${formatRate(sessionAverageBytesPerSecond)}",
@@ -732,7 +684,7 @@ class MainActivity : AppCompatActivity() {
             saveButton.isEnabled = true
             fileText.text = "$name · ${formatBytes(bytes.size.toLong())}"
             progress.progress = 100
-            pauseScanner()
+            stopScanner()
             showResult(pending)
         }
     }
@@ -818,15 +770,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         watchdog.removeCallbacks(watchdogTick)
         imageAnalysis?.clearAnalyzer()
-        cameraLifecycleOwner.destroy()
-        val provider = cameraProvider
-        cameraProvider = null
-        imageAnalysis = null
-        cameraStarted = false
-        if (provider != null) {
-            provider.unbindAll()
-            runCatching { provider.shutdownAsync() }
-        }
+        cameraProvider?.unbindAll()
         if (::frameAnalyzer.isInitialized) frameAnalyzer.close()
         if (::cameraExecutor.isInitialized) cameraExecutor.shutdownNow()
         if (::protocolExecutor.isInitialized) protocolExecutor.shutdownNow()
@@ -845,18 +789,5 @@ class MainActivity : AppCompatActivity() {
         private const val RECOVER_COOLDOWN_MS = 5000L
         private const val RECOVER_BURST_WINDOW_MS = 30000L
         private const val MAX_RECOVER_BURST = 3
-    }
-}
-
-private class HeldCameraLifecycle : LifecycleOwner {
-    private val registry = LifecycleRegistry(this)
-    override val lifecycle: Lifecycle get() = registry
-    fun resume() {
-        if (registry.currentState == Lifecycle.State.DESTROYED) return
-        registry.currentState = Lifecycle.State.RESUMED
-    }
-    fun destroy() {
-        if (registry.currentState == Lifecycle.State.DESTROYED) return
-        registry.currentState = Lifecycle.State.DESTROYED
     }
 }
