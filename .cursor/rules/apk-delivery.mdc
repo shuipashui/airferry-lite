@@ -1,0 +1,12 @@
+---
+description: APK delivery via GitHub Actions artifacts only
+alwaysApply: true
+---
+
+# APK 交付
+
+- **永远通过 GitHub Actions 生成 APK**，不要在回复里给本地 `android-receiver/dist/` 路径。
+- 推送分支触发 CI 后，用 `gh run list` / `gh api` 拿到 **run id** 和 **artifact id**，发给蓝的直链格式：
+  `https://github.com/shuipashui/airferry-lite/actions/runs/<runId>/artifacts/<artifactId>`
+- 需要登录 GitHub 才能下载 artifact。
+- 本地 Gradle 构建失败或网络问题时，仍应推送并等 CI；推送若冲突，以 `origin/apk/0.8.25-dual-relock` 为基 cherry-pick 再推。

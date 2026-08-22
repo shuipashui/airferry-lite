@@ -68,6 +68,7 @@ class QrFrameAnalyzer(
     private val dualSettled = AtomicBoolean(false)
     private val dualLayout = AtomicBoolean(false)
     private val dualHint = AtomicBoolean(false)
+    private val streamLayoutCodes = AtomicInteger(0)
     private val highContrastMissStreak = AtomicInteger(0)
     private val nudgeOnAnyEmpty = AtomicBoolean(false)
     private val roiMisses = AtomicInteger(0)
@@ -185,6 +186,7 @@ class QrFrameAnalyzer(
                 dualLayout.set(false)
                 dualSettled.set(false)
                 dualHint.set(false)
+                streamLayoutCodes.set(0)
             }
         }
     }
@@ -218,8 +220,16 @@ class QrFrameAnalyzer(
         dualSettled.set(false)
         dualLayout.set(false)
         dualHint.set(false)
+        streamLayoutCodes.set(0)
         highContrastMissStreak.set(0)
         resetProtocol()
+    }
+
+    fun noteStreamLayout(layoutCodes: Int) {
+        if (layoutCodes <= 0) return
+        streamLayoutCodes.set(maxOf(streamLayoutCodes.get(), layoutCodes))
+        if (layoutCodes >= 2) dualHint.set(true)
+        singleLayoutConfirmed.set(false)
     }
 
     private fun chooseRegion(width: Int, height: Int): ScanRegion {
@@ -263,7 +273,7 @@ class QrFrameAnalyzer(
             add(decoder.read(luma, region, maxSymbols))
             if (
                 transferCount(merged) == 1 &&
-                (dualHint.get() || anyDualLayout(merged) || anyMultiLayout(merged))
+                (dualHint.get() || streamLayoutCodes.get() >= 2 || anyDualLayout(merged) || anyMultiLayout(merged))
             ) {
                 add(
                     readCropsParallel(
@@ -428,9 +438,10 @@ class QrFrameAnalyzer(
             emptyDecodes.incrementAndGet()
             val miss = roiMisses.incrementAndGet()
             val lockedTiles = trackedTiles.get()?.size ?: 0
+            val streamCodes = streamLayoutCodes.get()
             val missLimit = when {
                 lockedTiles >= 2 -> 6
-                dualHint.get() || dualLayout.get() -> 12
+                streamCodes >= 4 || dualHint.get() || dualLayout.get() -> 12
                 multiLayout.get() -> 8
                 else -> 2
             }
@@ -442,7 +453,7 @@ class QrFrameAnalyzer(
                 dualSettled.set(false)
                 sawThreeOrMore.set(false)
                 dualLayout.set(false)
-                dualHint.set(false)
+                if (streamCodes < 2) dualHint.set(false)
                 multiLayout.set(false)
                 singleLayoutConfirmed.set(false)
             }
