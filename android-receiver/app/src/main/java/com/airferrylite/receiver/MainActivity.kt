@@ -352,7 +352,6 @@ class MainActivity : AppCompatActivity() {
         cameraProvider?.unbindAll()
         imageAnalysis = null
         boundCamera = null
-        resetExposureSession()
     }
 
     private fun startScanner() {
@@ -432,7 +431,9 @@ class MainActivity : AppCompatActivity() {
             activeCameraFps = activeFps
             lastStatsAt = SystemClock.elapsedRealtime()
             resetExposureSession()
-            previewView.post { watchdog.postDelayed({ startSceneMetering() }, SCENE_METER_DELAY_MS) }
+            if (aeNudgeOnAnyEmpty) {
+                previewView.post { watchdog.postDelayed({ startSceneMetering() }, SCENE_METER_DELAY_MS) }
+            }
             val boundFps = activeFps
             statusText.text = if (boundFps != null && (fellBack || requestedFps !in boundFps.lower..boundFps.upper)) {
                 "相机达不到 ${requestedFps} FPS，已落到 ${boundFps.lower}-${boundFps.upper}"

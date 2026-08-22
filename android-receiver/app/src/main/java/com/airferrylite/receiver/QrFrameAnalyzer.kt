@@ -126,13 +126,8 @@ class QrFrameAnalyzer(
         decodedInWindow.incrementAndGet()
         publish(snapshot.width, snapshot.height, region, hits)
         val transfers = transferCount(hits)
-        when {
-            transfers >= 2 -> highContrastMissStreak.set(0)
-            transfers == 1 && (dualHint.get() || anyDualLayout(hits) || anyMultiLayout(hits)) ->
-                noteHighContrastMiss(snapshot)
-            transfers == 0 -> noteHighContrastMiss(snapshot)
-            else -> highContrastMissStreak.set(0)
-        }
+        if (nudgeOnAnyEmpty.get() && transfers < 2) noteHighContrastMiss(snapshot)
+        else highContrastMissStreak.set(0)
     }
 
     fun close() {
