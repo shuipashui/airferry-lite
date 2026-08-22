@@ -1,15 +1,18 @@
 package com.airferrylite.receiver
 
 import android.Manifest
+import android.content.ComponentName
 import android.content.ContentValues
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Build
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
 import android.os.SystemClock
 import android.provider.MediaStore
 import android.hardware.camera2.CameraCharacteristics
@@ -17,12 +20,16 @@ import android.hardware.camera2.CaptureRequest
 import android.util.Range
 import android.util.Size
 import android.view.Surface
+import android.view.WindowManager
+import android.graphics.BitmapFactory
+import android.view.View
 import android.widget.Button
-import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
 import com.google.android.material.button.MaterialButtonToggleGroup
 import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
@@ -46,6 +53,16 @@ import java.util.concurrent.atomic.AtomicLong
 @OptIn(ExperimentalCamera2Interop::class)
 class MainActivity : AppCompatActivity() {
     private lateinit var previewView: PreviewView
+    private lateinit var idlePanel: View
+    private lateinit var resultPanel: View
+    private lateinit var restartingPanel: View
+    private lateinit var resultImage: ImageView
+    private lateinit var resultNamesScroll: View
+    private lateinit var resultNames: TextView
+    private lateinit var resultMeta: TextView
+    private lateinit var restartCountdown: TextView
+    private lateinit var restartProgress: ProgressBar
+    private lateinit var scanMetaRow: View
     private lateinit var statusText: TextView
     private lateinit var fileText: TextView
     private lateinit var speedText: TextView
@@ -53,6 +70,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var diagnosticsText: TextView
     private lateinit var progress: ProgressBar
     private lateinit var saveButton: Button
+    private lateinit var resetButton: Button
+    private lateinit var startReceiveButton: Button
     private lateinit var fpsGroup: MaterialButtonToggleGroup
     private lateinit var frameAnalyzer: QrFrameAnalyzer
     private lateinit var cameraExecutor: ExecutorService
@@ -92,12 +111,18 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var latestSpeedLabel = "实时 — · 平均 —"
     @Volatile private var highSpeedSessionActive = false
     private var requestedFps = 60
-    private var diagnosticsExpanded = false
     private var fullDiagnostics = ""
     private var pendingSave: PendingSave? = null
     private var pendingSession: String? = null
     private var bindingCamera = false
     private var imageAnalysis: ImageAnalysis? = null
+    private var boundCamera: Camera? = null
+    private var aeNudgeStep = 0
+    private var aeNudgeCount = 0
+    private var aeMeterCount = 0
+    private var lastAeNudgeAt = 0L
+    private var lastEvIndex = 0
+    private var aeNudged = false
     private val protocolEpoch = AtomicInteger(0)
     private val watchdog = Handler(Looper.getMainLooper())
     private val watchdogTick = object : Runnable {
@@ -110,6 +135,29 @@ class MainActivity : AppCompatActivity() {
     private var lastRecoverAt = 0L
     private var recoverBurst = 0
     private var recoverBurstStartedAt = 0L
+    private var processRestarting = false
+    private var restartStartedAt = 0L
+    private var settlePreviewBeforeAnalyze = false
+    private var skipHalWaitOnBeginReceive = false
+    private var softDecoderRecoverAttempted = false
+    private var lastSoftRecoverAt = 0L
+    private var halRecoveryRestartAttempted = false
+    private var receiveSessionFromContinue = false
+    private var scanSessionStartedAt = 0L
+    private var cameraBoundAt = 0L
+    private var restartDelayMs = PROCESS_RESTART_DELAY_MS
+    private val restartProgressTick = object : Runnable {
+        override fun run() {
+            if (!processRestarting) return
+            val elapsed = (SystemClock.elapsedRealtime() - restartStartedAt).coerceAtLeast(0L)
+            val remaining = (restartDelayMs - elapsed).coerceAtLeast(0L)
+            restartCountdown.text = ((remaining + 999) / 1000).toInt().coerceAtLeast(0).toString()
+            restartProgress.progress = if (restartDelayMs <= 0L) restartProgress.max
+            else ((elapsed * restartProgress.max) / restartDelayMs).toInt()
+                .coerceIn(0, restartProgress.max)
+            if (remaining > 0) watchdog.postDelayed(this, 50)
+        }
+    }
 
     private data class PendingSave(val name: String, val mime: String, val bytes: ByteArray)
 
@@ -129,6 +177,18 @@ class MainActivity : AppCompatActivity() {
         }
         ViewCompat.requestApplyInsets(rootLayout)
         previewView = findViewById(R.id.previewView)
+        previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
+        previewView.implementationMode = PreviewView.ImplementationMode.PERFORMANCE
+        idlePanel = findViewById(R.id.idlePanel)
+        resultPanel = findViewById(R.id.resultPanel)
+        restartingPanel = findViewById(R.id.restartingPanel)
+        resultImage = findViewById(R.id.resultImage)
+        resultNamesScroll = findViewById(R.id.resultNamesScroll)
+        resultNames = findViewById(R.id.resultNames)
+        resultMeta = findViewById(R.id.resultMeta)
+        restartCountdown = findViewById(R.id.restartCountdown)
+        restartProgress = findViewById(R.id.restartProgress)
+        scanMetaRow = findViewById(R.id.scanMetaRow)
         statusText = findViewById(R.id.statusText)
         fileText = findViewById(R.id.fileText)
         speedText = findViewById(R.id.speedText)
@@ -136,6 +196,8 @@ class MainActivity : AppCompatActivity() {
         diagnosticsText = findViewById(R.id.diagnosticsText)
         progress = findViewById(R.id.progress)
         saveButton = findViewById(R.id.saveButton)
+        resetButton = findViewById(R.id.resetButton)
+        startReceiveButton = findViewById(R.id.startReceiveButton)
         fpsGroup = findViewById(R.id.fpsGroup)
         requestedFps = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getInt(PREF_FPS, 60).let {
             if (it == 30 || it == 120) it else 60
@@ -156,7 +218,10 @@ class MainActivity : AppCompatActivity() {
             }
             if (fps != requestedFps) setRequestedFps(fps)
         }
-        findViewById<FrameLayout>(R.id.progressHit).setOnClickListener { toggleDiagnostics() }
+        startReceiveButton.setOnClickListener { requestStartReceive() }
+        findViewById<Button>(R.id.continueReceiveButton).setOnClickListener { continueReceive() }
+        findViewById<Button>(R.id.resultSaveButton).setOnClickListener { savePendingFile() }
+        resetButton.setOnClickListener { resetTransfer() }
         cameraExecutor = Executors.newSingleThreadExecutor()
         protocolExecutor = Executors.newSingleThreadExecutor()
         frameAnalyzer = QrFrameAnalyzer(
@@ -165,7 +230,6 @@ class MainActivity : AppCompatActivity() {
                 val bytes = decoded.bytes
                 if (bytes != null && HighSpeedAssembler.looksLikeFrame(bytes)) {
                     highSpeedSessionActive = true
-                    if (HighSpeedAssembler.isMultiLayoutFrame(bytes)) frameAnalyzer.setMultiLayout(true)
                     val epoch = protocolEpoch.get()
                     pendingProtocolFrames.incrementAndGet()
                     protocolExecutor.execute {
@@ -187,40 +251,368 @@ class MainActivity : AppCompatActivity() {
                     lastStats = stats
                     lastStatsAt = SystemClock.elapsedRealtime()
                     recoverBurst = 0
+                    maybeSoftDecoderRecover(stats)
+                    maybeRestartForHalEmptyBurst(stats)
                     renderDiagnostics()
                 }
             }
         )
-        findViewById<Button>(R.id.resetButton).setOnClickListener { resetTransfer() }
         findViewById<Button>(R.id.copyDiagnosticsButton).setOnClickListener { copyDiagnostics() }
         saveButton.setOnClickListener { savePendingFile() }
         watchdog.postDelayed(watchdogTick, WATCHDOG_INTERVAL_MS)
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), CAMERA_PERMISSION_REQUEST)
+        if (consumeAutostartScan()) {
+            val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            val fromContinue = prefs.getBoolean(PREF_AUTOSTART_FROM_CONTINUE, false)
+            receiveSessionFromContinue = fromContinue
+            if (fromContinue) {
+                prefs.edit().remove(PREF_AUTOSTART_FROM_CONTINUE).apply()
+            }
+            val override = prefs.getLong(PREF_AUTOSTART_BIND_DELAY_OVERRIDE_MS, -1L)
+            if (override >= 0L) {
+                prefs.edit().remove(PREF_AUTOSTART_BIND_DELAY_OVERRIDE_MS).apply()
+            }
+            val halRemain = msUntilCameraBindAllowed()
+            val bindDelay = when {
+                override >= 0L -> maxOf(override, halRemain)
+                else -> maxOf(AUTOSTART_BIND_DELAY_MS, halRemain)
+            }
+            skipHalWaitOnBeginReceive = bindDelay > 0L
+            settlePreviewBeforeAnalyze = true
+            if (fromContinue) showScanning() else showOpeningCamera()
+            previewView.post {
+                watchdog.postDelayed({
+                    requestStartReceive()
+                }, bindDelay)
+            }
         } else {
-            previewView.post { startScanner() }
+            reconcileCameraStateAfterReopen()
+            showIdle()
         }
+        renderDiagnostics()
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == CAMERA_PERMISSION_REQUEST && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
-            previewView.post { startScanner() }
-        } else {
+            previewView.post { beginReceive() }
+        } else if (requestCode == CAMERA_PERMISSION_REQUEST) {
+            showIdle()
             statusText.text = "需要摄像头权限才能接收"
         }
     }
 
+    private fun requestStartReceive() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), CAMERA_PERMISSION_REQUEST)
+            return
+        }
+        receiveSessionFromContinue = false
+        beginReceive()
+    }
+
+    private fun continueReceive() {
+        if (processRestarting) return
+        findViewById<Button>(R.id.continueReceiveButton).isEnabled = false
+        val (preKill, postKill) = planColdRestart()
+        scheduleColdRestart(preKill, postKill, "正在释放相机", fromContinue = true)
+    }
+
+    private fun scheduleColdRestart(
+        preKillWaitMs: Long,
+        postKillBindDelayMs: Long,
+        statusMessage: String,
+        fromContinue: Boolean = false
+    ) {
+        if (processRestarting) return
+        processRestarting = true
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .putBoolean(PREF_AUTOSTART_SCAN, true)
+            .putBoolean(PREF_AUTOSTART_FROM_CONTINUE, fromContinue)
+            .putLong(PREF_AUTOSTART_BIND_DELAY_OVERRIDE_MS, postKillBindDelayMs)
+            .commit()
+        showRestarting(preKillWaitMs, statusMessage)
+        watchdog.postDelayed({
+            if (postKillBindDelayMs > 0L || msUntilCameraBindAllowed() > 0L) {
+                markCameraReleased()
+            }
+            restartProcessForScan()
+        }, preKillWaitMs)
+    }
+
+    private fun planColdRestart(): Pair<Long, Long> {
+        val elapsed = elapsedSinceCameraRelease()
+        if (elapsed >= CAMERA_HAL_COOLDOWN_MS) {
+            return CONTINUE_RESTART_MIN_MS to 0L
+        }
+        val remaining = CAMERA_HAL_COOLDOWN_MS - elapsed
+        val preKill = remaining.coerceIn(CONTINUE_RESTART_MIN_MS, PROCESS_RESTART_DELAY_MS)
+        val postKill = (CAMERA_HAL_COOLDOWN_MS - preKill).coerceAtLeast(0L)
+        return preKill to postKill
+    }
+
+    private fun restartProcessForScan() {
+        val intent = Intent.makeRestartActivityTask(ComponentName(this, MainActivity::class.java))
+        intent.putExtra(EXTRA_AUTOSTART_SCAN, true)
+        startActivity(intent)
+        finishAffinity()
+        Process.killProcess(Process.myPid())
+        Runtime.getRuntime().exit(0)
+    }
+
+    private fun consumeAutostartScan(): Boolean {
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val fromPrefs = prefs.getBoolean(PREF_AUTOSTART_SCAN, false)
+        val fromIntent = intent.getBooleanExtra(EXTRA_AUTOSTART_SCAN, false)
+        if (fromPrefs) prefs.edit().putBoolean(PREF_AUTOSTART_SCAN, false).commit()
+        return fromPrefs || fromIntent
+    }
+
+    private fun beginReceive() {
+        val warmCamera = imageAnalysis != null && boundCamera != null
+        val waitMs = when {
+            warmCamera || skipHalWaitOnBeginReceive -> {
+                skipHalWaitOnBeginReceive = false
+                0L
+            }
+            else -> msUntilCameraBindAllowed()
+        }
+        if (waitMs > 0) {
+            showOpeningCamera()
+            watchdog.postDelayed({
+                if (isDestroyed) return@postDelayed
+                launchReceiveAfterHalWait()
+            }, waitMs)
+            return
+        }
+        launchReceiveAfterHalWait()
+    }
+
+    private fun launchReceiveAfterHalWait() {
+        softDecoderRecoverAttempted = false
+        lastSoftRecoverAt = 0L
+        halRecoveryRestartAttempted = false
+        if (::frameAnalyzer.isInitialized) {
+            frameAnalyzer.resetSession()
+            frameAnalyzer.setAnalysisIdle(false)
+        }
+        protocolEpoch.incrementAndGet()
+        protocolExecutor.execute { highSpeedAssembler.reset() }
+        highSpeedSessionActive = false
+        highFrameCount = 0
+        highUniqueFrameCount = 0
+        highDuplicateCount = 0
+        highProtocolErrors = 0
+        highBytesReceived = 0
+        highLastFrameAt = 0
+        lastHighUnique = 0
+        lastHighSolved = 0
+        lastHighTotal = 0
+        resetSpeed()
+        scanSessionStartedAt = SystemClock.elapsedRealtime()
+        showScanning()
+        val warmBound = imageAnalysis
+        if (warmBound != null && boundCamera != null) {
+            cameraStarted = true
+            cameraBoundAt = SystemClock.elapsedRealtime()
+            attachAnalyzer(warmBound, settle = false)
+            return
+        }
+        settlePreviewBeforeAnalyze = true
+        previewView.post { startScanner() }
+    }
+
+    private fun inHalRecoveryWarmup(): Boolean {
+        if (cameraBoundAt != 0L && SystemClock.elapsedRealtime() - cameraBoundAt < HAL_WARMUP_MS) return true
+        if (receiveSessionFromContinue && highUniqueFrameCount < HAL_WARMUP_MIN_UNIQUE) return true
+        return false
+    }
+
+    private fun maybeSoftDecoderRecover(stats: ScanStats) {
+        if (!cameraStarted || processRestarting) return
+        if (inHalRecoveryWarmup()) return
+        if (stats.submittedFrames < 240) return
+        if (highUniqueFrameCount >= 20) return
+        val emptyRatio = stats.emptyDecodes.toDouble() / stats.submittedFrames.toDouble()
+        if (emptyRatio < 0.92) {
+            if (stats.emptyDecodes == 0L) softDecoderRecoverAttempted = false
+            return
+        }
+        val now = SystemClock.elapsedRealtime()
+        if (softDecoderRecoverAttempted && now - lastSoftRecoverAt < 8000L) return
+        softDecoderRecoverAttempted = true
+        lastSoftRecoverAt = now
+        imageAnalysis?.clearAnalyzer()
+        frameAnalyzer.setAnalysisIdle(true)
+        frameAnalyzer.replaceDecoders()
+        resetExposureSession()
+        watchdog.postDelayed({
+            if (isDestroyed) return@postDelayed
+            imageAnalysis?.setAnalyzer(cameraExecutor, frameAnalyzer)
+            frameAnalyzer.setAnalysisIdle(false)
+        }, 800L)
+    }
+
+    private fun maybeRestartForHalEmptyBurst(stats: ScanStats) {
+        if (!cameraStarted || processRestarting || halRecoveryRestartAttempted) return
+        if (inHalRecoveryWarmup()) return
+        if (highUniqueFrameCount >= 5 || lastHighSolved >= 20) return
+        val lastHalRecovery = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .getLong(PREF_LAST_HAL_RECOVERY_MS, 0L)
+        if (System.currentTimeMillis() - lastHalRecovery < HAL_RECOVERY_COOLDOWN_MS) return
+        if (stats.submittedFrames < HAL_EMPTY_BURST_MIN_FRAMES) return
+        val emptyRatio = stats.emptyDecodes.toDouble() / stats.submittedFrames.toDouble()
+        if (emptyRatio < HAL_EMPTY_BURST_RATIO) return
+        if (highUniqueFrameCount >= HAL_EMPTY_BURST_MAX_UNIQUE) return
+        halRecoveryRestartAttempted = true
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .putLong(PREF_LAST_HAL_RECOVERY_MS, System.currentTimeMillis())
+            .commit()
+        restartScanForHalRecovery()
+    }
+
+    private fun restartScanForHalRecovery() {
+        if (processRestarting) return
+        processRestarting = true
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .putBoolean(PREF_AUTOSTART_SCAN, true)
+            .putLong(PREF_AUTOSTART_BIND_DELAY_OVERRIDE_MS, CAMERA_HAL_COOLDOWN_MS)
+            .commit()
+        showRestarting()
+        statusText.text = "相机未就绪，正在恢复"
+        watchdog.postDelayed({
+            markCameraReleased()
+            restartProcessForScan()
+        }, PROCESS_RESTART_DELAY_MS)
+    }
+
+    private fun showIdle() {
+        idlePanel.visibility = View.VISIBLE
+        resultPanel.visibility = View.GONE
+        restartingPanel.visibility = View.GONE
+        scanMetaRow.visibility = View.GONE
+        resetButton.visibility = View.GONE
+        startReceiveButton.isEnabled = true
+        statusText.text = "点「接收文件」开始扫描"
+    }
+
+    private fun showScanning() {
+        idlePanel.visibility = View.GONE
+        resultPanel.visibility = View.GONE
+        restartingPanel.visibility = View.GONE
+        scanMetaRow.visibility = View.VISIBLE
+        resetButton.visibility = View.VISIBLE
+        statusText.text = "请对准电脑二维码"
+    }
+
+    private fun showResult(pending: PendingSave) {
+        idlePanel.visibility = View.GONE
+        restartingPanel.visibility = View.GONE
+        resultPanel.visibility = View.VISIBLE
+        scanMetaRow.visibility = View.GONE
+        resetButton.visibility = View.GONE
+        val names = ZipListing.names(pending.bytes)
+        val preview = previewBitmap(pending)
+        if (preview != null && (names == null || names.size <= 1)) {
+            resultImage.setImageBitmap(preview)
+            resultImage.visibility = View.VISIBLE
+            resultNamesScroll.visibility = View.GONE
+            resultNames.text = pending.name
+        } else {
+            resultImage.setImageDrawable(null)
+            resultImage.visibility = View.GONE
+            resultNamesScroll.visibility = View.VISIBLE
+            resultNames.text = if (!names.isNullOrEmpty()) names.joinToString("\n") else pending.name
+        }
+        resultMeta.text = if (!names.isNullOrEmpty() && names.size > 1) {
+            "${names.size} 个文件 · ${formatBytes(pending.bytes.size.toLong())} · ${pending.name}"
+        } else {
+            "${pending.name} · ${formatBytes(pending.bytes.size.toLong())}"
+        }
+        statusText.text = "接收完成，可保存或继续接收"
+        findViewById<Button>(R.id.continueReceiveButton).isEnabled = true
+        processRestarting = false
+    }
+
+    private fun previewBitmap(pending: PendingSave) = try {
+        val mime = pending.mime.lowercase()
+        if (!mime.startsWith("image/")) null
+        else BitmapFactory.decodeByteArray(pending.bytes, 0, pending.bytes.size)
+    } catch (_: Throwable) {
+        null
+    }
+
+    private fun showOpeningCamera() {
+        idlePanel.visibility = View.GONE
+        resultPanel.visibility = View.GONE
+        restartingPanel.visibility = View.GONE
+        scanMetaRow.visibility = View.VISIBLE
+        resetButton.visibility = View.GONE
+        statusText.text = "正在打开相机"
+    }
+
+    private fun showRestarting(delayMs: Long = PROCESS_RESTART_DELAY_MS, statusMessage: String = "正在释放相机") {
+        idlePanel.visibility = View.GONE
+        resultPanel.visibility = View.GONE
+        scanMetaRow.visibility = View.GONE
+        resetButton.visibility = View.GONE
+        restartingPanel.visibility = View.VISIBLE
+        restartStartedAt = SystemClock.elapsedRealtime()
+        restartDelayMs = delayMs.coerceAtLeast(CONTINUE_RESTART_MIN_MS)
+        restartCountdown.text = ((restartDelayMs + 999) / 1000).toInt().coerceAtLeast(1).toString()
+        restartProgress.progress = 0
+        statusText.text = statusMessage
+        watchdog.removeCallbacks(restartProgressTick)
+        watchdog.post(restartProgressTick)
+    }
+
+    private fun pauseScanner() {
+        imageAnalysis?.clearAnalyzer()
+        cameraStarted = false
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if (::frameAnalyzer.isInitialized) frameAnalyzer.setAnalysisIdle(true)
+    }
+
+    private fun stopScanner() {
+        pauseScanner()
+        cameraProvider?.unbindAll()
+        imageAnalysis = null
+        boundCamera = null
+        markCameraReleased()
+    }
+
     private fun startScanner() {
-        if (cameraStarted || isDestroyed) return
+        if (isDestroyed) return
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if (::frameAnalyzer.isInitialized) frameAnalyzer.setAnalysisIdle(false)
+        val bound = imageAnalysis
+        if (bound != null) {
+            cameraStarted = true
+            val settle = settlePreviewBeforeAnalyze.also { settlePreviewBeforeAnalyze = false }
+            attachAnalyzer(bound, settle)
+            return
+        }
+        if (cameraStarted && cameraProvider != null) {
+            bindCamera()
+            return
+        }
         cameraStarted = true
+        val existing = cameraProvider
+        if (existing != null) {
+            bindCamera()
+            return
+        }
         val providerFuture = ProcessCameraProvider.getInstance(this)
         providerFuture.addListener({
             try {
                 cameraProvider = providerFuture.get()
-                bindCamera()
+                if (cameraStarted && !isDestroyed && imageAnalysis == null) bindCamera()
             } catch (error: Exception) {
                 cameraStarted = false
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                showIdle()
                 statusText.text = "摄像头启动失败：${error.message ?: "未知错误"}"
             }
         }, ContextCompat.getMainExecutor(this))
@@ -229,8 +621,8 @@ class MainActivity : AppCompatActivity() {
     private fun setRequestedFps(fps: Int) {
         requestedFps = if (fps == 30 || fps == 120) fps else 60
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putInt(PREF_FPS, requestedFps).apply()
-        if (cameraProvider != null) bindCamera()
-        else statusText.text = "已选 ${requestedFps} FPS，打开相机后生效"
+        if (cameraStarted && cameraProvider != null) bindCamera()
+        else statusText.text = "已选 ${requestedFps} FPS"
     }
 
     private fun bindCamera() {
@@ -250,9 +642,10 @@ class MainActivity : AppCompatActivity() {
             var analysis = buildAnalysis(rotation, activeFps)
             imageAnalysis?.clearAnalyzer()
             provider.unbindAll()
-            analysis.setAnalyzer(cameraExecutor, frameAnalyzer)
+            val settle = settlePreviewBeforeAnalyze.also { settlePreviewBeforeAnalyze = false }
+            attachAnalyzer(analysis, settle)
             try {
-                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                boundCamera = provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
             } catch (preferredError: Exception) {
                 if (fallbackFps == null || fallbackFps == preferredFps) throw preferredError
                 analysis.clearAnalyzer()
@@ -260,13 +653,16 @@ class MainActivity : AppCompatActivity() {
                 activeFps = fallbackFps
                 preview = buildPreview(rotation, activeFps)
                 analysis = buildAnalysis(rotation, activeFps)
-                analysis.setAnalyzer(cameraExecutor, frameAnalyzer)
-                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                attachAnalyzer(analysis, settle)
+                boundCamera = provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
                 fellBack = true
             }
             imageAnalysis = analysis
             activeCameraFps = activeFps
             lastStatsAt = SystemClock.elapsedRealtime()
+            cameraBoundAt = SystemClock.elapsedRealtime()
+            resetExposureSession()
+            markCameraHeld()
             val boundFps = activeFps
             statusText.text = if (boundFps != null && (fellBack || requestedFps !in boundFps.lower..boundFps.upper)) {
                 "相机达不到 ${requestedFps} FPS，已落到 ${boundFps.lower}-${boundFps.upper}"
@@ -276,10 +672,33 @@ class MainActivity : AppCompatActivity() {
             renderDiagnostics()
         } catch (error: Exception) {
             if (imageAnalysis == null) cameraStarted = false
+            boundCamera = null
             statusText.text = "摄像头启动失败：${error.message ?: "未知错误"}"
         } finally {
             bindingCamera = false
         }
+    }
+
+    private fun resetExposureSession() {
+        aeNudgeStep = 0
+        aeNudgeCount = 0
+        aeMeterCount = 0
+        lastAeNudgeAt = 0L
+        lastEvIndex = 0
+        aeNudged = false
+    }
+
+    private fun attachAnalyzer(analysis: ImageAnalysis, settle: Boolean) {
+        if (!settle) {
+            analysis.setAnalyzer(cameraExecutor, frameAnalyzer)
+            return
+        }
+        val settleMs = if (receiveSessionFromContinue) CONTINUE_ANALYZER_SETTLE_MS else ANALYZER_SETTLE_MS
+        watchdog.postDelayed({
+            if (isDestroyed || imageAnalysis !== analysis) return@postDelayed
+            analysis.setAnalyzer(cameraExecutor, frameAnalyzer)
+            if (::frameAnalyzer.isInitialized) frameAnalyzer.setAnalysisIdle(false)
+        }, settleMs)
     }
 
     private fun cameraFpsRanges(provider: ProcessCameraProvider): List<Range<Int>> {
@@ -363,6 +782,7 @@ class MainActivity : AppCompatActivity() {
         val meta = update.meta
         val complete = update.complete
         if (complete != null && meta != null) {
+            frameAnalyzer.setAnalysisIdle(true)
             offerCompletedFile(meta.session, meta.name, meta.mime, complete)
         }
     }
@@ -378,6 +798,9 @@ class MainActivity : AppCompatActivity() {
         if (update.receivedFrames > lastHighUnique) {
             highUniqueFrameCount += (update.receivedFrames - lastHighUnique).toLong()
             lastHighUnique = update.receivedFrames
+            if (highUniqueFrameCount >= HAL_WARMUP_MIN_UNIQUE) {
+                receiveSessionFromContinue = false
+            }
         } else highDuplicateCount += 1
         val now = SystemClock.elapsedRealtime()
         updateSpeed(update, bytes.size - HIGH_SPEED_HEADER_SIZE, now)
@@ -475,39 +898,55 @@ class MainActivity : AppCompatActivity() {
         lastHighUnique = 0
         lastHighSolved = 0
         lastHighTotal = 0
-        val stalled = frameAnalyzer.isPaused() ||
-            (lastStatsAt != 0L && SystemClock.elapsedRealtime() - lastStatsAt > SCAN_STALL_MS)
-        if (stalled) {
-            restartScanner(countRecovery = true)
+        frameAnalyzer.consumeRecoverRequest()
+        recoverBurst = 0
+        softDecoderRecoverAttempted = false
+        lastSoftRecoverAt = 0L
+        frameAnalyzer.setAnalysisIdle(true)
+        val bound = imageAnalysis
+        if (bound != null) {
+            bound.clearAnalyzer()
+        }
+        frameAnalyzer.recoverPipeline(false)
+        resetExposureSession()
+        if (bound != null) {
+            cameraStarted = true
+            watchdog.postDelayed({
+                if (!isDestroyed && imageAnalysis === bound) {
+                    bound.setAnalyzer(cameraExecutor, frameAnalyzer)
+                }
+                frameAnalyzer.setAnalysisIdle(false)
+            }, ANALYZER_SETTLE_MS)
         } else {
-            frameAnalyzer.resetSession()
+            frameAnalyzer.setAnalysisIdle(false)
         }
         updateUi(TransferUpdate(null, 0, 0))
         fileText.text = "等待文件"
         progress.progress = 0
-        speedText.text = "实时 — · 平均 — · 点进度条看诊断"
+        speedText.text = "实时 — · 平均 —"
         missingText.text = "缺失片段：—"
         statusText.text = "正在高速扫描"
+        if (::resultImage.isInitialized) {
+            resultImage.setImageDrawable(null)
+            resultImage.visibility = View.GONE
+        }
+        if (::resultNamesScroll.isInitialized) resultNamesScroll.visibility = View.VISIBLE
+        if (::resultNames.isInitialized) resultNames.text = ""
+        showScanning()
         renderDiagnostics()
     }
 
     private fun maybeRecoverStalledScanner() {
-        if (!cameraStarted || bindingCamera || isDestroyed) return
+        if (!cameraStarted || bindingCamera || isDestroyed || imageAnalysis == null) return
         if (!::frameAnalyzer.isInitialized) return
         val now = SystemClock.elapsedRealtime()
         if (now - lastRecoverAt < RECOVER_COOLDOWN_MS) return
         val asked = frameAnalyzer.consumeRecoverRequest()
         val heartbeatDead = lastStatsAt != 0L && now - lastStatsAt > SCAN_STALL_MS
-        if (!asked && !heartbeatDead) return
-        if (now - recoverBurstStartedAt > RECOVER_BURST_WINDOW_MS) recoverBurst = 0
-        if (recoverBurst == 0) recoverBurstStartedAt = now
-        recoverBurst += 1
-        if (recoverBurst > MAX_RECOVER_BURST) {
-            statusText.text = "摄像头无画面，退出应用重开"
-            return
+        if (heartbeatDead || asked) {
+            frameAnalyzer.replaceDecoders()
+            if (heartbeatDead) statusText.text = "解码已重建，未重绑相机"
         }
-        restartScanner(countRecovery = true, forceRebind = true)
-        statusText.text = "扫描卡住，已重启相机"
     }
 
     private fun restartScanner(countRecovery: Boolean, forceRebind: Boolean = false) {
@@ -531,6 +970,7 @@ class MainActivity : AppCompatActivity() {
         val stats = lastStats
         val now = SystemClock.elapsedRealtime()
         val highAge = if (highLastFrameAt == 0L) "—" else "${(now - highLastFrameAt).coerceAtLeast(0)} ms"
+        val sessionElapsed = if (scanSessionStartedAt == 0L) "—" else formatDuration(now - scanSessionStartedAt)
         val lines = listOf(
             "设备：${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} · App ${BuildConfig.VERSION_NAME}",
             "相机：${stats?.width ?: "?"}×${stats?.height ?: "?"} · 采集 ${stats?.captureFps?.let { "%.1f".format(it) } ?: "?"} FPS · 选择 $requestedFps · 目标 ${preferredFpsLabel()}",
@@ -540,27 +980,15 @@ class MainActivity : AppCompatActivity() {
             "解码：zxing-cpp · 平均 ${stats?.averageDecodeMs?.let { "%.1f ms".format(it) } ?: "—"} · 单码命中 ${stats?.singleHits ?: 0} · 多码扫描 ${stats?.multiScans ?: 0}（命中 ${stats?.multiHits ?: 0}${perFrameLabel(stats)}）",
             "分析器：线程 ${stats?.workerCount ?: "?"} · 忙 ${stats?.workerBusy ?: "?"} · 空结果 ${stats?.emptyDecodes ?: 0} · 异常 ${stats?.decodeErrors ?: 0} · 新缓冲 ${stats?.bufferAllocations ?: 0}",
             "看门狗：恢复 ${stats?.pipelineRecoveries ?: 0} 次 · 心跳 ${if (lastStatsAt == 0L) "—" else "${(now - lastStatsAt).coerceAtLeast(0)} ms"}",
-            "ROI：${roiLabel(stats)} · 连续未命中 ${stats?.roiMisses ?: 0} · 布局 ${if (stats?.multiLayout == true) "四码" else "单码"}",
+            "曝光：点测 $aeMeterCount · 补偿 $lastEvIndex · 轻推 $aeNudgeCount",
+            "ROI：${roiLabel(stats)} · 连续未命中 ${stats?.roiMisses ?: 0} · 布局 ${layoutLabel(stats)}",
             "协议：二维码 ${decodedQrCount.get()} · AFL2 ${highFrameCount} · 唯一 ${highUniqueFrameCount} · 重复 ${highDuplicateCount} · 无效 ${invalidFrameCount.get()} · 错误 ${highProtocolErrors} · 队列 ${pendingProtocolFrames.get()} · 解块 ${lastHighSolved}/${lastHighTotal}",
-            "高速会话：最近帧 ${highAge} · 唯一载荷 ${formatBytes(sessionUniquePayloadBytes)} · 光学 ${formatBytes(highBytesReceived)} · 速度 ${latestSpeedLabel} · 会话 ${formatRate(sessionAverageBytesPerSecond)}",
+            "高速会话：总耗时 $sessionElapsed · 最近帧 $highAge · 唯一载荷 ${formatBytes(sessionUniquePayloadBytes)} · 光学 ${formatBytes(highBytesReceived)} · 速度 ${latestSpeedLabel} · 会话 ${formatRate(sessionAverageBytesPerSecond)}",
             "无效样本：$invalidFrameSample",
             "设备标识：${Build.FINGERPRINT}"
         )
         fullDiagnostics = lines.joinToString("\n")
-        diagnosticsText.text = if (diagnosticsExpanded) {
-            fullDiagnostics
-        } else {
-            listOf(
-                "采集 ${stats?.captureFps?.let { "%.0f".format(it) } ?: "—"} · 分析 ${stats?.analysisFps?.let { "%.0f".format(it) } ?: "—"} · 有效 ${stats?.validQrFps?.let { "%.0f".format(it) } ?: "—"} · ${if (stats?.multiLayout == true) "四码" else "单码"}${perFrameLabel(stats)}",
-                "选择 $requestedFps · 目标 ${preferredFpsLabel()} · 解码 ${stats?.averageDecodeMs?.let { "%.0f ms".format(it) } ?: "—"} · 会话 ${formatRate(sessionAverageBytesPerSecond)}",
-                "点进度条展开完整诊断 · 解块 ${lastHighSolved}/${lastHighTotal}"
-            ).joinToString("\n")
-        }
-    }
-
-    private fun toggleDiagnostics() {
-        diagnosticsExpanded = !diagnosticsExpanded
-        renderDiagnostics()
+        diagnosticsText.text = fullDiagnostics
     }
 
     private fun offerCompletedFile(session: String, name: String, mime: String, bytes: ByteArray) {
@@ -572,7 +1000,8 @@ class MainActivity : AppCompatActivity() {
             saveButton.isEnabled = true
             fileText.text = "$name · ${formatBytes(bytes.size.toLong())}"
             progress.progress = 100
-            statusText.text = "接收完成，点「保存文件」"
+            pauseScanner()
+            showResult(pending)
         }
     }
 
@@ -593,6 +1022,15 @@ class MainActivity : AppCompatActivity() {
             tiles > 0 -> "格 $tiles"
             stats?.roiTracked == true -> "跟踪中"
             else -> "全图"
+        }
+    }
+
+    private fun layoutLabel(stats: ScanStats?): String {
+        val tiles = stats?.tileCount ?: 0
+        return when {
+            tiles >= 4 -> "四码"
+            stats?.multiLayout == true -> "多码"
+            else -> "单码"
         }
     }
 
@@ -618,6 +1056,7 @@ class MainActivity : AppCompatActivity() {
         speedWindowBytes = 0
         speedBytesPerSecond = 0.0
         sessionStartedAt = 0
+        scanSessionStartedAt = 0
         sessionUniquePayloadBytes = 0
         sessionAverageBytesPerSecond = 0.0
         rollingCount = 0
@@ -648,14 +1087,74 @@ class MainActivity : AppCompatActivity() {
         else -> "%.2f MB/s".format(value / 1048576.0)
     }
 
+    private fun formatDuration(ms: Long): String {
+        if (ms < 1000L) return "${ms} ms"
+        val seconds = ms / 1000.0
+        if (seconds < 60.0) return "%.1f s".format(seconds)
+        val minutes = (ms / 60_000).toInt()
+        val rem = (ms % 60_000) / 1000.0
+        return "%d:%04.1f".format(minutes, rem)
+    }
+
     private fun formatBytes(size: Long) = when {
         size < 1024 -> "$size B"
         size < 1048576 -> "%.1f KB".format(size / 1024.0)
         else -> "%.1f MB".format(size / 1048576.0)
     }
 
+    private fun markCameraHeld() {
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_CAMERA_HELD, true).commit()
+    }
+
+    private fun reconcileCameraStateAfterReopen() {
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        if (prefs.getBoolean(PREF_CAMERA_HELD, false)) {
+            // Force-kill often skips onDestroy; record HAL release before the next bind.
+            markCameraReleased()
+            pauseScanner()
+            imageAnalysis = null
+            boundCamera = null
+            cameraProvider?.unbindAll()
+        } else {
+            prefs.edit().putBoolean(PREF_CAMERA_HELD, false).apply()
+        }
+    }
+
+    private fun clearStaleCameraHeld() {
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val wasHeld = prefs.getBoolean(PREF_CAMERA_HELD, false)
+        prefs.edit().putBoolean(PREF_CAMERA_HELD, false).apply()
+        if (wasHeld) markCameraReleased()
+    }
+
+    private fun markCameraReleased() {
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+            .putBoolean(PREF_CAMERA_HELD, false)
+            .putLong(PREF_LAST_CAMERA_RELEASE_MS, System.currentTimeMillis())
+            .commit()
+    }
+
+    private fun msUntilCameraBindAllowed(): Long {
+        val lastRelease = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .getLong(PREF_LAST_CAMERA_RELEASE_MS, 0L)
+        if (lastRelease == 0L) return 0L
+        return (lastRelease + CAMERA_HAL_COOLDOWN_MS - System.currentTimeMillis()).coerceAtLeast(0L)
+    }
+
+    private fun elapsedSinceCameraRelease(): Long {
+        val lastRelease = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .getLong(PREF_LAST_CAMERA_RELEASE_MS, 0L)
+        if (lastRelease == 0L) return CAMERA_HAL_COOLDOWN_MS
+        return (System.currentTimeMillis() - lastRelease).coerceAtLeast(0L)
+    }
+
     override fun onDestroy() {
         watchdog.removeCallbacks(watchdogTick)
+        watchdog.removeCallbacks(restartProgressTick)
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if (imageAnalysis != null || boundCamera != null) {
+            markCameraReleased()
+        }
         imageAnalysis?.clearAnalyzer()
         cameraProvider?.unbindAll()
         if (::frameAnalyzer.isInitialized) frameAnalyzer.close()
@@ -671,6 +1170,25 @@ class MainActivity : AppCompatActivity() {
         private const val SPEED_REFRESH_INTERVAL_MS = 1000L
         private const val PREFS_NAME = "airferry-lite"
         private const val PREF_FPS = "preview_fps"
+        private const val PREF_AUTOSTART_SCAN = "autostart_scan"
+        private const val PREF_AUTOSTART_FROM_CONTINUE = "autostart_from_continue"
+        private const val PREF_AUTOSTART_BIND_DELAY_OVERRIDE_MS = "autostart_bind_delay_ms"
+        private const val PREF_CAMERA_HELD = "camera_held"
+        private const val PREF_LAST_CAMERA_RELEASE_MS = "camera_release_ms"
+        private const val PREF_LAST_HAL_RECOVERY_MS = "last_hal_recovery_ms"
+        private const val EXTRA_AUTOSTART_SCAN = "autostart_scan"
+        private const val PROCESS_RESTART_DELAY_MS = 2000L
+        private const val AUTOSTART_BIND_DELAY_MS = 2000L
+        private const val CONTINUE_RESTART_MIN_MS = 400L
+        private const val CAMERA_HAL_COOLDOWN_MS = 2000L
+        private const val ANALYZER_SETTLE_MS = 1200L
+        private const val CONTINUE_ANALYZER_SETTLE_MS = 500L
+        private const val HAL_EMPTY_BURST_MIN_FRAMES = 250L
+        private const val HAL_EMPTY_BURST_RATIO = 0.80
+        private const val HAL_EMPTY_BURST_MAX_UNIQUE = 25L
+        private const val HAL_WARMUP_MS = 4000L
+        private const val HAL_WARMUP_MIN_UNIQUE = 10L
+        private const val HAL_RECOVERY_COOLDOWN_MS = 60_000L
         private const val WATCHDOG_INTERVAL_MS = 1000L
         private const val SCAN_STALL_MS = 2000L
         private const val RECOVER_COOLDOWN_MS = 5000L

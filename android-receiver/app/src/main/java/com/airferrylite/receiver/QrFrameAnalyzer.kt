@@ -50,6 +50,7 @@ class QrFrameAnalyzer(
     @Volatile private var tileExecutor: ExecutorService = Executors.newFixedThreadPool(TILE_WORKERS)
     private val workerBusy = AtomicInteger(0)
     private val skipUntilRecover = AtomicBoolean(false)
+    private val analysisIdle = AtomicBoolean(false)
     private val recoverRequested = AtomicBoolean(false)
     private val pipelineRecoveries = AtomicLong(0)
     private val lastImageTimestamp = AtomicLong(0)
@@ -81,6 +82,10 @@ class QrFrameAnalyzer(
         reportStatsIfDue(image.width, image.height)
         if (skipUntilRecover.get()) {
             droppedFrames.incrementAndGet()
+            image.close()
+            return
+        }
+        if (analysisIdle.get()) {
             image.close()
             return
         }
@@ -126,6 +131,16 @@ class QrFrameAnalyzer(
 
     fun isPaused(): Boolean = skipUntilRecover.get()
 
+    fun setAnalysisIdle(idle: Boolean) {
+        analysisIdle.set(idle)
+    }
+
+    fun replaceDecoders() {
+        decoder = NativeQrDecoder()
+        tileDecoders = Array(TILE_WORKERS) { NativeQrDecoder() }
+        synchronized(lumaLock) { lumaScratch = null }
+    }
+
     fun recoverPipeline(count: Boolean = false) {
         skipUntilRecover.set(true)
         val oldDecode = decodeExecutor
@@ -139,6 +154,7 @@ class QrFrameAnalyzer(
         runCatching { oldDecode.awaitTermination(200, TimeUnit.MILLISECONDS) }
         runCatching { oldTiles.awaitTermination(200, TimeUnit.MILLISECONDS) }
         synchronized(lumaLock) { lumaScratch = null }
+        analysisIdle.set(false)
         resetSession()
         lastImageTimestamp.set(0)
         staleTimestampFrames.set(0)

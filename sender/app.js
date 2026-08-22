@@ -16,6 +16,7 @@
   const viewerHud = el("viewerHud");
   const canvas = el("qrCanvas");
   const overlay = el("overlay");
+  const statusText = el("statusText");
   const compressText = el("compressText");
   const sessionText = el("sessionText");
   const frameText = el("frameText");
@@ -78,7 +79,7 @@
   const COMMON_HZ = [60, 75, 90, 120, 144, 165, 240];
   const QUAD_PAIRS = [[0, 3], [1, 2]];
   const DUAL_SLOTS = [0, 1];
-  let file = null;
+  let files = [];
   let transfer = null;
   let animationFrame = 0;
   let emitted = 0;
@@ -128,16 +129,147 @@
     return frameBytes;
   }
 
-  function selectFile(next) {
-    file = next || null;
-    fileLabel.textContent = file ? file.name + " · " + formatBytes(file.size) : "选择或拖入一个文件";
-    prepareBtn.disabled = !file;
-    resetBtn.disabled = !file;
-    statusText.textContent = file ? "文件已选择" : "等待文件";
+  function zipEntryName(file, used) {
+    const base = String(file && file.name || "file.bin").split(/[\\/]/).pop().replace(/[\u0000-\u001f\u007f]/g, "").trim() || "file.bin";
+    let name = base;
+    let n = 2;
+    while (used.has(name.toLowerCase())) {
+      const dot = base.lastIndexOf(".");
+      name = dot > 0 ? base.slice(0, dot) + " (" + n + ")" + base.slice(dot) : base + " (" + n + ")";
+      n += 1;
+    }
+    used.add(name.toLowerCase());
+    return name;
+  }
+
+  const CRC32_TABLE = (() => {
+    const table = new Uint32Array(256);
+    for (let i = 0; i < 256; i += 1) {
+      let crc = i;
+      for (let bit = 0; bit < 8; bit += 1) crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1;
+      table[i] = crc >>> 0;
+    }
+    return table;
+  })();
+
+  function crc32(bytes) {
+    let crc = 0xffffffff;
+    for (let i = 0; i < bytes.length; i += 1) crc = CRC32_TABLE[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8);
+    return (crc ^ 0xffffffff) >>> 0;
+  }
+
+  function concatBytes(chunks) {
+    let total = 0;
+    for (const chunk of chunks) total += chunk.length;
+    const out = new Uint8Array(total);
+    let at = 0;
+    for (const chunk of chunks) {
+      out.set(chunk, at);
+      at += chunk.length;
+    }
+    return out;
+  }
+
+  function zipStore(entries) {
+    const encoder = new TextEncoder();
+    const locals = [];
+    const centrals = [];
+    let offset = 0;
+    for (const entry of entries) {
+      const nameBytes = encoder.encode(entry.name);
+      const data = entry.bytes;
+      const crc = crc32(data);
+      const local = new Uint8Array(30 + nameBytes.length);
+      const localView = new DataView(local.buffer);
+      local[0] = 0x50; local[1] = 0x4b; local[2] = 3; local[3] = 4;
+      localView.setUint16(4, 20, true);
+      localView.setUint16(6, 0x0800, true);
+      localView.setUint16(26, nameBytes.length, true);
+      localView.setUint32(14, crc, true);
+      localView.setUint32(18, data.length, true);
+      localView.setUint32(22, data.length, true);
+      local.set(nameBytes, 30);
+      const central = new Uint8Array(46 + nameBytes.length);
+      const centralView = new DataView(central.buffer);
+      central[0] = 0x50; central[1] = 0x4b; central[2] = 1; central[3] = 2;
+      centralView.setUint16(4, 20, true);
+      centralView.setUint16(6, 20, true);
+      centralView.setUint16(8, 0x0800, true);
+      centralView.setUint16(28, nameBytes.length, true);
+      centralView.setUint32(16, crc, true);
+      centralView.setUint32(20, data.length, true);
+      centralView.setUint32(24, data.length, true);
+      centralView.setUint32(42, offset, true);
+      central.set(nameBytes, 46);
+      locals.push(local, data);
+      centrals.push(central);
+      offset += local.length + data.length;
+    }
+    const centralDir = concatBytes(centrals);
+    const eocd = new Uint8Array(22);
+    const eocdView = new DataView(eocd.buffer);
+    eocd[0] = 0x50; eocd[1] = 0x4b; eocd[2] = 5; eocd[3] = 6;
+    eocdView.setUint16(8, entries.length, true);
+    eocdView.setUint16(10, entries.length, true);
+    eocdView.setUint32(12, centralDir.length, true);
+    eocdView.setUint32(16, offset, true);
+    return concatBytes(locals.concat([centralDir, eocd]));
+  }
+
+  async function packSelectedFiles(selected) {
+    const limit = H && H.MAX_FILE_BYTES || 67108864;
+    const total = selected.reduce((sum, item) => sum + item.size, 0);
+    if (!selected.length) throw new Error("请先选择文件");
+    if (total > limit) throw new Error("合计超过 64 MB");
+    if (selected.length === 1) {
+      const item = selected[0];
+      return {
+        name: item.name,
+        type: item.type || "application/octet-stream",
+        bytes: new Uint8Array(await item.arrayBuffer()),
+        label: item.name + " · " + formatBytes(item.size)
+      };
+    }
+    const used = new Set();
+    const entries = [];
+    for (const item of selected) {
+      entries.push({
+        name: zipEntryName(item, used),
+        bytes: new Uint8Array(await item.arrayBuffer())
+      });
+    }
+    const bytes = zipStore(entries);
+    return {
+      name: selected.length + "个文件.zip",
+      type: "application/zip",
+      bytes,
+      label: selected.length + " 个文件 · " + formatBytes(total)
+    };
+  }
+
+  function selectFiles(list) {
+    files = list && list.length ? Array.from(list).filter(item => item && item.size > 0) : [];
+    const total = files.reduce((sum, item) => sum + item.size, 0);
+    if (!files.length) {
+      fileLabel.textContent = "选择或拖入一个或多个文件";
+      prepareBtn.disabled = true;
+      resetBtn.disabled = true;
+      statusText.textContent = "等待文件";
+    } else if (files.length === 1) {
+      fileLabel.textContent = files[0].name + " · " + formatBytes(files[0].size);
+      prepareBtn.disabled = false;
+      resetBtn.disabled = false;
+      statusText.textContent = "文件已选择";
+    } else {
+      fileLabel.textContent = files.length + " 个文件 · " + formatBytes(total) + "\n" + files.map(item => item.name).join("\n");
+      prepareBtn.disabled = false;
+      resetBtn.disabled = false;
+      statusText.textContent = files.length + " 个文件已选择";
+    }
     if (compressText) compressText.textContent = "—";
   }
 
-  fileInput.addEventListener("change", () => selectFile(fileInput.files[0]));
+  fileInput.addEventListener("change", () => selectFiles(fileInput.files));
   ["dragenter", "dragover"].forEach(type => dropZone.addEventListener(type, event => {
     event.preventDefault();
     dropZone.classList.add("drag");
@@ -147,18 +279,18 @@
     dropZone.classList.remove("drag");
   }));
   dropZone.addEventListener("drop", event => {
-    if (event.dataTransfer.files[0]) selectFile(event.dataTransfer.files[0]);
+    if (event.dataTransfer.files.length) selectFiles(event.dataTransfer.files);
   });
 
   prepareBtn.addEventListener("click", async () => {
-    if (!file) return;
+    if (!files.length) return;
     stop();
     statusText.textContent = "正在读取文件";
     prepareBtn.disabled = true;
     try {
-      const sourceBytes = new Uint8Array(await file.arrayBuffer());
+      const payload = await packSelectedFiles(files);
       if (!H) throw new Error("高速协议未加载");
-      const packed = await H.packFile(file.name, file.type || "application/octet-stream", sourceBytes);
+      const packed = await H.packFile(payload.name, payload.type, payload.bytes);
       codesPerScreen = codesForMode(qrMode.value);
       const frameBytes = Number(chunkSize.value);
       const effectiveFrameBytes = capFrameBytes(codesPerScreen, frameBytes);
@@ -174,7 +306,7 @@
           blockLen,
           totalLen: packed.container.length,
           payloadFnv: H.fnv1a(packed.container),
-          layoutCodes: codesPerScreen === 1 ? 1 : 4,
+          layoutCodes: codesPerScreen === 1 ? 1 : codesPerScreen === 2 ? 2 : 4,
           systematic: true
         },
         session: sessionId.toString(16).padStart(4, "0"),
@@ -182,7 +314,7 @@
         compression: packed.compression,
         transmittedSize: packed.transmittedSize
       };
-      const prepared = { encoding: packed.compression, originalSize: sourceBytes.length, savedBytes: sourceBytes.length - packed.transmittedSize };
+      const prepared = { encoding: packed.compression, originalSize: payload.bytes.length, savedBytes: payload.bytes.length - packed.transmittedSize };
       resetEncodePipeline();
       highNextSeq = 0;
       highNextPair = 0;
@@ -225,7 +357,7 @@
           ? "gzip 已压缩 " + savedPct + "% · 传 " + formatBytes(packed.transmittedSize)
           : "未压缩 · 原文件发送";
       }
-      fileLabel.textContent = file.name + " · " + formatBytes(file.size) + (gzip ? " · 已压缩 " + savedPct + "%" : " · 未压缩");
+      fileLabel.textContent = payload.label + (gzip ? " · 已压缩 " + savedPct + "%" : " · 未压缩");
       statusText.textContent = "二维码流已生成，可开始播放";
       playBtn.disabled = false;
       if (hudPlayBtn) hudPlayBtn.disabled = false;
@@ -257,10 +389,10 @@
   });
   resetBtn.addEventListener("click", () => {
     stop();
-    file = null;
+    files = [];
     transfer = null;
     fileInput.value = "";
-    selectFile(null);
+    selectFiles([]);
     playBtn.disabled = true;
     if (hudPlayBtn) hudPlayBtn.disabled = true;
     resetBtn.disabled = true;
@@ -483,8 +615,20 @@
   function waitForQueueDepth(count) {
     if (highQueue.length >= count) return Promise.resolve();
     pumpEncode();
-    return new Promise((resolve) => {
-      queueWaiters.push({ count, resolve });
+    return new Promise((resolve, reject) => {
+      const waiter = {
+        count,
+        resolve: () => {
+          clearTimeout(timer);
+          resolve();
+        }
+      };
+      const timer = setTimeout(() => {
+        const at = queueWaiters.indexOf(waiter);
+        if (at >= 0) queueWaiters.splice(at, 1);
+        reject(new Error("生成超时。请用 Chrome 打开 sender/dist/airferry-lite-sender.html，不要用 Internet Explorer"));
+      }, 20000);
+      queueWaiters.push(waiter);
     });
   }
 
@@ -562,8 +706,8 @@
     } catch (error) {
       qrWorkers.length = 0;
       qrWorkerIdle.length = 0;
+      if (url) URL.revokeObjectURL(url);
     }
-    if (url) URL.revokeObjectURL(url);
   }
 
   function recycleQrWorker(worker) {
@@ -633,7 +777,15 @@
     return new Promise((resolve) => {
       const id = qrWorkerNextId;
       qrWorkerNextId += 1;
-      qrWorkerWait.push({ id, seq, version, bytes, key, resolve });
+      let settled = false;
+      const finish = (pattern) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(pattern);
+      };
+      const timer = setTimeout(() => finish(getHighSpeedQrPattern(bytes, seq)), 2500);
+      qrWorkerWait.push({ id, seq, version, bytes, key, resolve: finish });
       dispatchQrWorker();
     });
   }
