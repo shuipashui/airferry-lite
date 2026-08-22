@@ -37,7 +37,7 @@ assert.ok(senderApp.includes("viewer.clientWidth") && senderApp.includes("viewer
 assert.ok(!senderStyles.includes("max-width:96vmin"), "windowed QR must not be capped at 96vmin");
 assert.ok(senderApp.includes("tile.width * scale"), "QR blit destination must be integer module scale");
 assert.ok(senderApp.includes("QUAD_PAIRS = [[0, 3], [1, 2]]"), "quad 60 FPS must keep checkerboard pair stagger");
-assert.ok(senderApp.includes("DUAL_SLOTS = [0, 3]"), "dual must occupy top-left and bottom-right of the 2x2 canvas");
+assert.ok(senderApp.includes("DUAL_SLOTS = [0, 1]"), "dual occupies the top row of the 2x2 canvas");
 assert.ok(senderApp.includes("function quadRefreshesAll"), "quad 30 FPS should refresh all four codes together");
 assert.ok(senderApp.includes("Math.round(vsyncsPerQr / 2)"), "quad pair updates must keep the same unique-code rate as four-at-once");
 assert.ok(senderApp.includes("function setPlayLabel"));
