@@ -244,6 +244,18 @@ class QrFrameAnalyzer(
         }
         if (transferCount(merged) >= 4) return merged
         if (previousTiles.size >= 4 && transferCount(merged) >= 3) return merged
+        // Quad 格 4: parallel per-tile only — serial 8-way overlay was ~21 ms / ~37 FPS (0.8.68).
+        if (quadStream.get() && previousTiles.size >= 4) {
+            if (transferCount(merged) < 2) {
+                val exclusive = ScanLayout.exclusiveQuadrants(region)
+                val overlays = ScanLayout.overlappingQuadrants(region)
+                val pending = overlays.indices.mapNotNull { index ->
+                    overlays[index].takeUnless { tileCovered(exclusive[index], merged, exclusive) }
+                }
+                add(readCropsParallel(luma, pending.take(TILE_WORKERS), retryBinarizer = false))
+            }
+            return merged
+        }
         if (dualFastPath(previousTiles.size, transferCount(merged))) return merged
         val exclusive = ScanLayout.exclusiveQuadrants(region)
         val overlays = ScanLayout.overlappingQuadrants(region)
