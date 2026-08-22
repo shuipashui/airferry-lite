@@ -452,9 +452,7 @@ class MainActivity : AppCompatActivity() {
             activeCameraFps = activeFps
             lastStatsAt = SystemClock.elapsedRealtime()
             resetExposureSession()
-            if (aeNudgeOnAnyEmpty) {
-                previewView.post { watchdog.postDelayed({ startSceneMetering() }, SCENE_METER_DELAY_MS) }
-            }
+            previewView.post { watchdog.postDelayed({ startSceneMetering() }, SCENE_METER_DELAY_MS) }
             val boundFps = activeFps
             statusText.text = if (boundFps != null && (fellBack || requestedFps !in boundFps.lower..boundFps.upper)) {
                 "相机达不到 ${requestedFps} FPS，已落到 ${boundFps.lower}-${boundFps.upper}"
@@ -474,6 +472,7 @@ class MainActivity : AppCompatActivity() {
     private fun startSceneMetering() {
         val camera = boundCamera ?: return
         if (isDestroyed || !cameraStarted) return
+        if (aeMeterCount >= 1) return
         val view = previewView
         if (view.width < 8 || view.height < 8) {
             view.post { startSceneMetering() }
@@ -494,9 +493,8 @@ class MainActivity : AppCompatActivity() {
         if (isDestroyed || !cameraStarted) return
         val now = SystemClock.elapsedRealtime()
         if (now - lastAeNudgeAt < 450) return
-        if (aeNudgeCount >= if (aeNudgeOnAnyEmpty) 12 else 8) return
+        if (aeNudgeCount >= 4) return
         lastAeNudgeAt = now
-        startSceneMetering()
         val state = camera.cameraInfo.exposureState
         if (!state.isExposureCompensationSupported) return
         val range = state.exposureCompensationRange
@@ -538,10 +536,6 @@ class MainActivity : AppCompatActivity() {
             if (isDestroyed || imageAnalysis !== analysis) return@postDelayed
             analysis.setAnalyzer(cameraExecutor, frameAnalyzer)
             if (::frameAnalyzer.isInitialized) frameAnalyzer.setAnalysisIdle(false)
-            if (aeNudgeOnAnyEmpty) {
-                startSceneMetering()
-                nudgeExposureForStuckQr()
-            }
         }, ANALYZER_SETTLE_MS)
     }
 

@@ -162,6 +162,24 @@ internal object ScanLayout {
         return owner
     }
 
+    /** Nearest containing tile. Overlap goes to one owner so a 1-of-2 hit cannot mark both tiles covered. */
+    fun ownerIndex(tiles: List<ScanRegion>, x: Float, y: Float): Int {
+        var best = -1
+        var bestDist = Float.POSITIVE_INFINITY
+        for (index in tiles.indices) {
+            val tile = tiles[index]
+            if (x < tile.left || x >= tile.left + tile.width || y < tile.top || y >= tile.top + tile.height) continue
+            val dx = x - (tile.left + tile.width / 2f)
+            val dy = y - (tile.top + tile.height / 2f)
+            val dist = dx * dx + dy * dy
+            if (dist < bestDist) {
+                bestDist = dist
+                best = index
+            }
+        }
+        return best
+    }
+
     fun followContainedHits(
         tiles: List<ScanRegion>,
         hits: List<List<Pair<Float, Float>>>,
@@ -175,7 +193,7 @@ internal object ScanLayout {
             if (points.isEmpty()) continue
             val cx = points.map { it.first }.average().toFloat()
             val cy = points.map { it.second }.average().toFloat()
-            val index = tileIndexContaining(tiles, cx, cy)
+            val index = ScanLayout.ownerIndex(tiles, cx, cy)
             if (index < 0 || claimed[index]) continue
             val tile = regionFromPoints(points, imageWidth, imageHeight, 1)?.let {
                 inflate(it, 1.18f, imageWidth, imageHeight)

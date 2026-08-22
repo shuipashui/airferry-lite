@@ -126,7 +126,7 @@ class QrFrameAnalyzer(
         decodedInWindow.incrementAndGet()
         publish(snapshot.width, snapshot.height, region, hits)
         val transfers = transferCount(hits)
-        if (nudgeOnAnyEmpty.get() && transfers < 2) noteHighContrastMiss(snapshot)
+        if (transfers == 0) noteHighContrastMiss(snapshot)
         else highContrastMissStreak.set(0)
     }
 
@@ -247,12 +247,12 @@ class QrFrameAnalyzer(
             val exclusive = ScanLayout.exclusiveQuadrants(square)
             val overlays = ScanLayout.overlappingQuadrants(square)
             val pending = overlays.indices.mapNotNull { index ->
-                overlays[index].takeUnless { tileCovered(exclusive[index], merged) }
+                overlays[index].takeUnless { tileCovered(exclusive[index], merged, exclusive) }
             }
             add(readCropsSerial(luma, pending, retryBinarizer = false))
             if (transferCount(merged) >= 2) return
             val retries = exclusive.mapNotNull { tile ->
-                if (tileCovered(tile, merged)) null
+                if (tileCovered(tile, merged, exclusive)) null
                 else ScanLayout.inflate(tile, 1.28f, luma.width, luma.height)
             }
             add(readCropsSerial(luma, retries, retryBinarizer = true))
@@ -282,7 +282,7 @@ class QrFrameAnalyzer(
             ScanLayout.clamp(it, luma.width, luma.height)
         }
         if (previousTiles.isNotEmpty()) {
-            add(readCropsParallel(luma, previousTiles.filter { !tileCovered(it, merged) }, retryBinarizer = false))
+            add(readCropsParallel(luma, previousTiles.filter { !tileCovered(it, merged, previousTiles) }, retryBinarizer = false))
         }
         // Dual header (layoutCodes=2): never run the 8-way quad fill. Old
         // layoutCodes=4 dual still settles after six 2-of-2 frames.
@@ -294,12 +294,13 @@ class QrFrameAnalyzer(
                 return merged
             } else {
                 val missed = previousTiles.mapNotNull { tile ->
-                    if (tileCovered(tile, merged)) null
+                    if (tileCovered(tile, merged, previousTiles)) null
                     else ScanLayout.inflate(tile, 1.28f, luma.width, luma.height)
                 }
                 add(readCropsParallel(luma, missed, retryBinarizer = true))
                 if (transferCount(merged) < 2) {
-                    add(readCropsParallel(luma, ScanLayout.dualHalves(region).filter { !tileCovered(it, merged) }, retryBinarizer = true))
+                    val halves = ScanLayout.dualHalves(region)
+                    add(readCropsParallel(luma, halves.filter { !tileCovered(it, merged, halves) }, retryBinarizer = true))
                 }
             }
             return merged
@@ -318,18 +319,19 @@ class QrFrameAnalyzer(
         val exclusive = ScanLayout.exclusiveQuadrants(region)
         val overlays = ScanLayout.overlappingQuadrants(region)
         val pending = overlays.indices.mapNotNull { index ->
-            overlays[index].takeUnless { tileCovered(exclusive[index], merged) }
+            overlays[index].takeUnless { tileCovered(exclusive[index], merged, exclusive) }
         }
         add(readCropsSerial(luma, pending, retryBinarizer = false))
         if (transferCount(merged) >= 4) return merged
         if (previousTiles.size >= 4 && transferCount(merged) >= 3) return merged
         val retries = exclusive.mapNotNull { tile ->
-            if (tileCovered(tile, merged)) null
+            if (tileCovered(tile, merged, exclusive)) null
             else ScanLayout.inflate(tile, 1.28f, luma.width, luma.height)
         }
         add(readCropsSerial(luma, retries, retryBinarizer = true))
         if (transferCount(merged) < 2 && previousTiles.size >= 2) {
-            add(readCropsParallel(luma, ScanLayout.dualHalves(region).filter { !tileCovered(it, merged) }, retryBinarizer = true))
+            val halves = ScanLayout.dualHalves(region)
+            add(readCropsParallel(luma, halves.filter { !tileCovered(it, merged, halves) }, retryBinarizer = true))
         }
         return merged
     }
@@ -412,12 +414,16 @@ class QrFrameAnalyzer(
     private fun transferCount(hits: List<NativeHit>) =
         hits.count { QrPayload.isTransfer(QrPayload.bytesFrom(it.bytes, it.text)) }
 
-    private fun tileCovered(tile: ScanRegion, hits: List<NativeHit>): Boolean {
+    private fun tileCovered(tile: ScanRegion, hits: List<NativeHit>, candidates: List<ScanRegion>): Boolean {
+        if (hits.isEmpty() || candidates.isEmpty()) return false
         for (hit in hits) {
             if (hit.points.isEmpty()) continue
-            val cx = hit.originLeft + hit.points.map { it.first }.average()
-            val cy = hit.originTop + hit.points.map { it.second }.average()
-            if (cx >= tile.left && cx < tile.left + tile.width && cy >= tile.top && cy < tile.top + tile.height) return true
+            val cx = (hit.originLeft + hit.points.map { it.first }.average()).toFloat()
+            val cy = (hit.originTop + hit.points.map { it.second }.average()).toFloat()
+            val owner = ScanLayout.ownerIndex(candidates, cx, cy)
+            if (owner < 0) continue
+            val owned = candidates[owner]
+            if (owned.left == tile.left && owned.top == tile.top && owned.width == tile.width && owned.height == tile.height) return true
         }
         return false
     }

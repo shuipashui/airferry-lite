@@ -162,6 +162,21 @@ class ScanLayoutTest {
     }
 
     @Test
+    fun ownerIndexPicksOneSideOnOverlappingHalves() {
+        val region = ScanRegion(240, 0, 1440, 1440)
+        val halves = ScanLayout.dualHalves(region)
+        val midX = region.left + region.width / 2f
+        val midY = region.top + region.height / 2f
+        val owner = ScanLayout.ownerIndex(halves, midX, midY)
+        assertTrue(owner == 0 || owner == 1)
+        assertEquals(-1, ScanLayout.tileIndexContaining(halves, midX, midY))
+        val left = ScanLayout.ownerIndex(halves, halves[0].left + 8f, midY)
+        val right = ScanLayout.ownerIndex(halves, (halves[1].left + halves[1].width - 8).toFloat(), midY)
+        assertEquals(0, left)
+        assertEquals(1, right)
+    }
+
+    @Test
     fun dualHalvesOverlapOnTheMidline() {
         val region = ScanRegion(240, 0, 1440, 1440)
         val halves = ScanLayout.dualHalves(region)
