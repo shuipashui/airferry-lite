@@ -17,6 +17,7 @@ import android.hardware.camera2.CaptureRequest
 import android.util.Range
 import android.util.Size
 import android.view.Surface
+import android.view.WindowManager
 import android.graphics.BitmapFactory
 import android.view.View
 import android.widget.Button
@@ -138,6 +139,7 @@ class MainActivity : AppCompatActivity() {
         ViewCompat.requestApplyInsets(rootLayout)
         previewView = findViewById(R.id.previewView)
         previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
+        previewView.implementationMode = PreviewView.ImplementationMode.PERFORMANCE
         idlePanel = findViewById(R.id.idlePanel)
         resultPanel = findViewById(R.id.resultPanel)
         resultImage = findViewById(R.id.resultImage)
@@ -241,13 +243,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun beginReceive() {
         showScanning()
-        startScanner()
+        previewView.post { startScanner() }
     }
 
     private fun showIdle() {
         idlePanel.visibility = View.VISIBLE
         resultPanel.visibility = View.GONE
-        previewView.visibility = View.INVISIBLE
         scanMetaRow.visibility = View.GONE
         resetButton.visibility = View.GONE
         startReceiveButton.isEnabled = true
@@ -257,7 +258,6 @@ class MainActivity : AppCompatActivity() {
     private fun showScanning() {
         idlePanel.visibility = View.GONE
         resultPanel.visibility = View.GONE
-        previewView.visibility = View.VISIBLE
         scanMetaRow.visibility = View.VISIBLE
         resetButton.visibility = View.VISIBLE
         statusText.text = "请对准电脑二维码"
@@ -265,7 +265,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun showResult(pending: PendingSave) {
         idlePanel.visibility = View.GONE
-        previewView.visibility = View.INVISIBLE
         resultPanel.visibility = View.VISIBLE
         scanMetaRow.visibility = View.GONE
         resetButton.visibility = View.GONE
@@ -294,6 +293,7 @@ class MainActivity : AppCompatActivity() {
         cameraProvider?.unbindAll()
         imageAnalysis = null
         cameraStarted = false
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (::frameAnalyzer.isInitialized) frameAnalyzer.setAnalysisIdle(true)
     }
 
@@ -301,36 +301,8 @@ class MainActivity : AppCompatActivity() {
         if (isDestroyed) return
         if (cameraStarted && imageAnalysis != null) return
         cameraStarted = true
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (::frameAnalyzer.isInitialized) frameAnalyzer.setAnalysisIdle(false)
-        whenPreviewLaidOut { bindWhenProviderReady() }
-    }
-
-    private fun whenPreviewLaidOut(action: () -> Unit) {
-        if (previewView.width > 0 && previewView.height > 0) {
-            action()
-            return
-        }
-        previewView.addOnLayoutChangeListener(object : View.OnLayoutChangeListener {
-            override fun onLayoutChange(
-                v: View,
-                left: Int,
-                top: Int,
-                right: Int,
-                bottom: Int,
-                oldLeft: Int,
-                oldTop: Int,
-                oldRight: Int,
-                oldBottom: Int
-            ) {
-                if (previewView.width <= 0 || previewView.height <= 0) return
-                previewView.removeOnLayoutChangeListener(this)
-                action()
-            }
-        })
-    }
-
-    private fun bindWhenProviderReady() {
-        if (isDestroyed || !cameraStarted) return
         val existing = cameraProvider
         if (existing != null) {
             bindCamera()
@@ -343,6 +315,7 @@ class MainActivity : AppCompatActivity() {
                 if (cameraStarted && !isDestroyed) bindCamera()
             } catch (error: Exception) {
                 cameraStarted = false
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 showIdle()
                 statusText.text = "摄像头启动失败：${error.message ?: "未知错误"}"
             }
@@ -769,6 +742,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         watchdog.removeCallbacks(watchdogTick)
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         imageAnalysis?.clearAnalyzer()
         cameraProvider?.unbindAll()
         if (::frameAnalyzer.isInitialized) frameAnalyzer.close()
