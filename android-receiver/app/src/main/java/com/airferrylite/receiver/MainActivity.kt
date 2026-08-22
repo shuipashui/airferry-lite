@@ -142,6 +142,8 @@ class MainActivity : AppCompatActivity() {
     private var softDecoderRecoverAttempted = false
     private var lastSoftRecoverAt = 0L
     private var halRecoveryRestartAttempted = false
+    private var receiveSessionFromContinue = false
+    private var cameraBoundAt = 0L
     private var restartDelayMs = PROCESS_RESTART_DELAY_MS
     private val restartProgressTick = object : Runnable {
         override fun run() {
@@ -260,6 +262,7 @@ class MainActivity : AppCompatActivity() {
         if (consumeAutostartScan()) {
             val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             val fromContinue = prefs.getBoolean(PREF_AUTOSTART_FROM_CONTINUE, false)
+            receiveSessionFromContinue = fromContinue
             if (fromContinue) {
                 prefs.edit().remove(PREF_AUTOSTART_FROM_CONTINUE).apply()
             }
@@ -302,6 +305,7 @@ class MainActivity : AppCompatActivity() {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), CAMERA_PERMISSION_REQUEST)
             return
         }
+        receiveSessionFromContinue = false
         beginReceive()
     }
 
@@ -409,6 +413,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun maybeSoftDecoderRecover(stats: ScanStats) {
         if (!cameraStarted || processRestarting) return
+        if (receiveSessionFromContinue && highUniqueFrameCount < HAL_WARMUP_MIN_UNIQUE) return
+        if (cameraBoundAt != 0L && SystemClock.elapsedRealtime() - cameraBoundAt < HAL_WARMUP_MS) return
         if (stats.submittedFrames < 240) return
         if (highUniqueFrameCount >= 20) return
         val emptyRatio = stats.emptyDecodes.toDouble() / stats.submittedFrames.toDouble()
@@ -433,11 +439,21 @@ class MainActivity : AppCompatActivity() {
 
     private fun maybeRestartForHalEmptyBurst(stats: ScanStats) {
         if (!cameraStarted || processRestarting || halRecoveryRestartAttempted) return
+        // Continue-receive already cold-restarts; extra HAL kills loop on warmup empty frames.
+        if (receiveSessionFromContinue) return
+        if (cameraBoundAt != 0L && SystemClock.elapsedRealtime() - cameraBoundAt < HAL_WARMUP_MS) return
+        val lastHalRecovery = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .getLong(PREF_LAST_HAL_RECOVERY_MS, 0L)
+        if (System.currentTimeMillis() - lastHalRecovery < HAL_RECOVERY_COOLDOWN_MS) return
         if (stats.submittedFrames < HAL_EMPTY_BURST_MIN_FRAMES) return
         val emptyRatio = stats.emptyDecodes.toDouble() / stats.submittedFrames.toDouble()
         if (emptyRatio < HAL_EMPTY_BURST_RATIO) return
         if (highUniqueFrameCount >= HAL_EMPTY_BURST_MAX_UNIQUE) return
         halRecoveryRestartAttempted = true
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .putLong(PREF_LAST_HAL_RECOVERY_MS, System.currentTimeMillis())
+            .commit()
         restartScanForHalRecovery()
     }
 
@@ -447,6 +463,7 @@ class MainActivity : AppCompatActivity() {
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             .edit()
             .putBoolean(PREF_AUTOSTART_SCAN, true)
+            .putLong(PREF_AUTOSTART_BIND_DELAY_OVERRIDE_MS, CAMERA_HAL_COOLDOWN_MS)
             .commit()
         showRestarting()
         statusText.text = "相机未就绪，正在恢复"
@@ -628,6 +645,7 @@ class MainActivity : AppCompatActivity() {
             imageAnalysis = analysis
             activeCameraFps = activeFps
             lastStatsAt = SystemClock.elapsedRealtime()
+            cameraBoundAt = SystemClock.elapsedRealtime()
             resetExposureSession()
             markCameraHeld()
             val boundFps = activeFps
@@ -768,6 +786,9 @@ class MainActivity : AppCompatActivity() {
         if (update.receivedFrames > lastHighUnique) {
             highUniqueFrameCount += (update.receivedFrames - lastHighUnique).toLong()
             lastHighUnique = update.receivedFrames
+            if (highUniqueFrameCount >= HAL_WARMUP_MIN_UNIQUE) {
+                receiveSessionFromContinue = false
+            }
         } else highDuplicateCount += 1
         val now = SystemClock.elapsedRealtime()
         updateSpeed(update, bytes.size - HIGH_SPEED_HEADER_SIZE, now)
@@ -1131,15 +1152,19 @@ class MainActivity : AppCompatActivity() {
         private const val PREF_AUTOSTART_BIND_DELAY_OVERRIDE_MS = "autostart_bind_delay_ms"
         private const val PREF_CAMERA_HELD = "camera_held"
         private const val PREF_LAST_CAMERA_RELEASE_MS = "camera_release_ms"
+        private const val PREF_LAST_HAL_RECOVERY_MS = "last_hal_recovery_ms"
         private const val EXTRA_AUTOSTART_SCAN = "autostart_scan"
         private const val PROCESS_RESTART_DELAY_MS = 2000L
         private const val AUTOSTART_BIND_DELAY_MS = 2000L
         private const val CONTINUE_RESTART_MIN_MS = 400L
         private const val CAMERA_HAL_COOLDOWN_MS = 2000L
         private const val ANALYZER_SETTLE_MS = 1200L
-        private const val HAL_EMPTY_BURST_MIN_FRAMES = 250L
+        private const val HAL_EMPTY_BURST_MIN_FRAMES = 400L
         private const val HAL_EMPTY_BURST_RATIO = 0.80
         private const val HAL_EMPTY_BURST_MAX_UNIQUE = 25L
+        private const val HAL_WARMUP_MS = 6000L
+        private const val HAL_WARMUP_MIN_UNIQUE = 10L
+        private const val HAL_RECOVERY_COOLDOWN_MS = 60_000L
         private const val WATCHDOG_INTERVAL_MS = 1000L
         private const val SCAN_STALL_MS = 2000L
         private const val RECOVER_COOLDOWN_MS = 5000L
