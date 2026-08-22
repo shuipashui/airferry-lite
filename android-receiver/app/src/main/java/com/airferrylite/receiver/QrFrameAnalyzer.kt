@@ -72,6 +72,7 @@ class QrFrameAnalyzer(
     private val tileUndercount = AtomicInteger(0)
     private val sawThreeOrMore = AtomicBoolean(false)
     private val quadStream = AtomicBoolean(false)
+    private val dualStream = AtomicBoolean(false)
     private val roiMisses = AtomicInteger(0)
     private val capturedInWindow = AtomicLong(0)
     private val decodedInWindow = AtomicLong(0)
@@ -210,6 +211,7 @@ class QrFrameAnalyzer(
         tileUndercount.set(0)
         sawThreeOrMore.set(false)
         quadStream.set(false)
+        dualStream.set(false)
         resetProtocol()
     }
 
@@ -218,7 +220,24 @@ class QrFrameAnalyzer(
     }
 
     private fun decodeFrame(luma: LumaSnapshot, region: ScanRegion, maxSymbols: Int): List<NativeHit> {
-        if (!multiLayout.get()) return decoder.read(luma, region, maxSymbols)
+        if (!multiLayout.get()) {
+            if (maxSymbols > 1 && dualStream.get() && !quadStream.get()) {
+                val merged = mutableListOf<NativeHit>()
+                val seen = mutableSetOf<String>()
+                fun add(hits: List<NativeHit>) {
+                    for (hit in hits) {
+                        val key = QrPayload.frameKey(QrPayload.bytesFrom(hit.bytes, hit.text)) ?: continue
+                        if (seen.add(key)) merged += hit
+                    }
+                }
+                add(readCropsParallel(luma, ScanLayout.dualHalves(region), retryBinarizer = false))
+                if (transferCount(merged) < 2) {
+                    add(decoder.read(luma, ScanLayout.centerSquare(luma.width, luma.height), 4))
+                }
+                return merged
+            }
+            return decoder.read(luma, region, maxSymbols)
+        }
         val merged = mutableListOf<NativeHit>()
         val seen = mutableSetOf<String>()
         fun add(hits: List<NativeHit>) {
@@ -397,15 +416,21 @@ class QrFrameAnalyzer(
     }
 
     private fun noteLayoutFromHits(hits: List<NativeHit>) {
-        var sawDual = false
         for (hit in hits) {
             val bytes = QrPayload.bytesFrom(hit.bytes, hit.text) ?: continue
             when {
-                QrPayload.isQuadLayout(bytes) -> quadStream.set(true)
-                QrPayload.isDualLayout(bytes) -> sawDual = true
+                QrPayload.isQuadLayout(bytes) -> {
+                    quadStream.set(true)
+                    dualStream.set(false)
+                    singleLayoutConfirmed.set(false)
+                }
+                QrPayload.isDualLayout(bytes) -> {
+                    dualStream.set(true)
+                    singleLayoutConfirmed.set(false)
+                }
             }
         }
-        if (sawDual) {
+        if (dualStream.get()) {
             quadStream.set(false)
             sawThreeOrMore.set(false)
         }
@@ -462,7 +487,12 @@ class QrFrameAnalyzer(
             lockMultiLayout()
             multiHits.addAndGet(transferHits.size.toLong())
         } else {
-            singleLayoutConfirmed.set(true)
+            val bytes = QrPayload.bytesFrom(transferHits.first().bytes, transferHits.first().text)
+            if (QrPayload.isMultiLayout(bytes)) {
+                singleLayoutConfirmed.set(false)
+            } else {
+                singleLayoutConfirmed.set(true)
+            }
             singleHits.addAndGet(transferHits.size.toLong())
         }
         rememberRoi(imageWidth, imageHeight, transferHits)
