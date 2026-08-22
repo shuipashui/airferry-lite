@@ -123,6 +123,7 @@ class MainActivity : AppCompatActivity() {
     private var recoverBurst = 0
     private var recoverBurstStartedAt = 0L
     private var processRestarting = false
+    private var lastUnbindAt = 0L
 
     private data class PendingSave(val name: String, val mime: String, val bytes: ByteArray)
 
@@ -247,13 +248,27 @@ class MainActivity : AppCompatActivity() {
         if (processRestarting) return
         processRestarting = true
         findViewById<Button>(R.id.continueReceiveButton).isEnabled = false
-        statusText.text = "正在释放相机，约 2 秒后重新扫描"
-        stopScanner()
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             .edit()
             .putBoolean(PREF_AUTOSTART_SCAN, true)
             .commit()
-        watchdog.postDelayed({ restartProcessForScan() }, PROCESS_RESTART_DELAY_MS)
+        val remaining = remainingHalReleaseMs()
+        statusText.text = if (remaining > 0) {
+            "正在释放相机，约 ${(remaining + 999) / 1000} 秒后重新扫描"
+        } else {
+            "正在重新扫描"
+        }
+        findViewById<View>(R.id.resultPanel).post {
+            val delay = remainingHalReleaseMs()
+            if (delay <= 0L) restartProcessForScan()
+            else watchdog.postDelayed({ restartProcessForScan() }, delay)
+        }
+    }
+
+    private fun remainingHalReleaseMs(): Long {
+        if (lastUnbindAt == 0L) return PROCESS_RESTART_DELAY_MS
+        val elapsed = SystemClock.elapsedRealtime() - lastUnbindAt
+        return (PROCESS_RESTART_DELAY_MS - elapsed).coerceAtLeast(0L)
     }
 
     private fun restartProcessForScan() {
@@ -328,9 +343,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun stopScanner() {
+        val hadAnalysis = imageAnalysis != null
         pauseScanner()
         cameraProvider?.unbindAll()
         imageAnalysis = null
+        if (hadAnalysis) lastUnbindAt = SystemClock.elapsedRealtime()
     }
 
     private fun startScanner() {

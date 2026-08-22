@@ -62,6 +62,9 @@ class QrFrameAnalyzer(
     private val trackedRoi = AtomicReference<ScanRegion?>(null)
     private val trackedTiles = AtomicReference<List<ScanRegion>?>(null)
     private val tileUndercount = AtomicInteger(0)
+    private val twoTileStreak = AtomicInteger(0)
+    private val sawThreeOrMore = AtomicBoolean(false)
+    private val dualSettled = AtomicBoolean(false)
     private val roiMisses = AtomicInteger(0)
     private val capturedInWindow = AtomicLong(0)
     private val decodedInWindow = AtomicLong(0)
@@ -198,6 +201,9 @@ class QrFrameAnalyzer(
         trackedRoi.set(null)
         trackedTiles.set(null)
         tileUndercount.set(0)
+        twoTileStreak.set(0)
+        sawThreeOrMore.set(false)
+        dualSettled.set(false)
         resetProtocol()
     }
 
@@ -206,7 +212,6 @@ class QrFrameAnalyzer(
     }
 
     private fun decodeFrame(luma: LumaSnapshot, region: ScanRegion, maxSymbols: Int): List<NativeHit> {
-        if (!multiLayout.get()) return decoder.read(luma, region, maxSymbols)
         val merged = mutableListOf<NativeHit>()
         val seen = mutableSetOf<String>()
         fun add(hits: List<NativeHit>) {
@@ -214,6 +219,22 @@ class QrFrameAnalyzer(
                 val key = QrPayload.frameKey(QrPayload.bytesFrom(hit.bytes, hit.text)) ?: continue
                 if (seen.add(key)) merged += hit
             }
+        }
+        // Blank-first: one dual header must not lock the 8-way fill. Stay on cheap
+        // max4 until two transfer codes land in one frame; then optionally split
+        // the center square left/right. Dual-halves instead of max4 was 0.8.33.
+        if (!multiLayout.get()) {
+            add(decoder.read(luma, region, maxSymbols))
+            if (transferCount(merged) == 1 && anyMultiLayout(merged)) {
+                add(
+                    readCropsParallel(
+                        luma,
+                        ScanLayout.dualHalves(ScanLayout.centerSquare(luma.width, luma.height)),
+                        retryBinarizer = false
+                    )
+                )
+            }
+            return merged
         }
         val previousTiles = trackedTiles.get().orEmpty().map {
             ScanLayout.clamp(it, luma.width, luma.height)
@@ -232,6 +253,18 @@ class QrFrameAnalyzer(
         }
         if (transferCount(merged) >= 4) return merged
         if (previousTiles.size >= 4 && transferCount(merged) >= 3) return merged
+        if (dualTilesSettled(previousTiles.size)) {
+            if (transferCount(merged) >= 2) return merged
+            val missed = previousTiles.mapNotNull { tile ->
+                if (tileCovered(tile, merged)) null
+                else ScanLayout.inflate(tile, 1.28f, luma.width, luma.height)
+            }
+            add(readCropsParallel(luma, missed, retryBinarizer = true))
+            if (transferCount(merged) < 2) {
+                add(readCropsParallel(luma, ScanLayout.dualHalves(region).filter { !tileCovered(it, merged) }, retryBinarizer = true))
+            }
+            return merged
+        }
         val exclusive = ScanLayout.exclusiveQuadrants(region)
         val overlays = ScanLayout.overlappingQuadrants(region)
         val pending = overlays.indices.mapNotNull { index ->
@@ -350,16 +383,23 @@ class QrFrameAnalyzer(
                 trackedTiles.set(null)
                 trackedRoi.set(null)
                 tileUndercount.set(0)
+                twoTileStreak.set(0)
+                dualSettled.set(false)
+                sawThreeOrMore.set(false)
             }
             return
         }
         roiMisses.set(0)
         validQrInWindow.addAndGet(transferHits.size.toLong())
-        val multiHit = transferHits.size >= 2 ||
-            transferHits.any { QrPayload.isMultiLayout(QrPayload.bytesFrom(it.bytes, it.text)) }
-        if (multiHit) {
+        // Dual and quad share layoutCodes=4. One header after a blank wall must
+        // not confirm single (maxSymbols=1 → 0.8.45) and must not lock the
+        // multi fill (serial quadrants while AE is still on white). Quad gets
+        // ≥2 hits in the same max4; dual has to wait for the sibling.
+        if (transferHits.size >= 2) {
             lockMultiLayout()
             multiHits.addAndGet(transferHits.size.toLong())
+        } else if (anyMultiLayout(transferHits)) {
+            singleLayoutConfirmed.set(false)
         } else {
             singleLayoutConfirmed.set(true)
             singleHits.addAndGet(transferHits.size.toLong())
@@ -424,6 +464,29 @@ class QrFrameAnalyzer(
                 trackedTiles.set(ScanLayout.followContainedHits(previous, perCode, imageWidth, imageHeight))
             }
         }
+        if (hits.size >= 3) {
+            sawThreeOrMore.set(true)
+            dualSettled.set(false)
+            twoTileStreak.set(0)
+            return
+        }
+        val locked = trackedTiles.get()?.size ?: 0
+        if (hits.size == 2 && locked == 2) {
+            if (twoTileStreak.incrementAndGet() >= DUAL_SETTLE_FRAMES) dualSettled.set(true)
+        } else {
+            twoTileStreak.set(0)
+        }
+    }
+
+    private fun dualTilesSettled(tileCount: Int): Boolean {
+        return tileCount == 2 && dualSettled.get() && !sawThreeOrMore.get()
+    }
+
+    private fun anyMultiLayout(hits: List<NativeHit>): Boolean {
+        for (hit in hits) {
+            if (QrPayload.isMultiLayout(QrPayload.bytesFrom(hit.bytes, hit.text))) return true
+        }
+        return false
     }
 
     private fun reportStatsIfDue(width: Int, height: Int) {
@@ -466,5 +529,6 @@ class QrFrameAnalyzer(
         private const val TILE_WORKERS = 4
         private const val FRAME_DECODE_TIMEOUT_MS = 400L
         private const val STALE_TIMESTAMP_LIMIT = 12
+        private const val DUAL_SETTLE_FRAMES = 6
     }
 }
