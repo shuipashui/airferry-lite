@@ -278,7 +278,7 @@ class MainActivity : AppCompatActivity() {
                 }, bindDelay)
             }
         } else {
-            reconcileCameraStateAfterReopen()
+            clearStaleCameraHeld()
             showIdle()
         }
         renderDiagnostics()
@@ -381,7 +381,9 @@ class MainActivity : AppCompatActivity() {
     private fun launchReceiveAfterHalWait() {
         softDecoderRecoverAttempted = false
         showScanning()
-        settlePreviewBeforeAnalyze = true
+        if (imageAnalysis == null) {
+            settlePreviewBeforeAnalyze = true
+        }
         previewView.post { startScanner() }
     }
 
@@ -499,15 +501,13 @@ class MainActivity : AppCompatActivity() {
     private fun startScanner() {
         if (isDestroyed) return
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if (::frameAnalyzer.isInitialized) frameAnalyzer.setAnalysisIdle(false)
         val bound = imageAnalysis
         if (bound != null) {
             cameraStarted = true
-            bound.clearAnalyzer()
-            if (::frameAnalyzer.isInitialized) frameAnalyzer.setAnalysisIdle(true)
-            attachAnalyzer(bound, settle = true)
+            bound.setAnalyzer(cameraExecutor, frameAnalyzer)
             return
         }
-        if (::frameAnalyzer.isInitialized) frameAnalyzer.setAnalysisIdle(false)
         if (cameraStarted && cameraProvider != null) {
             bindCamera()
             return
@@ -999,20 +999,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun markCameraHeld() {
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_CAMERA_HELD, true).commit()
-    }
-
-    private fun reconcileCameraStateAfterReopen() {
-        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-        if (prefs.getBoolean(PREF_CAMERA_HELD, false)) {
-            // Force-kill often skips onDestroy; record HAL release before the next bind.
-            markCameraReleased()
-            pauseScanner()
-            imageAnalysis = null
-            boundCamera = null
-            cameraStarted = false
-        } else {
-            prefs.edit().putBoolean(PREF_CAMERA_HELD, false).apply()
-        }
     }
 
     private fun clearStaleCameraHeld() {
