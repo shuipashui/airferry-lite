@@ -217,11 +217,10 @@ class QrFrameAnalyzer(
         if (previousTiles.isNotEmpty()) {
             add(readCropsParallel(luma, previousTiles.filter { !tileCovered(it, merged) }, retryBinarizer = false))
         }
-        // 0.8.25: tiles < 2 still need a full-frame max4 so one multi-layout hit
-        // does not leave later frames on maxSymbols=1 quadrants (half speed).
-        // Skip max4 when two real tiles already both hit (0.8.19).
-        // Do not treat 格 2 as dual-only (0.8.36: quad 1470 blocks stuck at 格 2 / ~84 KB/s).
-        if (previousTiles.size < 2 || transferCount(merged) < 2) {
+        // Dual: a 1-of-2 miss plus 1440px max4 drops analysis to ~28 FPS (0.8.35).
+        // Quad: 格 2 must still run quadrant fill (0.8.36 returned here → ~84 KB/s).
+        // max4 only while tiles are still below two.
+        if (previousTiles.size < 2) {
             add(decoder.read(luma, ScanLayout.centerSquare(luma.width, luma.height), 4))
         }
         if (transferCount(merged) >= 4) return merged
