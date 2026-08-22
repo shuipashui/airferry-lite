@@ -476,14 +476,9 @@ class MainActivity : AppCompatActivity() {
         lastHighUnique = 0
         lastHighSolved = 0
         lastHighTotal = 0
-        val stalled = frameAnalyzer.isPaused() ||
-            (lastStatsAt != 0L && SystemClock.elapsedRealtime() - lastStatsAt > SCAN_STALL_MS)
-        if (stalled) {
-            restartScanner(countRecovery = true)
-        } else {
-            frameAnalyzer.rebuildDecoders()
-            frameAnalyzer.resetSession()
-        }
+        frameAnalyzer.consumeRecoverRequest()
+        recoverBurst = 0
+        frameAnalyzer.resetSession()
         updateUi(TransferUpdate(null, 0, 0))
         fileText.text = "等待文件"
         progress.progress = 0
@@ -500,16 +495,19 @@ class MainActivity : AppCompatActivity() {
         if (now - lastRecoverAt < RECOVER_COOLDOWN_MS) return
         val asked = frameAnalyzer.consumeRecoverRequest()
         val heartbeatDead = lastStatsAt != 0L && now - lastStatsAt > SCAN_STALL_MS
-        if (!asked && !heartbeatDead) return
-        if (now - recoverBurstStartedAt > RECOVER_BURST_WINDOW_MS) recoverBurst = 0
-        if (recoverBurst == 0) recoverBurstStartedAt = now
-        recoverBurst += 1
-        if (recoverBurst > MAX_RECOVER_BURST) {
-            statusText.text = "摄像头无画面，退出应用重开"
+        if (heartbeatDead) {
+            if (now - recoverBurstStartedAt > RECOVER_BURST_WINDOW_MS) recoverBurst = 0
+            if (recoverBurst == 0) recoverBurstStartedAt = now
+            recoverBurst += 1
+            if (recoverBurst > MAX_RECOVER_BURST) {
+                statusText.text = "摄像头无画面，退出应用重开"
+                return
+            }
+            restartScanner(countRecovery = true, forceRebind = true)
+            statusText.text = "扫描卡住，已重启相机"
             return
         }
-        restartScanner(countRecovery = true, forceRebind = true)
-        statusText.text = "扫描卡住，已重启相机"
+        if (asked) frameAnalyzer.replaceDecoders()
     }
 
     private fun restartScanner(countRecovery: Boolean, forceRebind: Boolean = false) {

@@ -135,20 +135,10 @@ class QrFrameAnalyzer(
         analysisIdle.set(idle)
     }
 
-    fun rebuildDecoders() {
-        skipUntilRecover.set(true)
-        val oldDecode = decodeExecutor
-        val oldTiles = tileExecutor
-        decodeExecutor = Executors.newSingleThreadExecutor()
-        tileExecutor = Executors.newFixedThreadPool(TILE_WORKERS)
+    fun replaceDecoders() {
         decoder = NativeQrDecoder()
         tileDecoders = Array(TILE_WORKERS) { NativeQrDecoder() }
-        oldDecode.shutdownNow()
-        oldTiles.shutdownNow()
-        runCatching { oldDecode.awaitTermination(200, TimeUnit.MILLISECONDS) }
-        runCatching { oldTiles.awaitTermination(200, TimeUnit.MILLISECONDS) }
         synchronized(lumaLock) { lumaScratch = null }
-        skipUntilRecover.set(false)
     }
 
     fun recoverPipeline(count: Boolean = false) {
@@ -325,7 +315,6 @@ class QrFrameAnalyzer(
     private fun requestRecover() {
         decodeErrors.incrementAndGet()
         recoverRequested.set(true)
-        skipUntilRecover.set(true)
     }
 
     private fun transferCount(hits: List<NativeHit>) =
