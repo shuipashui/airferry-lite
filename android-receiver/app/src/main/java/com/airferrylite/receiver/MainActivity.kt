@@ -17,8 +17,10 @@ import android.hardware.camera2.CaptureRequest
 import android.util.Range
 import android.util.Size
 import android.view.Surface
+import android.graphics.BitmapFactory
+import android.view.View
 import android.widget.Button
-import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
 import com.google.android.material.button.MaterialButtonToggleGroup
@@ -46,6 +48,11 @@ import java.util.concurrent.atomic.AtomicLong
 @OptIn(ExperimentalCamera2Interop::class)
 class MainActivity : AppCompatActivity() {
     private lateinit var previewView: PreviewView
+    private lateinit var idlePanel: View
+    private lateinit var resultPanel: View
+    private lateinit var resultImage: ImageView
+    private lateinit var resultMeta: TextView
+    private lateinit var scanMetaRow: View
     private lateinit var statusText: TextView
     private lateinit var fileText: TextView
     private lateinit var speedText: TextView
@@ -53,6 +60,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var diagnosticsText: TextView
     private lateinit var progress: ProgressBar
     private lateinit var saveButton: Button
+    private lateinit var resetButton: Button
+    private lateinit var startReceiveButton: Button
     private lateinit var fpsGroup: MaterialButtonToggleGroup
     private lateinit var frameAnalyzer: QrFrameAnalyzer
     private lateinit var cameraExecutor: ExecutorService
@@ -92,7 +101,6 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var latestSpeedLabel = "实时 — · 平均 —"
     @Volatile private var highSpeedSessionActive = false
     private var requestedFps = 60
-    private var diagnosticsExpanded = false
     private var fullDiagnostics = ""
     private var pendingSave: PendingSave? = null
     private var pendingSession: String? = null
@@ -129,6 +137,11 @@ class MainActivity : AppCompatActivity() {
         }
         ViewCompat.requestApplyInsets(rootLayout)
         previewView = findViewById(R.id.previewView)
+        idlePanel = findViewById(R.id.idlePanel)
+        resultPanel = findViewById(R.id.resultPanel)
+        resultImage = findViewById(R.id.resultImage)
+        resultMeta = findViewById(R.id.resultMeta)
+        scanMetaRow = findViewById(R.id.scanMetaRow)
         statusText = findViewById(R.id.statusText)
         fileText = findViewById(R.id.fileText)
         speedText = findViewById(R.id.speedText)
@@ -136,6 +149,8 @@ class MainActivity : AppCompatActivity() {
         diagnosticsText = findViewById(R.id.diagnosticsText)
         progress = findViewById(R.id.progress)
         saveButton = findViewById(R.id.saveButton)
+        resetButton = findViewById(R.id.resetButton)
+        startReceiveButton = findViewById(R.id.startReceiveButton)
         fpsGroup = findViewById(R.id.fpsGroup)
         requestedFps = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getInt(PREF_FPS, 60).let {
             if (it == 30 || it == 120) it else 60
@@ -156,7 +171,10 @@ class MainActivity : AppCompatActivity() {
             }
             if (fps != requestedFps) setRequestedFps(fps)
         }
-        findViewById<FrameLayout>(R.id.progressHit).setOnClickListener { toggleDiagnostics() }
+        startReceiveButton.setOnClickListener { requestStartReceive() }
+        findViewById<Button>(R.id.continueReceiveButton).setOnClickListener { continueReceive() }
+        findViewById<Button>(R.id.resultSaveButton).setOnClickListener { savePendingFile() }
+        resetButton.setOnClickListener { resetTransfer() }
         cameraExecutor = Executors.newSingleThreadExecutor()
         protocolExecutor = Executors.newSingleThreadExecutor()
         frameAnalyzer = QrFrameAnalyzer(
@@ -190,29 +208,104 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         )
-        findViewById<Button>(R.id.resetButton).setOnClickListener { resetTransfer() }
         findViewById<Button>(R.id.copyDiagnosticsButton).setOnClickListener { copyDiagnostics() }
         saveButton.setOnClickListener { savePendingFile() }
         watchdog.postDelayed(watchdogTick, WATCHDOG_INTERVAL_MS)
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), CAMERA_PERMISSION_REQUEST)
-        } else {
-            previewView.post { startScanner() }
-        }
+        showIdle()
+        renderDiagnostics()
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == CAMERA_PERMISSION_REQUEST && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
-            previewView.post { startScanner() }
-        } else {
+            previewView.post { beginReceive() }
+        } else if (requestCode == CAMERA_PERMISSION_REQUEST) {
+            showIdle()
             statusText.text = "需要摄像头权限才能接收"
         }
     }
 
+    private fun requestStartReceive() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), CAMERA_PERMISSION_REQUEST)
+            return
+        }
+        beginReceive()
+    }
+
+    private fun continueReceive() {
+        resetTransfer()
+        beginReceive()
+    }
+
+    private fun beginReceive() {
+        showScanning()
+        startScanner()
+    }
+
+    private fun showIdle() {
+        idlePanel.visibility = View.VISIBLE
+        resultPanel.visibility = View.GONE
+        previewView.visibility = View.GONE
+        scanMetaRow.visibility = View.GONE
+        resetButton.visibility = View.GONE
+        startReceiveButton.isEnabled = true
+        statusText.text = "点「接收文件」开始扫描"
+    }
+
+    private fun showScanning() {
+        idlePanel.visibility = View.GONE
+        resultPanel.visibility = View.GONE
+        previewView.visibility = View.VISIBLE
+        scanMetaRow.visibility = View.VISIBLE
+        resetButton.visibility = View.VISIBLE
+        statusText.text = "请对准电脑二维码"
+    }
+
+    private fun showResult(pending: PendingSave) {
+        idlePanel.visibility = View.GONE
+        previewView.visibility = View.GONE
+        resultPanel.visibility = View.VISIBLE
+        scanMetaRow.visibility = View.GONE
+        resetButton.visibility = View.GONE
+        resultMeta.text = "${pending.name} · ${formatBytes(pending.bytes.size.toLong())} · ${pending.mime.ifBlank { "未知类型" }}"
+        val preview = previewBitmap(pending)
+        if (preview != null) {
+            resultImage.visibility = View.VISIBLE
+            resultImage.setImageBitmap(preview)
+        } else {
+            resultImage.setImageDrawable(null)
+            resultImage.visibility = View.GONE
+        }
+        statusText.text = "接收完成，可保存或继续接收"
+    }
+
+    private fun previewBitmap(pending: PendingSave) = try {
+        val mime = pending.mime.lowercase()
+        if (!mime.startsWith("image/")) null
+        else BitmapFactory.decodeByteArray(pending.bytes, 0, pending.bytes.size)
+    } catch (_: Throwable) {
+        null
+    }
+
+    private fun stopScanner() {
+        imageAnalysis?.clearAnalyzer()
+        cameraProvider?.unbindAll()
+        imageAnalysis = null
+        cameraStarted = false
+        if (::frameAnalyzer.isInitialized) frameAnalyzer.setAnalysisIdle(true)
+    }
+
     private fun startScanner() {
-        if (cameraStarted || isDestroyed) return
+        if (isDestroyed) return
+        if (cameraStarted && imageAnalysis != null) return
         cameraStarted = true
+        if (::frameAnalyzer.isInitialized) frameAnalyzer.setAnalysisIdle(false)
+        val existing = cameraProvider
+        if (existing != null) {
+            bindCamera()
+            return
+        }
         val providerFuture = ProcessCameraProvider.getInstance(this)
         providerFuture.addListener({
             try {
@@ -220,6 +313,7 @@ class MainActivity : AppCompatActivity() {
                 bindCamera()
             } catch (error: Exception) {
                 cameraStarted = false
+                showIdle()
                 statusText.text = "摄像头启动失败：${error.message ?: "未知错误"}"
             }
         }, ContextCompat.getMainExecutor(this))
@@ -228,8 +322,8 @@ class MainActivity : AppCompatActivity() {
     private fun setRequestedFps(fps: Int) {
         requestedFps = if (fps == 30 || fps == 120) fps else 60
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putInt(PREF_FPS, requestedFps).apply()
-        if (cameraProvider != null) bindCamera()
-        else statusText.text = "已选 ${requestedFps} FPS，打开相机后生效"
+        if (cameraStarted && cameraProvider != null) bindCamera()
+        else statusText.text = "已选 ${requestedFps} FPS"
     }
 
     private fun bindCamera() {
@@ -409,7 +503,6 @@ class MainActivity : AppCompatActivity() {
             renderDiagnostics()
         }
         if (file != null && update.session != null) {
-            frameAnalyzer.setAnalysisIdle(true)
             offerCompletedFile("high:${update.session}", file.name, file.mime, file.bytes)
         }
     }
@@ -482,9 +575,11 @@ class MainActivity : AppCompatActivity() {
         updateUi(TransferUpdate(null, 0, 0))
         fileText.text = "等待文件"
         progress.progress = 0
-        speedText.text = "实时 — · 平均 — · 点进度条看诊断"
+        speedText.text = "实时 — · 平均 —"
         missingText.text = "缺失片段：—"
         statusText.text = "正在高速扫描"
+        if (::resultImage.isInitialized) resultImage.setImageDrawable(null)
+        showScanning()
         renderDiagnostics()
     }
 
@@ -547,20 +642,7 @@ class MainActivity : AppCompatActivity() {
             "设备标识：${Build.FINGERPRINT}"
         )
         fullDiagnostics = lines.joinToString("\n")
-        diagnosticsText.text = if (diagnosticsExpanded) {
-            fullDiagnostics
-        } else {
-            listOf(
-                "采集 ${stats?.captureFps?.let { "%.0f".format(it) } ?: "—"} · 分析 ${stats?.analysisFps?.let { "%.0f".format(it) } ?: "—"} · 有效 ${stats?.validQrFps?.let { "%.0f".format(it) } ?: "—"} · ${if (stats?.multiLayout == true) "四码" else "单码"}${perFrameLabel(stats)}",
-                "选择 $requestedFps · 目标 ${preferredFpsLabel()} · 解码 ${stats?.averageDecodeMs?.let { "%.0f ms".format(it) } ?: "—"} · 会话 ${formatRate(sessionAverageBytesPerSecond)}",
-                "点进度条展开完整诊断 · 解块 ${lastHighSolved}/${lastHighTotal}"
-            ).joinToString("\n")
-        }
-    }
-
-    private fun toggleDiagnostics() {
-        diagnosticsExpanded = !diagnosticsExpanded
-        renderDiagnostics()
+        diagnosticsText.text = fullDiagnostics
     }
 
     private fun offerCompletedFile(session: String, name: String, mime: String, bytes: ByteArray) {
@@ -572,7 +654,8 @@ class MainActivity : AppCompatActivity() {
             saveButton.isEnabled = true
             fileText.text = "$name · ${formatBytes(bytes.size.toLong())}"
             progress.progress = 100
-            statusText.text = "接收完成，点「保存文件」"
+            stopScanner()
+            showResult(pending)
         }
     }
 

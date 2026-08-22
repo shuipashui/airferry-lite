@@ -6,7 +6,7 @@
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:background="@color/af_bg"
-    android:padding="12dp">
+    android:padding="8dp">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -19,15 +19,15 @@
             android:layout_weight="1"
             android:text="AirFerry Lite"
             android:textColor="@color/af_text"
-            android:textSize="20sp"
+            android:textSize="18sp"
             android:textStyle="bold" />
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:paddingEnd="6dp"
+            android:paddingEnd="4dp"
             android:text="相机"
             android:textColor="@color/af_muted"
-            android:textSize="12sp" />
+            android:textSize="11sp" />
         <com.google.android.material.button.MaterialButtonToggleGroup
             android:id="@+id/fpsGroup"
             android:layout_width="wrap_content"
@@ -38,32 +38,32 @@
                 android:id="@+id/fps30"
                 style="?attr/materialButtonOutlinedStyle"
                 android:layout_width="wrap_content"
-                android:layout_height="36dp"
+                android:layout_height="32dp"
                 android:insetTop="0dp"
                 android:insetBottom="0dp"
-                android:minWidth="44dp"
+                android:minWidth="40dp"
                 android:text="30"
-                android:textSize="12sp" />
+                android:textSize="11sp" />
             <Button
                 android:id="@+id/fps60"
                 style="?attr/materialButtonOutlinedStyle"
                 android:layout_width="wrap_content"
-                android:layout_height="36dp"
+                android:layout_height="32dp"
                 android:insetTop="0dp"
                 android:insetBottom="0dp"
-                android:minWidth="44dp"
+                android:minWidth="40dp"
                 android:text="60"
-                android:textSize="12sp" />
+                android:textSize="11sp" />
             <Button
                 android:id="@+id/fps120"
                 style="?attr/materialButtonOutlinedStyle"
                 android:layout_width="wrap_content"
-                android:layout_height="36dp"
+                android:layout_height="32dp"
                 android:insetTop="0dp"
                 android:insetBottom="0dp"
-                android:minWidth="44dp"
+                android:minWidth="40dp"
                 android:text="120"
-                android:textSize="12sp" />
+                android:textSize="11sp" />
         </com.google.android.material.button.MaterialButtonToggleGroup>
     </LinearLayout>
 
@@ -73,23 +73,109 @@
         android:layout_height="wrap_content"
         android:ellipsize="end"
         android:maxLines="1"
-        android:paddingTop="4dp"
-        android:paddingBottom="8dp"
-        android:text="请对准电脑二维码"
-        android:textColor="@color/af_text" />
+        android:paddingTop="2dp"
+        android:paddingBottom="4dp"
+        android:text="点「接收文件」开始扫描"
+        android:textColor="@color/af_text"
+        android:textSize="13sp" />
 
-    <androidx.camera.view.PreviewView
-        android:id="@+id/previewView"
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1" />
+        android:layout_weight="1">
+
+        <androidx.camera.view.PreviewView
+            android:id="@+id/previewView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone" />
+
+        <LinearLayout
+            android:id="@+id/idlePanel"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@color/af_panel"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="24dp">
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:text="相机在点接收后才打开，收完自动关闭。"
+                android:textColor="@color/af_muted"
+                android:textSize="13sp" />
+            <Button
+                android:id="@+id/startReceiveButton"
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
+                android:layout_marginTop="16dp"
+                android:minWidth="160dp"
+                android:text="接收文件"
+                android:textSize="15sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/resultPanel"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@color/af_panel"
+            android:orientation="vertical"
+            android:padding="8dp"
+            android:visibility="gone">
+            <ImageView
+                android:id="@+id/resultImage"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:adjustViewBounds="true"
+                android:contentDescription="文件预览"
+                android:scaleType="fitCenter" />
+            <TextView
+                android:id="@+id/resultMeta"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="2"
+                android:paddingTop="8dp"
+                android:textColor="@color/af_text"
+                android:textSize="13sp" />
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:paddingTop="8dp">
+                <Button
+                    android:id="@+id/resultSaveButton"
+                    android:layout_width="0dp"
+                    android:layout_height="44dp"
+                    android:layout_marginEnd="6dp"
+                    android:layout_weight="1"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:text="保存文件"
+                    android:textSize="13sp" />
+                <Button
+                    android:id="@+id/continueReceiveButton"
+                    android:layout_width="0dp"
+                    android:layout_height="44dp"
+                    android:layout_weight="1"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:text="继续接收"
+                    android:textSize="13sp" />
+            </LinearLayout>
+        </LinearLayout>
+    </FrameLayout>
 
     <LinearLayout
+        android:id="@+id/scanMetaRow"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingTop="8dp">
+        android:paddingTop="4dp"
+        android:visibility="gone">
         <TextView
             android:id="@+id/fileText"
             android:layout_width="0dp"
@@ -98,37 +184,30 @@
             android:ellipsize="end"
             android:maxLines="1"
             android:text="等待文件"
-            android:textColor="@color/af_text" />
+            android:textColor="@color/af_text"
+            android:textSize="12sp" />
         <Button
             android:id="@+id/saveButton"
             android:layout_width="wrap_content"
-            android:layout_height="36dp"
+            android:layout_height="32dp"
             android:enabled="false"
             android:insetTop="0dp"
             android:insetBottom="0dp"
-            android:minWidth="88dp"
-            android:text="保存文件"
-            android:textSize="12sp" />
+            android:minWidth="72dp"
+            android:text="保存"
+            android:textSize="11sp"
+            android:visibility="gone" />
     </LinearLayout>
 
-    <FrameLayout
-        android:id="@+id/progressHit"
+    <ProgressBar
+        android:id="@+id/progress"
+        style="?android:attr/progressBarStyleHorizontal"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:clickable="true"
-        android:focusable="true"
-        android:minHeight="28dp"
-        android:paddingTop="8dp"
-        android:paddingBottom="8dp">
-        <ProgressBar
-            android:id="@+id/progress"
-            style="?android:attr/progressBarStyleHorizontal"
-            android:layout_width="match_parent"
-            android:layout_height="10dp"
-            android:max="100"
-            android:progress="0"
-            android:progressTint="@color/af_accent" />
-    </FrameLayout>
+        android:layout_height="8dp"
+        android:layout_marginTop="4dp"
+        android:max="100"
+        android:progress="0"
+        android:progressTint="@color/af_accent" />
 
     <TextView
         android:id="@+id/speedText"
@@ -136,9 +215,10 @@
         android:layout_height="wrap_content"
         android:ellipsize="end"
         android:maxLines="1"
-        android:text="实时 — · 平均 — · 点进度条看诊断"
+        android:paddingTop="2dp"
+        android:text="实时 — · 平均 —"
         android:textColor="@color/af_text"
-        android:textSize="12sp" />
+        android:textSize="11sp" />
 
     <TextView
         android:id="@+id/missingText"
@@ -146,40 +226,39 @@
         android:layout_height="wrap_content"
         android:ellipsize="end"
         android:maxLines="1"
-        android:paddingTop="2dp"
         android:text="缺失片段：—"
-        android:textColor="@color/af_text"
-        android:textSize="12sp" />
+        android:textColor="@color/af_muted"
+        android:textSize="11sp" />
 
     <ScrollView
         android:id="@+id/diagnosticsScroll"
         android:layout_width="match_parent"
-        android:layout_height="72dp"
-        android:layout_marginTop="6dp"
+        android:layout_height="48dp"
+        android:layout_marginTop="4dp"
         android:background="@color/af_panel"
         android:fadeScrollbars="false"
         android:fillViewport="true"
-        android:padding="6dp"
+        android:padding="4dp"
         android:scrollbars="vertical">
         <TextView
             android:id="@+id/diagnosticsText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="诊断：点进度条展开 · 等待取帧"
+            android:text="诊断：等待开始扫描"
             android:textColor="@color/af_text"
             android:textIsSelectable="true"
-            android:textSize="10sp" />
+            android:textSize="9sp" />
     </ScrollView>
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:paddingTop="6dp">
+        android:paddingTop="4dp">
         <Button
             android:id="@+id/copyDiagnosticsButton"
             android:layout_width="0dp"
-            android:layout_height="40dp"
+            android:layout_height="36dp"
             android:layout_marginEnd="6dp"
             android:layout_weight="1"
             android:insetTop="0dp"
@@ -189,11 +268,12 @@
         <Button
             android:id="@+id/resetButton"
             android:layout_width="0dp"
-            android:layout_height="40dp"
+            android:layout_height="36dp"
             android:layout_weight="1"
             android:insetTop="0dp"
             android:insetBottom="0dp"
             android:text="清空重收"
-            android:textSize="12sp" />
+            android:textSize="12sp"
+            android:visibility="gone" />
     </LinearLayout>
 </LinearLayout>
