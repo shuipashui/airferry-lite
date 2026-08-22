@@ -217,20 +217,11 @@ class QrFrameAnalyzer(
         if (previousTiles.isNotEmpty()) {
             add(readCropsParallel(luma, previousTiles.filter { !tileCovered(it, merged) }, retryBinarizer = false))
         }
-        val found = transferCount(merged)
-        // Dual 格 2: never 1440px max4 / quadrant fill (0.8.35 slow session 28 FPS / 0.67).
-        // Both hit → stop. One miss → inflate the missed tile only. Quad uses 格 ≥3.
-        if (previousTiles.size == 2) {
-            if (found < 2) {
-                val missed = previousTiles.mapNotNull { tile ->
-                    if (tileCovered(tile, merged)) null
-                    else ScanLayout.inflate(tile, 1.35f, luma.width, luma.height)
-                }
-                add(readCropsParallel(luma, missed, retryBinarizer = true))
-            }
-            return merged
-        }
-        if (previousTiles.size < 2) {
+        // 0.8.25: tiles < 2 still need a full-frame max4 so one multi-layout hit
+        // does not leave later frames on maxSymbols=1 quadrants (half speed).
+        // Skip max4 when two real tiles already both hit (0.8.19).
+        // Do not treat 格 2 as dual-only (0.8.36: quad 1470 blocks stuck at 格 2 / ~84 KB/s).
+        if (previousTiles.size < 2 || transferCount(merged) < 2) {
             add(decoder.read(luma, ScanLayout.centerSquare(luma.width, luma.height), 4))
         }
         if (transferCount(merged) >= 4) return merged
@@ -414,7 +405,7 @@ class QrFrameAnalyzer(
                 tileUndercount.set(0)
                 trackedTiles.set(ScanLayout.tilesFromHits(perCode, imageWidth, imageHeight))
             }
-            hits.size >= 2 && (previous == null || previous.size <= 2) -> {
+            hits.size >= 2 && (previous == null || previous.size < 2) -> {
                 tileUndercount.set(0)
                 trackedTiles.set(ScanLayout.tilesFromHits(perCode, imageWidth, imageHeight))
             }

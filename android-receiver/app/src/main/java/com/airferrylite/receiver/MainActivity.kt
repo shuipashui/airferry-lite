@@ -686,8 +686,7 @@ class MainActivity : AppCompatActivity() {
         val tiles = stats?.tileCount ?: 0
         return when {
             tiles >= 4 -> "四码"
-            tiles >= 2 -> "双码"
-            stats?.multiLayout == true -> "多码未锁格"
+            stats?.multiLayout == true -> "多码"
             else -> "单码"
         }
     }
