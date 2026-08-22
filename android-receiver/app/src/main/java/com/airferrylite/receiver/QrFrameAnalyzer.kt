@@ -42,7 +42,8 @@ data class ScanStats(
 /** Latest-frame zxing-cpp scan on the CameraX analyzer thread. */
 class QrFrameAnalyzer(
     private val onDecoded: (DecodedQr) -> Unit,
-    private val onStats: (ScanStats) -> Unit = {}
+    private val onStats: (ScanStats) -> Unit = {},
+    private val onHighContrastMiss: () -> Unit = {}
 ) : ImageAnalysis.Analyzer {
     @Volatile private var decoder = NativeQrDecoder()
     @Volatile private var tileDecoders = Array(TILE_WORKERS) { NativeQrDecoder() }
@@ -67,6 +68,7 @@ class QrFrameAnalyzer(
     private val dualSettled = AtomicBoolean(false)
     private val dualLayout = AtomicBoolean(false)
     private val dualHint = AtomicBoolean(false)
+    private val highContrastMissStreak = AtomicInteger(0)
     private val roiMisses = AtomicInteger(0)
     private val capturedInWindow = AtomicLong(0)
     private val decodedInWindow = AtomicLong(0)
@@ -122,6 +124,14 @@ class QrFrameAnalyzer(
         decodeSamples.incrementAndGet()
         decodedInWindow.incrementAndGet()
         publish(snapshot.width, snapshot.height, region, hits)
+        val transfers = transferCount(hits)
+        when {
+            transfers >= 2 -> highContrastMissStreak.set(0)
+            transfers == 1 && (dualHint.get() || anyDualLayout(hits) || anyMultiLayout(hits)) ->
+                noteHighContrastMiss(snapshot)
+            transfers == 0 -> noteHighContrastMiss(snapshot)
+            else -> highContrastMissStreak.set(0)
+        }
     }
 
     fun close() {
@@ -211,6 +221,7 @@ class QrFrameAnalyzer(
         dualSettled.set(false)
         dualLayout.set(false)
         dualHint.set(false)
+        highContrastMissStreak.set(0)
         resetProtocol()
     }
 
@@ -532,6 +543,15 @@ class QrFrameAnalyzer(
         return tileCount == 2 && dualSettled.get() && !sawThreeOrMore.get()
     }
 
+    private fun noteHighContrastMiss(luma: LumaSnapshot) {
+        if (!LumaContrast.looksLikeDenseQr(luma)) {
+            highContrastMissStreak.set(0)
+            return
+        }
+        val streak = highContrastMissStreak.incrementAndGet()
+        if (streak > 0 && streak % HIGH_CONTRAST_MISS_PULSE == 0) onHighContrastMiss()
+    }
+
     private fun anyDualLayout(hits: List<NativeHit>): Boolean {
         for (hit in hits) {
             if (QrPayload.isDualLayout(QrPayload.bytesFrom(hit.bytes, hit.text))) return true
@@ -587,5 +607,6 @@ class QrFrameAnalyzer(
         private const val FRAME_DECODE_TIMEOUT_MS = 400L
         private const val STALE_TIMESTAMP_LIMIT = 12
         private const val DUAL_SETTLE_FRAMES = 6
+        private const val HIGH_CONTRAST_MISS_PULSE = 24
     }
 }

@@ -29,7 +29,9 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import com.google.android.material.button.MaterialButtonToggleGroup
 import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.core.resolutionselector.ResolutionSelector
@@ -46,6 +48,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
@@ -110,6 +113,13 @@ class MainActivity : AppCompatActivity() {
     private var pendingSession: String? = null
     private var bindingCamera = false
     private var imageAnalysis: ImageAnalysis? = null
+    private var boundCamera: Camera? = null
+    private var aeNudgeStep = 0
+    private var aeNudgeCount = 0
+    private var aeMeterCount = 0
+    private var lastAeNudgeAt = 0L
+    private var lastEvIndex = 0
+    private var aeNudged = false
     private val protocolEpoch = AtomicInteger(0)
     private val watchdog = Handler(Looper.getMainLooper())
     private val watchdogTick = object : Runnable {
@@ -191,6 +201,7 @@ class MainActivity : AppCompatActivity() {
                 val bytes = decoded.bytes
                 if (bytes != null && HighSpeedAssembler.looksLikeFrame(bytes)) {
                     highSpeedSessionActive = true
+                    ContextCompat.getMainExecutor(this).execute { restoreExposureAfterHit() }
                     val epoch = protocolEpoch.get()
                     pendingProtocolFrames.incrementAndGet()
                     protocolExecutor.execute {
@@ -214,6 +225,9 @@ class MainActivity : AppCompatActivity() {
                     recoverBurst = 0
                     renderDiagnostics()
                 }
+            },
+            onHighContrastMiss = {
+                ContextCompat.getMainExecutor(this).execute { nudgeExposureForStuckQr() }
             }
         )
         findViewById<Button>(R.id.copyDiagnosticsButton).setOnClickListener { copyDiagnostics() }
@@ -334,6 +348,8 @@ class MainActivity : AppCompatActivity() {
         pauseScanner()
         cameraProvider?.unbindAll()
         imageAnalysis = null
+        boundCamera = null
+        resetExposureSession()
     }
 
     private fun startScanner() {
@@ -397,7 +413,7 @@ class MainActivity : AppCompatActivity() {
             val settle = settlePreviewBeforeAnalyze.also { settlePreviewBeforeAnalyze = false }
             attachAnalyzer(analysis, settle)
             try {
-                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                boundCamera = provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
             } catch (preferredError: Exception) {
                 if (fallbackFps == null || fallbackFps == preferredFps) throw preferredError
                 analysis.clearAnalyzer()
@@ -406,12 +422,14 @@ class MainActivity : AppCompatActivity() {
                 preview = buildPreview(rotation, activeFps)
                 analysis = buildAnalysis(rotation, activeFps)
                 attachAnalyzer(analysis, settle)
-                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                boundCamera = provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
                 fellBack = true
             }
             imageAnalysis = analysis
             activeCameraFps = activeFps
             lastStatsAt = SystemClock.elapsedRealtime()
+            resetExposureSession()
+            previewView.post { watchdog.postDelayed({ startSceneMetering() }, SCENE_METER_DELAY_MS) }
             val boundFps = activeFps
             statusText.text = if (boundFps != null && (fellBack || requestedFps !in boundFps.lower..boundFps.upper)) {
                 "相机达不到 ${requestedFps} FPS，已落到 ${boundFps.lower}-${boundFps.upper}"
@@ -421,10 +439,69 @@ class MainActivity : AppCompatActivity() {
             renderDiagnostics()
         } catch (error: Exception) {
             if (imageAnalysis == null) cameraStarted = false
+            boundCamera = null
             statusText.text = "摄像头启动失败：${error.message ?: "未知错误"}"
         } finally {
             bindingCamera = false
         }
+    }
+
+    private fun startSceneMetering() {
+        val camera = boundCamera ?: return
+        if (isDestroyed || !cameraStarted) return
+        val view = previewView
+        if (view.width < 8 || view.height < 8) {
+            view.post { startSceneMetering() }
+            return
+        }
+        val point = view.meteringPointFactory.createPoint(view.width / 2f, view.height * 0.32f)
+        val action = FocusMeteringAction.Builder(
+            point,
+            FocusMeteringAction.FLAG_AE or FocusMeteringAction.FLAG_AF
+        ).setAutoCancelDuration(2, TimeUnit.SECONDS).build()
+        camera.cameraControl.startFocusAndMetering(action)
+        aeMeterCount += 1
+        renderDiagnostics()
+    }
+
+    private fun nudgeExposureForStuckQr() {
+        val camera = boundCamera ?: return
+        if (isDestroyed || !cameraStarted) return
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastAeNudgeAt < 450) return
+        if (aeNudgeCount >= 8) return
+        lastAeNudgeAt = now
+        startSceneMetering()
+        val state = camera.cameraInfo.exposureState
+        if (!state.isExposureCompensationSupported) return
+        val range = state.exposureCompensationRange
+        val sequence = intArrayOf(0, -2, -4, 1, -6, 0)
+        aeNudgeStep = (aeNudgeStep + 1) % sequence.size
+        val index = sequence[aeNudgeStep].coerceIn(range.lower, range.upper)
+        camera.cameraControl.setExposureCompensationIndex(index)
+        lastEvIndex = index
+        aeNudgeCount += 1
+        aeNudged = true
+        renderDiagnostics()
+    }
+
+    private fun restoreExposureAfterHit() {
+        if (!aeNudged) return
+        aeNudged = false
+        aeNudgeStep = 0
+        lastEvIndex = 0
+        aeNudgeCount = 0
+        boundCamera?.cameraControl?.setExposureCompensationIndex(0)
+        renderDiagnostics()
+    }
+
+    private fun resetExposureSession() {
+        aeNudgeStep = 0
+        aeNudgeCount = 0
+        aeMeterCount = 0
+        lastAeNudgeAt = 0L
+        lastEvIndex = 0
+        aeNudged = false
     }
 
     private fun attachAnalyzer(analysis: ImageAnalysis, settle: Boolean) {
@@ -690,6 +767,7 @@ class MainActivity : AppCompatActivity() {
             "解码：zxing-cpp · 平均 ${stats?.averageDecodeMs?.let { "%.1f ms".format(it) } ?: "—"} · 单码命中 ${stats?.singleHits ?: 0} · 多码扫描 ${stats?.multiScans ?: 0}（命中 ${stats?.multiHits ?: 0}${perFrameLabel(stats)}）",
             "分析器：线程 ${stats?.workerCount ?: "?"} · 忙 ${stats?.workerBusy ?: "?"} · 空结果 ${stats?.emptyDecodes ?: 0} · 异常 ${stats?.decodeErrors ?: 0} · 新缓冲 ${stats?.bufferAllocations ?: 0}",
             "看门狗：恢复 ${stats?.pipelineRecoveries ?: 0} 次 · 心跳 ${if (lastStatsAt == 0L) "—" else "${(now - lastStatsAt).coerceAtLeast(0)} ms"}",
+            "曝光：点测 $aeMeterCount · 补偿 $lastEvIndex · 轻推 $aeNudgeCount",
             "ROI：${roiLabel(stats)} · 连续未命中 ${stats?.roiMisses ?: 0} · 布局 ${layoutLabel(stats)}",
             "协议：二维码 ${decodedQrCount.get()} · AFL2 ${highFrameCount} · 唯一 ${highUniqueFrameCount} · 重复 ${highDuplicateCount} · 无效 ${invalidFrameCount.get()} · 错误 ${highProtocolErrors} · 队列 ${pendingProtocolFrames.get()} · 解块 ${lastHighSolved}/${lastHighTotal}",
             "高速会话：最近帧 ${highAge} · 唯一载荷 ${formatBytes(sessionUniquePayloadBytes)} · 光学 ${formatBytes(highBytesReceived)} · 速度 ${latestSpeedLabel} · 会话 ${formatRate(sessionAverageBytesPerSecond)}",
@@ -824,6 +902,7 @@ class MainActivity : AppCompatActivity() {
         private const val PROCESS_RESTART_DELAY_MS = 2000L
         private const val AUTOSTART_BIND_DELAY_MS = 2000L
         private const val ANALYZER_SETTLE_MS = 1200L
+        private const val SCENE_METER_DELAY_MS = 280L
         private const val WATCHDOG_INTERVAL_MS = 1000L
         private const val SCAN_STALL_MS = 2000L
         private const val RECOVER_COOLDOWN_MS = 5000L
