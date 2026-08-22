@@ -4,7 +4,7 @@
 //
 // Layout (little-endian), 20 bytes, followed by `blockLen` payload bytes:
 //   0  u8   magic 0xD1
-//   1  u8   0x0C single · 0x0D quad · 0x1C dual; +0x02 if systematic
+//   1  u8   magic 0x0C
 //   2  u16  sessionId   random per sender start
 //   4  u32  seq         drives the fountain PRNG (see fountain.ts)
 //   8  u16  k           source block count
@@ -29,17 +29,6 @@ const MAGIC1 = 0x0c;
 const MAGIC1_QUAD = 0x0d;
 const MAGIC1_SYSTEMATIC = 0x0e;
 const MAGIC1_QUAD_SYSTEMATIC = 0x0f;
-/** AirFerry dual layout. Not in upstream Decimen v0.3. */
-const MAGIC1_DUAL = 0x1c;
-const MAGIC1_DUAL_SYSTEMATIC = 0x1d;
-const FRAME_MAGICS = [
-  MAGIC1,
-  MAGIC1_QUAD,
-  MAGIC1_SYSTEMATIC,
-  MAGIC1_QUAD_SYSTEMATIC,
-  MAGIC1_DUAL,
-  MAGIC1_DUAL_SYSTEMATIC
-];
 const FILE_MAGIC = new Uint8Array([0x44, 0x43, 0x46, 0x32]); // DCF2
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -290,37 +279,18 @@ export interface FrameHeader {
   blockLen: number;
   totalLen: number;
   payloadFnv: number;
-  layoutCodes?: 1 | 2 | 4;
+  layoutCodes?: 1 | 4;
   systematic?: boolean;
-}
-
-function magic1For(layoutCodes: number | undefined, systematic: boolean | undefined): number {
-  const layout = layoutCodes || 1;
-  if (systematic) {
-    if (layout === 4) return MAGIC1_QUAD_SYSTEMATIC;
-    if (layout === 2) return MAGIC1_DUAL_SYSTEMATIC;
-    return MAGIC1_SYSTEMATIC;
-  }
-  if (layout === 4) return MAGIC1_QUAD;
-  if (layout === 2) return MAGIC1_DUAL;
-  return MAGIC1;
-}
-
-function layoutCodesFromMagic(magic: number): 1 | 2 | 4 {
-  if (magic === MAGIC1_QUAD || magic === MAGIC1_QUAD_SYSTEMATIC) return 4;
-  if (magic === MAGIC1_DUAL || magic === MAGIC1_DUAL_SYSTEMATIC) return 2;
-  return 1;
-}
-
-function isSystematicMagic(magic: number): boolean {
-  return magic === MAGIC1_SYSTEMATIC || magic === MAGIC1_QUAD_SYSTEMATIC || magic === MAGIC1_DUAL_SYSTEMATIC;
 }
 
 export function packFrame(h: FrameHeader, block: Uint8Array): Uint8Array {
   const out = new Uint8Array(HEADER_LEN + block.length);
   const dv = new DataView(out.buffer);
   dv.setUint8(0, MAGIC0);
-  dv.setUint8(1, magic1For(h.layoutCodes, h.systematic));
+  const magic1 = h.systematic
+    ? h.layoutCodes === 4 ? MAGIC1_QUAD_SYSTEMATIC : MAGIC1_SYSTEMATIC
+    : h.layoutCodes === 4 ? MAGIC1_QUAD : MAGIC1;
+  dv.setUint8(1, magic1);
   dv.setUint16(2, h.sessionId, true);
   dv.setUint32(4, h.seq, true);
   dv.setUint16(8, h.k, true);
@@ -335,7 +305,7 @@ export function parseFrame(
   bytes: Uint8Array,
 ): { header: FrameHeader; block: Uint8Array } | null {
   if (bytes.length <= HEADER_LEN) return null;
-  if (bytes[0] !== MAGIC0 || !FRAME_MAGICS.includes(bytes[1]!)) return null;
+  if (bytes[0] !== MAGIC0 || ![MAGIC1, MAGIC1_QUAD, MAGIC1_SYSTEMATIC, MAGIC1_QUAD_SYSTEMATIC].includes(bytes[1]!)) return null;
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const header: FrameHeader = {
     sessionId: dv.getUint16(2, true),
@@ -344,8 +314,8 @@ export function parseFrame(
     blockLen: dv.getUint16(10, true),
     totalLen: dv.getUint32(12, true),
     payloadFnv: dv.getUint32(16, true),
-    layoutCodes: layoutCodesFromMagic(bytes[1]!),
-    systematic: isSystematicMagic(bytes[1]!),
+    layoutCodes: bytes[1] === MAGIC1_QUAD || bytes[1] === MAGIC1_QUAD_SYSTEMATIC ? 4 : 1,
+    systematic: bytes[1] === MAGIC1_SYSTEMATIC || bytes[1] === MAGIC1_QUAD_SYSTEMATIC,
   };
   if (header.k === 0 || header.blockLen === 0 || header.totalLen === 0) return null;
   if (bytes.length !== HEADER_LEN + header.blockLen) return null;
