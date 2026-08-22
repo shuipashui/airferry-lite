@@ -71,7 +71,7 @@ cd android-receiver
 .\build-local.ps1 assembleDebug
 ```
 
-APK 输出为 `android-receiver/app/build/outputs/apk/debug/app-debug.apk`。也可从 GitHub Actions 工作流 `Build Android receiver` 下载 `airferry-lite-android-debug`。
+APK 输出为 `android-receiver/app/build/outputs/apk/debug/app-debug.apk`（仅本地自测）。**交付请只用 GitHub Actions** 工作流 `Build Android receiver` 的 artifact `airferry-lite-android-debug`；不要保留或分发仓库里的旧 APK。
 
 ## 和 AirFerry / Decimen 的关系
 
