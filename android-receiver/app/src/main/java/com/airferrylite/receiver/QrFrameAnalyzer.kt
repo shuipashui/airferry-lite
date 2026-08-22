@@ -227,12 +227,11 @@ class QrFrameAnalyzer(
         if (previousTiles.size < 2) {
             add(decoder.read(luma, ScanLayout.centerSquare(luma.width, luma.height), 4))
             if (transferCount(merged) < 2) {
-                add(readCropsParallel(luma, ScanLayout.dualDiagonal(ScanLayout.centerSquare(luma.width, luma.height)), retryBinarizer = false))
+                add(readCropsParallel(luma, ScanLayout.dualHalves(ScanLayout.centerSquare(luma.width, luma.height)), retryBinarizer = false))
             }
         }
         if (transferCount(merged) >= 4) return merged
         if (previousTiles.size >= 4 && transferCount(merged) >= 3) return merged
-        if (previousTiles.isEmpty() && transferCount(merged) == 0) return merged
         val exclusive = ScanLayout.exclusiveQuadrants(region)
         val overlays = ScanLayout.overlappingQuadrants(region)
         val pending = overlays.indices.mapNotNull { index ->
@@ -246,6 +245,9 @@ class QrFrameAnalyzer(
             else ScanLayout.inflate(tile, 1.28f, luma.width, luma.height)
         }
         add(readCropsSerial(luma, retries, retryBinarizer = true))
+        if (transferCount(merged) < 2 && previousTiles.size >= 2) {
+            add(readCropsParallel(luma, ScanLayout.dualHalves(region).filter { !tileCovered(it, merged) }, retryBinarizer = true))
+        }
         return merged
     }
 

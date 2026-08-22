@@ -16,9 +16,13 @@ internal object ScanLayout {
         return ScanRegion((width - side) / 2, (height - side) / 2, side, side)
     }
 
-    fun dualDiagonal(region: ScanRegion): List<ScanRegion> {
-        val overlays = overlappingQuadrants(region)
-        return listOf(overlays[0], overlays[3])
+    fun dualHalves(region: ScanRegion): List<ScanRegion> {
+        val cropW = ((0.5f + QUAD_OVERLAP) * region.width).toInt().coerceIn(1, region.width)
+        val right = region.left + region.width - cropW
+        return listOf(
+            ScanRegion(region.left, region.top, cropW, region.height),
+            ScanRegion(right, region.top, cropW, region.height)
+        )
     }
 
     fun horizontalSibling(tile: ScanRegion, width: Int, height: Int): ScanRegion {
