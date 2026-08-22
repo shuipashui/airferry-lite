@@ -39,15 +39,7 @@ data class ScanStats(
     val pipelineRecoveries: Long
 )
 
-/**
- * Latest-frame zxing-cpp scan on the CameraX analyzer thread.
- *
- * Layout model (same as main): only [multiLayout] + [singleLayoutConfirmed] + tracked tile count.
- * - Single: confirmed single → maxSymbols=1, one crop.
- * - Dual / quad: locked multi → tracked tiles (格 2 or 格 4) + quadrant fill when still short on codes.
- *   Dual fast path: 格 2, both codes in frame, and session is not quad → skip quadrant fill.
- *   Quad (170 KB/s): never take dual fast path when quadStream or sawThreeOrMore; always quadrant fill until 格 4.
- */
+/** Latest-frame zxing-cpp scan on the CameraX analyzer thread. */
 class QrFrameAnalyzer(
     private val onDecoded: (DecodedQr) -> Unit,
     private val onStats: (ScanStats) -> Unit = {}
@@ -70,10 +62,6 @@ class QrFrameAnalyzer(
     private val trackedRoi = AtomicReference<ScanRegion?>(null)
     private val trackedTiles = AtomicReference<List<ScanRegion>?>(null)
     private val tileUndercount = AtomicInteger(0)
-    private val sawThreeOrMore = AtomicBoolean(false)
-    private val quadStream = AtomicBoolean(false)
-    private val dualStream = AtomicBoolean(false)
-    private val afl2TransferSeen = AtomicBoolean(false)
     private val roiMisses = AtomicInteger(0)
     private val capturedInWindow = AtomicLong(0)
     private val decodedInWindow = AtomicLong(0)
@@ -186,7 +174,12 @@ class QrFrameAnalyzer(
         }
     }
 
-    fun resetProtocol() {
+    fun resetSession() {
+        setMultiLayout(false)
+        singleLayoutConfirmed.set(false)
+        trackedRoi.set(null)
+        trackedTiles.set(null)
+        tileUndercount.set(0)
         roiMisses.set(0)
         droppedFrames.set(0)
         submittedFrames.set(0)
@@ -201,43 +194,6 @@ class QrFrameAnalyzer(
         staleTimestampFrames.set(0)
         recoverRequested.set(false)
         skipUntilRecover.set(false)
-        analysisIdle.set(false)
-    }
-
-    fun resetTrackedTiles() {
-        trackedRoi.set(null)
-        trackedTiles.set(null)
-        tileUndercount.set(0)
-        roiMisses.set(0)
-    }
-
-    fun resetSession() {
-        setMultiLayout(false)
-        singleLayoutConfirmed.set(false)
-        trackedRoi.set(null)
-        trackedTiles.set(null)
-        tileUndercount.set(0)
-        sawThreeOrMore.set(false)
-        quadStream.set(false)
-        dualStream.set(false)
-        afl2TransferSeen.set(false)
-        resetProtocol()
-    }
-
-    fun noteStreamLayout(layoutCodes: Int) {
-        when (layoutCodes) {
-            2 -> {
-                dualStream.set(true)
-                quadStream.set(false)
-                sawThreeOrMore.set(false)
-                singleLayoutConfirmed.set(false)
-            }
-            4 -> {
-                quadStream.set(true)
-                dualStream.set(false)
-                singleLayoutConfirmed.set(false)
-            }
-        }
     }
 
     private fun chooseRegion(width: Int, height: Int): ScanRegion {
@@ -245,24 +201,7 @@ class QrFrameAnalyzer(
     }
 
     private fun decodeFrame(luma: LumaSnapshot, region: ScanRegion, maxSymbols: Int): List<NativeHit> {
-        if (!multiLayout.get()) {
-            if (maxSymbols > 1 && !singleLayoutConfirmed.get() && !quadStream.get()) {
-                val merged = mutableListOf<NativeHit>()
-                val seen = mutableSetOf<String>()
-                fun add(hits: List<NativeHit>) {
-                    for (hit in hits) {
-                        val key = QrPayload.frameKey(QrPayload.bytesFrom(hit.bytes, hit.text)) ?: continue
-                        if (seen.add(key)) merged += hit
-                    }
-                }
-                add(readCropsParallel(luma, ScanLayout.dualHalves(region), retryBinarizer = false))
-                if (transferCount(merged) < 2) {
-                    add(decoder.read(luma, ScanLayout.centerSquare(luma.width, luma.height), 4))
-                }
-                return merged
-            }
-            return decoder.read(luma, region, maxSymbols)
-        }
+        if (!multiLayout.get()) return decoder.read(luma, region, maxSymbols)
         val merged = mutableListOf<NativeHit>()
         val seen = mutableSetOf<String>()
         fun add(hits: List<NativeHit>) {
@@ -275,94 +214,23 @@ class QrFrameAnalyzer(
             ScanLayout.clamp(it, luma.width, luma.height)
         }
         if (previousTiles.isNotEmpty()) {
-            val tileCrops = if (previousTiles.size >= 2) {
-                previousTiles.map { ScanLayout.inflate(it, 1.14f, luma.width, luma.height) }
-            } else {
-                previousTiles
-            }
-            val pendingTiles = tileCrops.filter { !tileCovered(it, merged, previousTiles) }
-            val pending = if (
-                dualStream.get() && !quadStream.get() &&
-                previousTiles.size == 2 && transferCount(merged) < 2
-            ) {
-                val halves = ScanLayout.dualHalves(region)
-                (pendingTiles + halves).take(TILE_WORKERS)
-            } else {
-                pendingTiles
-            }
-            if (pending.isNotEmpty()) {
-                add(readCropsParallel(luma, pending, retryBinarizer = false))
-            }
+            add(readCropsParallel(luma, previousTiles.filter { !tileCovered(it, merged) }, retryBinarizer = false))
         }
-        if (previousTiles.size in 2..3 && transferCount(merged) < 2) {
-            if (dualStream.get() && !quadStream.get()) {
-                add(readCropsParallel(luma, ScanLayout.dualHalves(region), retryBinarizer = false))
-            } else {
-                add(decoder.read(luma, ScanLayout.centerSquare(luma.width, luma.height), 4))
-            }
+        if (previousTiles.size >= 2 && transferCount(merged) < 2) {
+            add(decoder.read(luma, ScanLayout.centerSquare(luma.width, luma.height), 4))
         }
         if (transferCount(merged) >= 4) return merged
         if (previousTiles.size >= 4 && transferCount(merged) >= 3) return merged
-        // Quad 格 4: parallel overlay + inflate only — serial 8-way was ~21 ms (0.8.68).
-        // Must keep filling past 2 hits; early return at 2 codes caused ~1.98/frame (0.8.73).
-        if (quadStream.get() && previousTiles.size >= 4) {
-            if (transferCount(merged) < 4) {
-                val exclusive = ScanLayout.exclusiveQuadrants(region)
-                val overlays = ScanLayout.overlappingQuadrants(region)
-                val pending = overlays.indices.mapNotNull { index ->
-                    overlays[index].takeUnless { tileCovered(exclusive[index], merged, exclusive) }
-                }
-                if (pending.isNotEmpty()) {
-                    add(readCropsParallel(luma, pending.take(TILE_WORKERS), retryBinarizer = false))
-                }
-            }
-            if (transferCount(merged) >= 4) return merged
-            if (transferCount(merged) >= 3) return merged
-            if (transferCount(merged) < 4) {
-                val exclusive = ScanLayout.exclusiveQuadrants(region)
-                val retries = exclusive.mapNotNull { tile ->
-                    if (tileCovered(tile, merged, exclusive)) null
-                    else ScanLayout.inflate(tile, 1.28f, luma.width, luma.height)
-                }
-                if (retries.isNotEmpty()) {
-                    add(readCropsParallel(luma, retries.take(TILE_WORKERS), retryBinarizer = true))
-                }
-            }
-            return merged
-        }
-        if (!quadStream.get() && !sawThreeOrMore.get() && previousTiles.size < 2) {
-            if (transferCount(merged) < 2) {
-                add(readCropsParallel(luma, ScanLayout.dualHalves(region), retryBinarizer = false))
-            }
-            if (transferCount(merged) < 2) {
-                add(decoder.read(luma, ScanLayout.centerSquare(luma.width, luma.height), 4))
-            }
-            if (dualFastPath(previousTiles.size, transferCount(merged))) return merged
-            // Unconfirmed dual: never serial 8-way overlay (0.8.50 / HANDOVER).
-            return merged
-        }
-        if (!quadStream.get() && !sawThreeOrMore.get() && previousTiles.size == 2) {
-            if (transferCount(merged) < 2) {
-                val retries = previousTiles.map { ScanLayout.inflate(it, 1.28f, luma.width, luma.height) }
-                add(readCropsParallel(luma, retries, retryBinarizer = true))
-            }
-            if (transferCount(merged) < 2) {
-                add(readCropsParallel(luma, ScanLayout.dualHalves(region), retryBinarizer = false))
-            }
-            if (dualFastPath(previousTiles.size, transferCount(merged))) return merged
-        }
-        if (dualFastPath(previousTiles.size, transferCount(merged))) return merged
         val exclusive = ScanLayout.exclusiveQuadrants(region)
         val overlays = ScanLayout.overlappingQuadrants(region)
         val pending = overlays.indices.mapNotNull { index ->
-            overlays[index].takeUnless { tileCovered(exclusive[index], merged, exclusive) }
+            overlays[index].takeUnless { tileCovered(exclusive[index], merged) }
         }
         add(readCropsSerial(luma, pending, retryBinarizer = false))
         if (transferCount(merged) >= 4) return merged
         if (previousTiles.size >= 4 && transferCount(merged) >= 3) return merged
-        if (dualFastPath(previousTiles.size, transferCount(merged))) return merged
         val retries = exclusive.mapNotNull { tile ->
-            if (tileCovered(tile, merged, exclusive)) null
+            if (tileCovered(tile, merged)) null
             else ScanLayout.inflate(tile, 1.28f, luma.width, luma.height)
         }
         add(readCropsSerial(luma, retries, retryBinarizer = true))
@@ -448,50 +316,12 @@ class QrFrameAnalyzer(
     private fun transferCount(hits: List<NativeHit>) =
         hits.count { QrPayload.isTransfer(QrPayload.bytesFrom(it.bytes, it.text)) }
 
-    /** Skip 8-way quadrant fill only for settled dual (格 2). Quad must keep filling until 格 4. */
-    private fun dualFastPath(lockedTiles: Int, transfers: Int): Boolean {
-        if (lockedTiles != 2 || transfers < 2) return false
-        if (quadStream.get() || sawThreeOrMore.get()) return false
-        return true
-    }
-
-    private fun noteLayoutFromHits(hits: List<NativeHit>) {
-        for (hit in hits) {
-            val bytes = QrPayload.bytesFrom(hit.bytes, hit.text) ?: continue
-            when {
-                QrPayload.isQuadLayout(bytes) -> {
-                    quadStream.set(true)
-                    dualStream.set(false)
-                    singleLayoutConfirmed.set(false)
-                }
-                QrPayload.isDualLayout(bytes) -> {
-                    dualStream.set(true)
-                    singleLayoutConfirmed.set(false)
-                }
-            }
-        }
-        if (dualStream.get()) {
-            quadStream.set(false)
-            sawThreeOrMore.set(false)
-        }
-    }
-
-    private fun quadTileGrid(imageWidth: Int, imageHeight: Int): List<ScanRegion> {
-        return ScanLayout.exclusiveQuadrants(ScanLayout.centerSquare(imageWidth, imageHeight))
-    }
-
-    private fun tileCovered(tile: ScanRegion, hits: List<NativeHit>, candidates: List<ScanRegion>): Boolean {
-        if (hits.isEmpty() || candidates.isEmpty()) return false
+    private fun tileCovered(tile: ScanRegion, hits: List<NativeHit>): Boolean {
         for (hit in hits) {
             if (hit.points.isEmpty()) continue
-            val cx = (hit.originLeft + hit.points.map { it.first }.average()).toFloat()
-            val cy = (hit.originTop + hit.points.map { it.second }.average()).toFloat()
-            val owner = ScanLayout.ownerIndex(candidates, cx, cy)
-            if (owner < 0) continue
-            val owned = candidates[owner]
-            if (owned.left == tile.left && owned.top == tile.top && owned.width == tile.width && owned.height == tile.height) {
-                return true
-            }
+            val cx = hit.originLeft + hit.points.map { it.first }.average()
+            val cy = hit.originTop + hit.points.map { it.second }.average()
+            if (cx >= tile.left && cx < tile.left + tile.width && cy >= tile.top && cy < tile.top + tile.height) return true
         }
         return false
     }
@@ -502,19 +332,8 @@ class QrFrameAnalyzer(
             emptyDecodes.incrementAndGet()
             val miss = roiMisses.incrementAndGet()
             val lockedTiles = trackedTiles.get()?.size ?: 0
-            val missLimit = when {
-                lockedTiles >= 4 -> 6
-                quadStream.get() -> 6
-                lockedTiles >= 2 -> 6
-                dualStream.get() -> 12
-                else -> 2
-            }
+            val missLimit = if (lockedTiles >= 4) 6 else 2
             if (miss >= missLimit) {
-                if (lockedTiles < 2 && multiLayout.get() && !quadStream.get() && !dualStream.get()) {
-                    multiLayout.set(false)
-                    trackedRoi.set(null)
-                    singleLayoutConfirmed.set(false)
-                }
                 trackedTiles.set(null)
                 tileUndercount.set(0)
             }
@@ -522,25 +341,13 @@ class QrFrameAnalyzer(
         }
         roiMisses.set(0)
         validQrInWindow.addAndGet(transferHits.size.toLong())
-        noteLayoutFromHits(transferHits)
-        val hasDualLayout = transferHits.any { QrPayload.isDualLayout(QrPayload.bytesFrom(it.bytes, it.text)) }
-        val hasQuadLayout = transferHits.any { QrPayload.isQuadLayout(QrPayload.bytesFrom(it.bytes, it.text)) }
-        val lockedMulti = transferHits.size >= 2 || hasDualLayout || hasQuadLayout
+        val lockedMulti = transferHits.any { QrPayload.isMultiLayout(QrPayload.bytesFrom(it.bytes, it.text)) } ||
+            transferHits.size >= 2
         if (lockedMulti) {
             lockMultiLayout()
-            if (transferHits.size >= 2) {
-                multiHits.addAndGet(transferHits.size.toLong())
-            }
+            multiHits.addAndGet(transferHits.size.toLong())
         } else {
-            val bytes = QrPayload.bytesFrom(transferHits.first().bytes, transferHits.first().text)
-            if (bytes != null && HighSpeedAssembler.looksLikeFrame(bytes)) {
-                afl2TransferSeen.set(true)
-                singleLayoutConfirmed.set(false)
-            } else when {
-                QrPayload.isMultiLayout(bytes) -> singleLayoutConfirmed.set(false)
-                afl2TransferSeen.get() -> singleLayoutConfirmed.set(false)
-                else -> singleLayoutConfirmed.set(true)
-            }
+            singleLayoutConfirmed.set(true)
             singleHits.addAndGet(transferHits.size.toLong())
         }
         rememberRoi(imageWidth, imageHeight, transferHits)
@@ -590,35 +397,13 @@ class QrFrameAnalyzer(
             hit.points.map { (x, y) -> (hit.originLeft + x) to (hit.originTop + y) }
         }
         when {
-            quadStream.get() -> {
-                if (hits.size >= 3) sawThreeOrMore.set(true)
-                tileUndercount.set(0)
-                val grid = quadTileGrid(imageWidth, imageHeight)
-                val base = previous?.takeIf { it.size >= 4 } ?: grid
-                trackedTiles.set(
-                    ScanLayout.followContainedHits(base, perCode, imageWidth, imageHeight)
-                )
-            }
             hits.size >= 3 -> {
-                sawThreeOrMore.set(true)
                 tileUndercount.set(0)
                 trackedTiles.set(ScanLayout.tilesFromHits(perCode, imageWidth, imageHeight))
             }
             hits.size >= 2 && (previous == null || previous.size < 2) -> {
                 tileUndercount.set(0)
                 trackedTiles.set(ScanLayout.tilesFromHits(perCode, imageWidth, imageHeight))
-            }
-            dualStream.get() && hits.size == 1 && (previous == null || previous.size < 2) -> {
-                tileUndercount.set(0)
-                val pair = ScanLayout.pairFromHit(perCode.first(), imageWidth, imageHeight)
-                trackedTiles.set(
-                    if (pair.size >= 2) pair
-                    else ScanLayout.tilesFromHits(perCode, imageWidth, imageHeight)
-                )
-            }
-            previous != null && previous.size >= 4 && hits.size < 2 -> {
-                tileUndercount.set(0)
-                trackedTiles.set(ScanLayout.followContainedHits(previous, perCode, imageWidth, imageHeight))
             }
             previous != null && previous.size >= 2 && hits.size < 2 -> {
                 if (tileUndercount.incrementAndGet() >= TILE_UNDERCOUNT_LIMIT) {

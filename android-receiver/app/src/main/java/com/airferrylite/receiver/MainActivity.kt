@@ -142,7 +142,6 @@ class MainActivity : AppCompatActivity() {
     private var softDecoderRecoverAttempted = false
     private var lastSoftRecoverAt = 0L
     private var halRecoveryRestartAttempted = false
-    private var staleTilesResetAttempted = false
     private var receiveSessionFromContinue = false
     private var scanSessionStartedAt = 0L
     private var cameraBoundAt = 0L
@@ -230,10 +229,6 @@ class MainActivity : AppCompatActivity() {
                 decodedQrCount.incrementAndGet()
                 val bytes = decoded.bytes
                 if (bytes != null && HighSpeedAssembler.looksLikeFrame(bytes)) {
-                    when {
-                        HighSpeedAssembler.isDualLayoutFrame(bytes) -> frameAnalyzer.noteStreamLayout(2)
-                        HighSpeedAssembler.isQuadLayoutFrame(bytes) -> frameAnalyzer.noteStreamLayout(4)
-                    }
                     highSpeedSessionActive = true
                     val epoch = protocolEpoch.get()
                     pendingProtocolFrames.incrementAndGet()
@@ -257,7 +252,6 @@ class MainActivity : AppCompatActivity() {
                     lastStatsAt = SystemClock.elapsedRealtime()
                     recoverBurst = 0
                     maybeSoftDecoderRecover(stats)
-                    maybeResetStaleTiles(stats)
                     maybeRestartForHalEmptyBurst(stats)
                     renderDiagnostics()
                 }
@@ -398,7 +392,6 @@ class MainActivity : AppCompatActivity() {
         softDecoderRecoverAttempted = false
         lastSoftRecoverAt = 0L
         halRecoveryRestartAttempted = false
-        staleTilesResetAttempted = false
         if (::frameAnalyzer.isInitialized) {
             frameAnalyzer.resetSession()
             frameAnalyzer.setAnalysisIdle(false)
@@ -458,16 +451,6 @@ class MainActivity : AppCompatActivity() {
             imageAnalysis?.setAnalyzer(cameraExecutor, frameAnalyzer)
             frameAnalyzer.setAnalysisIdle(false)
         }, 800L)
-    }
-
-    private fun maybeResetStaleTiles(stats: ScanStats) {
-        if (staleTilesResetAttempted) return
-        if (stats.multiScans < 300 || stats.tileCount < 2) return
-        if (highUniqueFrameCount >= 20 || lastHighSolved >= 30) return
-        val hitsPerScan = stats.multiHits.toDouble() / stats.multiScans.toDouble()
-        if (hitsPerScan >= 0.12) return
-        staleTilesResetAttempted = true
-        frameAnalyzer.resetTrackedTiles()
     }
 
     private fun maybeRestartForHalEmptyBurst(stats: ScanStats) {
@@ -805,10 +788,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleHighSpeedFrame(bytes: ByteArray) {
-        when {
-            HighSpeedAssembler.isDualLayoutFrame(bytes) -> frameAnalyzer.noteStreamLayout(2)
-            HighSpeedAssembler.isQuadLayoutFrame(bytes) -> frameAnalyzer.noteStreamLayout(4)
-        }
         highFrameCount += 1
         highBytesReceived += bytes.size.toLong()
         highLastFrameAt = SystemClock.elapsedRealtime()

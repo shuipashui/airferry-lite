@@ -16,39 +16,6 @@ internal object ScanLayout {
         return ScanRegion((width - side) / 2, (height - side) / 2, side, side)
     }
 
-    fun dualHalves(region: ScanRegion): List<ScanRegion> {
-        val cropW = ((0.5f + QUAD_OVERLAP) * region.width).toInt().coerceIn(1, region.width)
-        val right = region.left + region.width - cropW
-        return listOf(
-            ScanRegion(region.left, region.top, cropW, region.height),
-            ScanRegion(right, region.top, cropW, region.height)
-        )
-    }
-
-    fun horizontalSibling(tile: ScanRegion, width: Int, height: Int): ScanRegion {
-        val shift = (tile.width * 1.08f).toInt().coerceAtLeast(1)
-        val right = clamp(ScanRegion(tile.left + shift, tile.top, tile.width, tile.height), width, height)
-        val left = clamp(ScanRegion(tile.left - shift, tile.top, tile.width, tile.height), width, height)
-        val tileMid = tile.left + tile.width / 2
-        val rightSep = kotlin.math.abs((right.left + right.width / 2) - tileMid)
-        val leftSep = kotlin.math.abs((left.left + left.width / 2) - tileMid)
-        val roomRight = tile.left + shift + tile.width <= width
-        return if (roomRight && rightSep >= tile.width / 2) right
-        else if (leftSep >= tile.width / 2) left
-        else right
-    }
-
-    fun pairFromHit(
-        points: List<Pair<Float, Float>>,
-        imageWidth: Int,
-        imageHeight: Int
-    ): List<ScanRegion> {
-        val tile = regionFromPoints(points, imageWidth, imageHeight, 1)?.let {
-            inflate(it, 1.18f, imageWidth, imageHeight)
-        } ?: return emptyList()
-        return listOf(tile, horizontalSibling(tile, imageWidth, imageHeight)).sortedBy { it.left }
-    }
-
     fun exclusiveQuadrants(region: ScanRegion): List<ScanRegion> {
         val halfW = (region.width / 2).coerceAtLeast(1)
         val halfH = (region.height / 2).coerceAtLeast(1)
@@ -162,24 +129,6 @@ internal object ScanLayout {
         return owner
     }
 
-    /** Nearest containing tile. Overlap goes to one owner so a 1-of-2 hit cannot mark both tiles covered. */
-    fun ownerIndex(tiles: List<ScanRegion>, x: Float, y: Float): Int {
-        var best = -1
-        var bestDist = Float.POSITIVE_INFINITY
-        for (index in tiles.indices) {
-            val tile = tiles[index]
-            if (x < tile.left || x >= tile.left + tile.width || y < tile.top || y >= tile.top + tile.height) continue
-            val dx = x - (tile.left + tile.width / 2f)
-            val dy = y - (tile.top + tile.height / 2f)
-            val dist = dx * dx + dy * dy
-            if (dist < bestDist) {
-                bestDist = dist
-                best = index
-            }
-        }
-        return best
-    }
-
     fun followContainedHits(
         tiles: List<ScanRegion>,
         hits: List<List<Pair<Float, Float>>>,
@@ -193,7 +142,7 @@ internal object ScanLayout {
             if (points.isEmpty()) continue
             val cx = points.map { it.first }.average().toFloat()
             val cy = points.map { it.second }.average().toFloat()
-            val index = ScanLayout.ownerIndex(tiles, cx, cy)
+            val index = tileIndexContaining(tiles, cx, cy)
             if (index < 0 || claimed[index]) continue
             val tile = regionFromPoints(points, imageWidth, imageHeight, 1)?.let {
                 inflate(it, 1.18f, imageWidth, imageHeight)
