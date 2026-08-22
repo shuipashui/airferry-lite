@@ -66,6 +66,7 @@ class QrFrameAnalyzer(
     private val sawThreeOrMore = AtomicBoolean(false)
     private val dualSettled = AtomicBoolean(false)
     private val dualLayout = AtomicBoolean(false)
+    private val dualHint = AtomicBoolean(false)
     private val roiMisses = AtomicInteger(0)
     private val capturedInWindow = AtomicLong(0)
     private val decodedInWindow = AtomicLong(0)
@@ -176,6 +177,7 @@ class QrFrameAnalyzer(
                 tileUndercount.set(0)
                 dualLayout.set(false)
                 dualSettled.set(false)
+                dualHint.set(false)
             }
         }
     }
@@ -208,6 +210,7 @@ class QrFrameAnalyzer(
         sawThreeOrMore.set(false)
         dualSettled.set(false)
         dualLayout.set(false)
+        dualHint.set(false)
         resetProtocol()
     }
 
@@ -224,11 +227,32 @@ class QrFrameAnalyzer(
                 if (seen.add(key)) merged += hit
             }
         }
-        // Dual layoutCodes=2 still needs two hits to lock. Quad still needs ≥2.
-        // Dual-halves instead of max4 was 0.8.33.
+        fun acquireDualSibling() {
+            val square = ScanLayout.centerSquare(luma.width, luma.height)
+            if (transferCount(merged) < 2) {
+                add(readCropsParallel(luma, ScanLayout.dualHalves(square), retryBinarizer = false))
+            }
+            if (transferCount(merged) >= 2) return
+            val exclusive = ScanLayout.exclusiveQuadrants(square)
+            val overlays = ScanLayout.overlappingQuadrants(square)
+            val pending = overlays.indices.mapNotNull { index ->
+                overlays[index].takeUnless { tileCovered(exclusive[index], merged) }
+            }
+            add(readCropsSerial(luma, pending, retryBinarizer = false))
+            if (transferCount(merged) >= 2) return
+            val retries = exclusive.mapNotNull { tile ->
+                if (tileCovered(tile, merged)) null
+                else ScanLayout.inflate(tile, 1.28f, luma.width, luma.height)
+            }
+            add(readCropsSerial(luma, retries, retryBinarizer = true))
+        }
+        // Dual layoutCodes=2 still needs two hits to lock. One 0x1c header
+        // must not skip sibling search (0.8.51 kill+reopen: 1-at-a-time).
         if (!multiLayout.get()) {
             add(decoder.read(luma, region, maxSymbols))
-            if (transferCount(merged) == 1 && anyMultiLayout(merged)) {
+            if (dualHint.get() && transferCount(merged) < 2) {
+                acquireDualSibling()
+            } else if (transferCount(merged) == 1 && anyMultiLayout(merged)) {
                 add(
                     readCropsParallel(
                         luma,
@@ -404,13 +428,14 @@ class QrFrameAnalyzer(
         }
         roiMisses.set(0)
         validQrInWindow.addAndGet(transferHits.size.toLong())
-        if (transferHits.size >= 2 && anyDualLayout(transferHits)) {
+        if (anyDualLayout(transferHits)) dualHint.set(true)
+        if (transferHits.size >= 2 && dualHint.get()) {
             lockDualLayout()
             multiHits.addAndGet(transferHits.size.toLong())
         } else if (transferHits.size >= 2) {
             lockMultiLayout()
             multiHits.addAndGet(transferHits.size.toLong())
-        } else if (anyDualLayout(transferHits) || anyMultiLayout(transferHits)) {
+        } else if (dualHint.get() || anyMultiLayout(transferHits)) {
             singleLayoutConfirmed.set(false)
         } else {
             singleLayoutConfirmed.set(true)

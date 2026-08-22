@@ -123,6 +123,7 @@ class MainActivity : AppCompatActivity() {
     private var recoverBurst = 0
     private var recoverBurstStartedAt = 0L
     private var processRestarting = false
+    private var settlePreviewBeforeAnalyze = false
 
     private data class PendingSave(val name: String, val mime: String, val bytes: ByteArray)
 
@@ -221,6 +222,7 @@ class MainActivity : AppCompatActivity() {
         showIdle()
         renderDiagnostics()
         if (consumeAutostartScan()) {
+            settlePreviewBeforeAnalyze = true
             previewView.post { watchdog.postDelayed({ requestStartReceive() }, AUTOSTART_BIND_DELAY_MS) }
         }
     }
@@ -392,7 +394,8 @@ class MainActivity : AppCompatActivity() {
             var analysis = buildAnalysis(rotation, activeFps)
             imageAnalysis?.clearAnalyzer()
             provider.unbindAll()
-            analysis.setAnalyzer(cameraExecutor, frameAnalyzer)
+            val settle = settlePreviewBeforeAnalyze.also { settlePreviewBeforeAnalyze = false }
+            attachAnalyzer(analysis, settle)
             try {
                 provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
             } catch (preferredError: Exception) {
@@ -402,7 +405,7 @@ class MainActivity : AppCompatActivity() {
                 activeFps = fallbackFps
                 preview = buildPreview(rotation, activeFps)
                 analysis = buildAnalysis(rotation, activeFps)
-                analysis.setAnalyzer(cameraExecutor, frameAnalyzer)
+                attachAnalyzer(analysis, settle)
                 provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
                 fellBack = true
             }
@@ -422,6 +425,18 @@ class MainActivity : AppCompatActivity() {
         } finally {
             bindingCamera = false
         }
+    }
+
+    private fun attachAnalyzer(analysis: ImageAnalysis, settle: Boolean) {
+        if (!settle) {
+            analysis.setAnalyzer(cameraExecutor, frameAnalyzer)
+            return
+        }
+        watchdog.postDelayed({
+            if (isDestroyed || imageAnalysis !== analysis) return@postDelayed
+            analysis.setAnalyzer(cameraExecutor, frameAnalyzer)
+            if (::frameAnalyzer.isInitialized) frameAnalyzer.setAnalysisIdle(false)
+        }, ANALYZER_SETTLE_MS)
     }
 
     private fun cameraFpsRanges(provider: ProcessCameraProvider): List<Range<Int>> {
@@ -807,7 +822,8 @@ class MainActivity : AppCompatActivity() {
         private const val PREF_AUTOSTART_SCAN = "autostart_scan"
         private const val EXTRA_AUTOSTART_SCAN = "autostart_scan"
         private const val PROCESS_RESTART_DELAY_MS = 2000L
-        private const val AUTOSTART_BIND_DELAY_MS = 400L
+        private const val AUTOSTART_BIND_DELAY_MS = 2000L
+        private const val ANALYZER_SETTLE_MS = 1200L
         private const val WATCHDOG_INTERVAL_MS = 1000L
         private const val SCAN_STALL_MS = 2000L
         private const val RECOVER_COOLDOWN_MS = 5000L
