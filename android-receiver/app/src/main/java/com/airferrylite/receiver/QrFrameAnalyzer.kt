@@ -89,10 +89,6 @@ class QrFrameAnalyzer(
             image.close()
             return
         }
-        if (roiMisses.get() >= 60 && capturedInWindow.get() % 4L != 0L) {
-            image.close()
-            return
-        }
         noteImageTimestamp(image.imageInfo.timestamp)
         val snapshot = try {
             captureLuma(image)
@@ -230,6 +226,9 @@ class QrFrameAnalyzer(
         // max4 only while tiles are still below two.
         if (previousTiles.size < 2) {
             add(decoder.read(luma, ScanLayout.centerSquare(luma.width, luma.height), 4))
+            if (transferCount(merged) < 2) {
+                add(readCropsParallel(luma, ScanLayout.dualHalves(ScanLayout.centerSquare(luma.width, luma.height)), retryBinarizer = false))
+            }
         }
         if (transferCount(merged) >= 4) return merged
         if (previousTiles.size >= 4 && transferCount(merged) >= 3) return merged
@@ -246,6 +245,9 @@ class QrFrameAnalyzer(
             else ScanLayout.inflate(tile, 1.28f, luma.width, luma.height)
         }
         add(readCropsSerial(luma, retries, retryBinarizer = true))
+        if (transferCount(merged) < 2 && previousTiles.size >= 2) {
+            add(readCropsParallel(luma, ScanLayout.dualHalves(region).filter { !tileCovered(it, merged) }, retryBinarizer = true))
+        }
         return merged
     }
 
@@ -408,11 +410,7 @@ class QrFrameAnalyzer(
             hit.points.map { (x, y) -> (hit.originLeft + x) to (hit.originTop + y) }
         }
         when {
-            hits.size >= 3 -> {
-                tileUndercount.set(0)
-                trackedTiles.set(ScanLayout.tilesFromHits(perCode, imageWidth, imageHeight))
-            }
-            hits.size >= 2 && (previous == null || previous.size < 2) -> {
+            hits.size >= 2 -> {
                 tileUndercount.set(0)
                 trackedTiles.set(ScanLayout.tilesFromHits(perCode, imageWidth, imageHeight))
             }
@@ -420,16 +418,9 @@ class QrFrameAnalyzer(
                 tileUndercount.set(0)
                 trackedTiles.set(ScanLayout.followContainedHits(previous, perCode, imageWidth, imageHeight))
             }
-            previous != null && previous.size >= 2 -> {
-                tileUndercount.set(0)
-            }
             previous != null && previous.isNotEmpty() -> {
                 tileUndercount.set(0)
                 trackedTiles.set(ScanLayout.followContainedHits(previous, perCode, imageWidth, imageHeight))
-            }
-            hits.size >= 2 -> {
-                tileUndercount.set(0)
-                trackedTiles.set(ScanLayout.tilesFromHits(perCode, imageWidth, imageHeight))
             }
         }
     }

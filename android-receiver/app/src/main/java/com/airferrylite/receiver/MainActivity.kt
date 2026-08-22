@@ -638,19 +638,10 @@ class MainActivity : AppCompatActivity() {
         if (now - lastRecoverAt < RECOVER_COOLDOWN_MS) return
         val asked = frameAnalyzer.consumeRecoverRequest()
         val heartbeatDead = lastStatsAt != 0L && now - lastStatsAt > SCAN_STALL_MS
-        if (heartbeatDead) {
-            if (now - recoverBurstStartedAt > RECOVER_BURST_WINDOW_MS) recoverBurst = 0
-            if (recoverBurst == 0) recoverBurstStartedAt = now
-            recoverBurst += 1
-            if (recoverBurst > MAX_RECOVER_BURST) {
-                statusText.text = "摄像头无画面，退出应用重开"
-                return
-            }
-            restartScanner(countRecovery = true, forceRebind = true)
-            statusText.text = "扫描卡住，已重启相机"
-            return
+        if (heartbeatDead || asked) {
+            frameAnalyzer.replaceDecoders()
+            if (heartbeatDead) statusText.text = "解码已重建，未重绑相机"
         }
-        if (asked) frameAnalyzer.replaceDecoders()
     }
 
     private fun restartScanner(countRecovery: Boolean, forceRebind: Boolean = false) {
