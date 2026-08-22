@@ -221,7 +221,7 @@ class QrFrameAnalyzer(
 
     private fun decodeFrame(luma: LumaSnapshot, region: ScanRegion, maxSymbols: Int): List<NativeHit> {
         if (!multiLayout.get()) {
-            if (maxSymbols > 1 && dualStream.get() && !quadStream.get()) {
+            if (maxSymbols > 1 && !singleLayoutConfirmed.get() && !quadStream.get()) {
                 val merged = mutableListOf<NativeHit>()
                 val seen = mutableSetOf<String>()
                 fun add(hits: List<NativeHit>) {
@@ -487,6 +487,12 @@ class QrFrameAnalyzer(
             lockMultiLayout()
             multiHits.addAndGet(transferHits.size.toLong())
         } else {
+            if (multiLayout.get() && (trackedTiles.get()?.size ?: 0) < 2) {
+                multiLayout.set(false)
+                trackedRoi.set(null)
+                singleLayoutConfirmed.set(false)
+                tileUndercount.set(0)
+            }
             val bytes = QrPayload.bytesFrom(transferHits.first().bytes, transferHits.first().text)
             if (QrPayload.isMultiLayout(bytes)) {
                 singleLayoutConfirmed.set(false)

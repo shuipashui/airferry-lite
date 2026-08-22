@@ -265,13 +265,13 @@ class MainActivity : AppCompatActivity() {
             if (override >= 0L) {
                 prefs.edit().remove(PREF_AUTOSTART_BIND_DELAY_OVERRIDE_MS).apply()
             }
+            val halRemain = msUntilCameraBindAllowed()
             val bindDelay = when {
-                fromContinue && override == 0L -> 0L
-                override >= 0L -> override
-                else -> AUTOSTART_BIND_DELAY_MS
+                override >= 0L -> max(override, halRemain)
+                else -> max(AUTOSTART_BIND_DELAY_MS, halRemain)
             }
-            skipHalWaitOnBeginReceive = override >= 0L
-            settlePreviewBeforeAnalyze = !fromContinue
+            skipHalWaitOnBeginReceive = bindDelay > 0L
+            settlePreviewBeforeAnalyze = true
             if (fromContinue) showScanning() else showOpeningCamera()
             previewView.post {
                 watchdog.postDelayed({
@@ -381,10 +381,26 @@ class MainActivity : AppCompatActivity() {
 
     private fun launchReceiveAfterHalWait() {
         softDecoderRecoverAttempted = false
-        showScanning()
-        if (imageAnalysis == null) {
-            settlePreviewBeforeAnalyze = true
+        lastSoftRecoverAt = 0L
+        if (::frameAnalyzer.isInitialized) {
+            frameAnalyzer.resetSession()
+            frameAnalyzer.setAnalysisIdle(false)
         }
+        protocolEpoch.incrementAndGet()
+        protocolExecutor.execute { highSpeedAssembler.reset() }
+        highSpeedSessionActive = false
+        highFrameCount = 0
+        highUniqueFrameCount = 0
+        highDuplicateCount = 0
+        highProtocolErrors = 0
+        highBytesReceived = 0
+        highLastFrameAt = 0
+        lastHighUnique = 0
+        lastHighSolved = 0
+        lastHighTotal = 0
+        resetSpeed()
+        showScanning()
+        settlePreviewBeforeAnalyze = true
         previewView.post { startScanner() }
     }
 
@@ -514,7 +530,8 @@ class MainActivity : AppCompatActivity() {
         val bound = imageAnalysis
         if (bound != null) {
             cameraStarted = true
-            bound.setAnalyzer(cameraExecutor, frameAnalyzer)
+            val settle = settlePreviewBeforeAnalyze.also { settlePreviewBeforeAnalyze = false }
+            attachAnalyzer(bound, settle)
             return
         }
         if (cameraStarted && cameraProvider != null) {
