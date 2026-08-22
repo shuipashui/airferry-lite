@@ -4,7 +4,7 @@
 
 对外说明只写 [README.md](README.md)。不要在 README 里放版本号、实测 KB/s、Worker / VideoFrame 细节或本文链接。
 
-**交接时点：** 2026-08-22。网页接收端 **v85**。Android APK **0.8.28**。进应用不开相机；点「接收文件」才绑 CameraX；收完 `unbind` 进预览（保存 / 继续接收）。诊断常显、高度 48dp。清空扫描中仍只 `resetSession`。0.8.26 连扫五次清空会把相机打残。当前最快：双码 **2068 B · 60 FPS** 首次 **240.0 / 233.9**。
+**交接时点：** 2026-08-22。网页接收端 **v85**。Android APK **0.8.29**。进应用不开相机；点「接收文件」才绑 CameraX；进程内第一次开相机等首帧后立刻重绑一次（红米上第一次绑会 0 命中，收完再绑才 240）。收完 `unbind` 进预览。诊断常显、高度 48dp。清空扫描中仍只 `resetSession`。当前最快：双码 **2068 B · 60 FPS** 首次 **240.0 / 233.9**。
 
 ## 1. 项目一句话
 
@@ -30,10 +30,10 @@
 | 部件 | 版本 | 对照 |
 |---|---|---|
 | 网页接收端 | **v85** | 预览可选手动 30/60 FPS（默认 60）。四码 33 ms · inflight 1；锁格后 Worker 切格 |
-| Android APK | **0.8.28**（versionCode 43） | 点「接收文件」才开相机；收完关相机进预览。诊断常显 48dp。扫描中清空不重绑。看门狗仅心跳死了才重绑 |
+| Android APK | **0.8.29**（versionCode 44） | 点「接收文件」才开相机；进程第一次开相机首帧后重绑。收完关相机进预览。诊断常显 48dp。扫描中清空不重绑。看门狗仅心跳死了才重绑 |
 | 发送端 | AFL2 单文件 HTML | 打开单码预填 **2953 B · 30 FPS**；打开四码预填 **1465 B · 30 FPS**（整屏同换）；打开双码预填 **2068 B · 60 FPS**（V33）。QR 在 4 个 Worker 里生成。60 FPS 四码仍交错。无 45 FPS |
 
-诊断第一行必须是 `网页：v85` 或 `App 0.8.28`。
+诊断第一行必须是 `网页：v85` 或 `App 0.8.29`。
 
 ## 4. 实测对照（只认这些）
 
@@ -141,9 +141,9 @@
 - 停止：冻最后一帧到 `#cameraFreeze` 再清 `srcObject`。`finishing` 时不要清布局字段。
 - SW：`claim` 即可。不要 `client.navigate`，不要 `controllerchange` 时 `reload`。WASM 第一次用再缓存。
 
-## 7. Android APK 实现（0.8.28）
+## 7. Android APK 实现（0.8.29）
 
-源码：`android-receiver/app/src/main/java/com/airferrylite/receiver/`。构建：`android-receiver/build-local.ps1` 或 GitHub Actions `Build Android receiver`。Java 17，SDK 35。`versionName 0.8.28` / `versionCode 43`。不要改解码选项（`tryHarder` / rotate / invert / downscale / `isPure`），除非明确要求动分析管线。
+源码：`android-receiver/app/src/main/java/com/airferrylite/receiver/`。构建：`android-receiver/build-local.ps1` 或 GitHub Actions `Build Android receiver`。Java 17，SDK 35。`versionName 0.8.29` / `versionCode 44`。不要改解码选项（`tryHarder` / rotate / invert / downscale / `isPure`），除非明确要求动分析管线。
 
 APK 比网页快，是因为同一帧 Y 平面上原生 zxing-cpp 能扫多个码，CameraX 丢旧帧，没有 `createImageBitmap` 整帧读回。网页不要搬 APK 的 midX/midY 重排。
 
@@ -151,7 +151,7 @@ APK 比网页快，是因为同一帧 Y 平面上原生 zxing-cpp 能扫多个�
 - `NativeQrDecoder`：先拷 Y 平面再 `readYBuffer`，**rotation 0**。不要 `ImageProxy.read()`（会旋转）。`tryHarder` / rotate / invert / downscale 全关。先 `LOCAL_AVERAGE`，空再 `GLOBAL_HISTOGRAM`。`LumaScaler` 热路径不用。
 - 帧头 `0x0d` / `0x0f` 或一帧 ≥2 个传输码 → 多码；否则单码 `maxSymbols = 1`。未确认前 `maxSymbols = 4`。
 - 四码：已有格子则 4 路并行；锁满且本帧 ≥3 命中则返回，不再串行补扫。≥3 命中才 `tilesFromHits`。四码 1–2 命中只 `followContainedHits`。**双码首次 ≥2 命中才锁格、才 `multiLayout`。** 已锁 2 格后保持格子。已锁 ≥2 格却只命中 1 枚：整幅补扫。格子 <2：只整幅 `maxSymbols=4`，不要再叠四格裁切。已锁 2 格且两枚都打中时不要整幅 max4（0.8.19）。空扫：无锁 2 次清；已锁 ≥2 格要 6 次。
-- 长时间开着会卡：解码超过 400 ms 只换 zxing 对象，不要停分析。相机时间戳不涨或诊断心跳 >2 s，看门狗才重绑 CameraX。**进应用不开相机**；点「接收文件」才 `bindToLifecycle`。**收完 `unbindAll`，进文件预览**（图片直接显示）。「继续接收」再绑一次相机。扫描中「清空重收」只 `resetSession`，不重绑。诊断始终完整文本，高度 48dp，不要点进度条才展开。
+- 长时间开着会卡：解码超过 400 ms 只换 zxing 对象，不要停分析。相机时间戳不涨或诊断心跳 >2 s，看门狗才重绑 CameraX。**进应用不开相机**；点「接收文件」才 `bindToLifecycle`。PreviewView 空闲时 `invisible` 保尺寸。**进程内第一次开相机：等到分析首帧后 `unbind` 再绑一次**（0.8.28 第一次接收 1454 空帧 / 0 命中，后面「继续接收」才 240 KB/s）。不要在扫描中因清空重绑。「继续接收」不再预热。**收完 `unbindAll`，进文件预览**。诊断始终完整文本，高度 48dp。
 - 收完点「保存文件」，不要自动写盘。诊断 ROI 显示 `格 N`。进度只在内存。
 
 ## 8. 架构
@@ -161,7 +161,7 @@ sender/                         浏览器发送：测刷新率、lookahead、画
   dist/airferry-lite-sender.html  提交用的单文件产物
 index.html + app.js + sw.js     GitHub Pages 网页接收端
 web-receiver/                   根目录镜像，必须 byte-identical
-android-receiver/               Kotlin + CameraX + zxing-cpp（0.8.28）
+android-receiver/               Kotlin + CameraX + zxing-cpp（0.8.29）
 shared/ + highspeed-protocol.js AFL1 / AFL2
 vendor/decimen/                 WASM Worker 与 zxing wasm
 third_party/decimen-v0.3/       MIT 源，不要混入后续 AGPL Decimen
@@ -191,7 +191,7 @@ tests/                          npm test
 
 - 不要 `ImageProxy.read()`、不要高速录像接到 ImageAnalysis、不要 `LumaScaler` 回热路径。
 - 不要锁 AF 为 manual/none；不要把四码分析流改成 30；不要 60 Hz 四码四格同刷。
-- 不要为清空或半速去 `unbindAll` / 重绑 CameraX（红米上一次半速、两次没画面）。看门狗只在画面真卡住时重绑。收完关相机、点「继续接收」再开是允许的。
+- 不要为清空或半速去 `unbindAll` / 重绑 CameraX（红米上一次半速、两次没画面）。看门狗只在画面真卡住时重绑。收完关相机、点「继续接收」再开是允许的。进程第一次开相机的首帧预热重绑也允许，只做一次。
 - 不要为杀后台 / resume 再出 APK。resume 重建 zxing 已否。清空可以重建 zxing，不要 `unbindAll`。
 - 不要在已锁 2 格且两枚都打中时整幅 `maxSymbols=4`（0.8.19：1732 每帧 0.01）。不要 60 Hz 双码 60 FPS 交错一格。
 - 不要 60 Hz 上四码 60 FPS **又拿太近**（1465 偏近会话 125.6；拿远四格都进框是 155.3）。
