@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>AirFerry Lite - 离线二维码发送端</title>
-  <style>:root{color-scheme:dark;--bg:#07110f;--panel:#0d1b17;--line:#244137;--text:#edf9f4;--muted:#93b4a8;--accent:#5ef0ad;--accent2:#22b979}*{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden}body{background:radial-gradient(circle at 15% 10%,#12352a 0,transparent 38%),var(--bg);font-family:Inter,ui-sans-serif,system-ui,"Microsoft YaHei",sans-serif;color:var(--text)}.shell{height:100%;max-height:100dvh;overflow:hidden;display:grid;grid-template-columns:minmax(300px,380px) minmax(0,1fr);grid-template-rows:minmax(0,1fr);gap:16px;padding:12px}.panel{background:rgba(13,27,23,.92);border:1px solid var(--line);border-radius:22px;box-shadow:0 24px 60px rgba(0,0,0,.35);min-height:0}.controls{padding:20px;display:flex;flex-direction:column;gap:14px;overflow:auto}.brand{display:flex;gap:14px;align-items:center}.mark{display:grid;place-items:center;width:52px;height:52px;border-radius:16px;background:var(--accent);color:#062218;font-weight:900}.brand h1{margin:0;font-size:25px}.brand p{margin:4px 0 0;color:var(--muted)}.drop{min-height:120px;border:1px dashed #497365;border-radius:18px;display:grid;place-content:center;text-align:center;gap:8px;cursor:pointer;background:#0a1714;flex:none}.drop.drag{border-color:var(--accent);background:#10271f}.drop input{display:none}.drop strong{font-size:17px}.drop span,.tip{color:var(--muted);font-size:13px;line-height:1.65}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.grid label{font-size:13px;color:var(--muted)}select{width:100%;margin-top:7px;padding:11px 12px;border-radius:12px;border:1px solid var(--line);background:#071410;color:var(--text)}.actions{display:flex;gap:10px;flex-wrap:wrap}button,.actions a.jump{border:1px solid var(--line);background:#132b23;color:var(--text);border-radius:12px;padding:12px 16px;font-weight:750;cursor:pointer;text-decoration:none;display:inline-block}button.primary{background:var(--accent);color:#062218;border-color:transparent}button:disabled{opacity:.42;cursor:not-allowed}.status{display:grid;grid-template-columns:1fr 1fr;gap:8px}.status div{padding:11px;background:#091612;border-radius:12px;min-width:0}.status span{display:block;color:var(--muted);font-size:11px}.status strong{display:block;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.progress{height:8px;background:#07110f;border-radius:99px;overflow:hidden;flex:none}.progress i{display:block;width:0;height:100%;background:linear-gradient(90deg,var(--accent2),var(--accent));transition:width .12s}.viewer{display:grid;place-items:center;padding:8px;position:relative;overflow:hidden;background:#0d1b17;min-height:0;border-radius:8px}.viewer:fullscreen,.viewer:-webkit-full-screen{padding:0;background:#fff;border:0;border-radius:0;box-shadow:none}#qrCanvas{display:block;background:#fff;border-radius:0;image-rendering:pixelated}.overlay{position:absolute;inset:0;display:grid;place-items:center;padding:28px;background:rgba(7,17,15,.88)}.overlay.hidden{display:none}@media(max-width:900px){html,body,.shell{height:auto;max-height:none;overflow:auto}.shell{grid-template-columns:1fr;grid-template-rows:auto minmax(70vh,1fr)}.viewer{min-height:70vh}.status{grid-template-columns:1fr}.grid{grid-template-columns:1fr}}@media(max-height:800px){.drop{min-height:88px}.controls{padding:14px;gap:10px}.viewer{padding:8px}}
+  <style>:root{color-scheme:dark;--bg:#07110f;--panel:#0d1b17;--line:#244137;--text:#edf9f4;--muted:#93b4a8;--accent:#5ef0ad;--accent2:#22b979}*{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden}body{background:radial-gradient(circle at 15% 10%,#12352a 0,transparent 38%),var(--bg);font-family:Inter,ui-sans-serif,system-ui,"Microsoft YaHei",sans-serif;color:var(--text)}.shell{height:100%;max-height:100dvh;overflow:hidden;display:grid;grid-template-columns:minmax(300px,380px) minmax(0,1fr);grid-template-rows:minmax(0,1fr);gap:16px;padding:12px}.panel{background:rgba(13,27,23,.92);border:1px solid var(--line);border-radius:22px;box-shadow:0 24px 60px rgba(0,0,0,.35);min-height:0}.controls{padding:20px;display:flex;flex-direction:column;gap:14px;overflow:auto}.brand{display:flex;gap:14px;align-items:center}.mark{display:grid;place-items:center;width:52px;height:52px;border-radius:16px;background:var(--accent);color:#062218;font-weight:900}.brand h1{margin:0;font-size:25px}.brand p{margin:4px 0 0;color:var(--muted)}.drop{min-height:120px;border:1px dashed #497365;border-radius:18px;display:grid;place-content:center;text-align:center;gap:8px;cursor:pointer;background:#0a1714;flex:none}.drop.drag{border-color:var(--accent);background:#10271f}.drop input{display:none}.drop strong{font-size:17px;white-space:pre-line;max-height:7.2em;overflow:auto}.drop span,.tip{color:var(--muted);font-size:13px;line-height:1.65}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.grid label{font-size:13px;color:var(--muted)}select{width:100%;margin-top:7px;padding:11px 12px;border-radius:12px;border:1px solid var(--line);background:#071410;color:var(--text)}.actions{display:flex;gap:10px;flex-wrap:wrap}button,.actions a.jump{border:1px solid var(--line);background:#132b23;color:var(--text);border-radius:12px;padding:12px 16px;font-weight:750;cursor:pointer;text-decoration:none;display:inline-block}button.primary{background:var(--accent);color:#062218;border-color:transparent}button:disabled{opacity:.42;cursor:not-allowed}.status{display:grid;grid-template-columns:1fr 1fr;gap:8px}.status div{padding:11px;background:#091612;border-radius:12px;min-width:0}.status span{display:block;color:var(--muted);font-size:11px}.status strong{display:block;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.progress{height:8px;background:#07110f;border-radius:99px;overflow:hidden;flex:none}.progress i{display:block;width:0;height:100%;background:linear-gradient(90deg,var(--accent2),var(--accent));transition:width .12s}.viewer{display:grid;place-items:center;padding:8px;position:relative;overflow:hidden;background:#0d1b17;min-height:0;border-radius:8px}.viewer:fullscreen,.viewer:-webkit-full-screen{padding:0;background:#fff;border:0;border-radius:0;box-shadow:none}#qrCanvas{display:block;background:#fff;border-radius:0;image-rendering:pixelated}.overlay{position:absolute;inset:0;display:grid;place-items:center;padding:28px;background:rgba(7,17,15,.88)}.overlay.hidden{display:none}@media(max-width:900px){html,body,.shell{height:auto;max-height:none;overflow:auto}.shell{grid-template-columns:1fr;grid-template-rows:auto minmax(70vh,1fr)}.viewer{min-height:70vh}.status{grid-template-columns:1fr}.grid{grid-template-columns:1fr}}@media(max-height:800px){.drop{min-height:88px}.controls{padding:14px;gap:10px}.viewer{padding:8px}}
 .receiver-link{position:relative;z-index:1;display:grid;grid-template-columns:minmax(180px,260px) 200px;gap:28px;align-items:center;width:min(540px,100%);padding:24px;border:1px solid var(--line);border-radius:16px;background:#091612;overflow:visible;text-align:left}.receiver-link-copy{display:flex;flex-direction:column;gap:8px;min-width:0}.receiver-link-copy strong{font-size:18px}.receiver-link-copy span{color:var(--muted);font-size:13px}.receiver-link-copy a{color:var(--accent);font-size:13px;line-height:1.5;overflow-wrap:anywhere}.receiver-link-copy small{margin-top:6px;color:var(--muted);font-size:12px;line-height:1.5}.receiver-qr-wrap{display:grid;place-items:center;width:200px;height:200px;padding:12px;background:#fff;border-radius:6px;overflow:visible}.receiver-link canvas{display:block;width:176px;height:176px;flex:none;background:#fff;border-radius:0;image-rendering:pixelated}@media(max-width:620px){.overlay{padding:16px}.receiver-link{grid-template-columns:1fr;gap:18px;width:min(300px,100%);padding:18px;text-align:center}.receiver-qr-wrap{justify-self:center;width:174px;height:174px}.receiver-link canvas{width:150px;height:150px}}
 .viewer-hud{display:none;position:absolute;top:12px;right:12px;z-index:4;gap:8px;align-items:center}.viewer:fullscreen .viewer-hud,.viewer:-webkit-full-screen .viewer-hud{display:flex}.viewer-hud button{border:1px solid var(--line);background:#132b23;color:var(--text);border-radius:12px;padding:10px 14px;font-weight:750;cursor:pointer}
 </style>
@@ -14,8 +14,8 @@
     <section class="panel controls">
       <div class="brand"><span class="mark">AF</span><div><h1>AirFerry Lite</h1><p>单文件离线二维码发送端</p></div></div>
       <label class="drop" id="dropZone">
-        <input id="fileInput" type="file">
-        <strong id="fileLabel">选择或拖入一个文件</strong>
+        <input id="fileInput" type="file" multiple>
+        <strong id="fileLabel">选择或拖入一个或多个文件</strong>
         <span>文件只在本机浏览器内处理，不会上传</span>
       </label>
       <div class="grid">
@@ -2399,6 +2399,7 @@ var qrcode = function() {
   const viewerHud = el("viewerHud");
   const canvas = el("qrCanvas");
   const overlay = el("overlay");
+  const statusText = el("statusText");
   const compressText = el("compressText");
   const sessionText = el("sessionText");
   const frameText = el("frameText");
@@ -2461,7 +2462,7 @@ var qrcode = function() {
   const COMMON_HZ = [60, 75, 90, 120, 144, 165, 240];
   const QUAD_PAIRS = [[0, 3], [1, 2]];
   const DUAL_SLOTS = [0, 1];
-  let file = null;
+  let files = [];
   let transfer = null;
   let animationFrame = 0;
   let emitted = 0;
@@ -2511,16 +2512,147 @@ var qrcode = function() {
     return frameBytes;
   }
 
-  function selectFile(next) {
-    file = next || null;
-    fileLabel.textContent = file ? file.name + " · " + formatBytes(file.size) : "选择或拖入一个文件";
-    prepareBtn.disabled = !file;
-    resetBtn.disabled = !file;
-    statusText.textContent = file ? "文件已选择" : "等待文件";
+  function zipEntryName(file, used) {
+    const base = String(file && file.name || "file.bin").split(/[\\/]/).pop().replace(/[\u0000-\u001f\u007f]/g, "").trim() || "file.bin";
+    let name = base;
+    let n = 2;
+    while (used.has(name.toLowerCase())) {
+      const dot = base.lastIndexOf(".");
+      name = dot > 0 ? base.slice(0, dot) + " (" + n + ")" + base.slice(dot) : base + " (" + n + ")";
+      n += 1;
+    }
+    used.add(name.toLowerCase());
+    return name;
+  }
+
+  const CRC32_TABLE = (() => {
+    const table = new Uint32Array(256);
+    for (let i = 0; i < 256; i += 1) {
+      let crc = i;
+      for (let bit = 0; bit < 8; bit += 1) crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1;
+      table[i] = crc >>> 0;
+    }
+    return table;
+  })();
+
+  function crc32(bytes) {
+    let crc = 0xffffffff;
+    for (let i = 0; i < bytes.length; i += 1) crc = CRC32_TABLE[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8);
+    return (crc ^ 0xffffffff) >>> 0;
+  }
+
+  function concatBytes(chunks) {
+    let total = 0;
+    for (const chunk of chunks) total += chunk.length;
+    const out = new Uint8Array(total);
+    let at = 0;
+    for (const chunk of chunks) {
+      out.set(chunk, at);
+      at += chunk.length;
+    }
+    return out;
+  }
+
+  function zipStore(entries) {
+    const encoder = new TextEncoder();
+    const locals = [];
+    const centrals = [];
+    let offset = 0;
+    for (const entry of entries) {
+      const nameBytes = encoder.encode(entry.name);
+      const data = entry.bytes;
+      const crc = crc32(data);
+      const local = new Uint8Array(30 + nameBytes.length);
+      const localView = new DataView(local.buffer);
+      local[0] = 0x50; local[1] = 0x4b; local[2] = 3; local[3] = 4;
+      localView.setUint16(4, 20, true);
+      localView.setUint16(6, 0x0800, true);
+      localView.setUint16(26, nameBytes.length, true);
+      localView.setUint32(14, crc, true);
+      localView.setUint32(18, data.length, true);
+      localView.setUint32(22, data.length, true);
+      local.set(nameBytes, 30);
+      const central = new Uint8Array(46 + nameBytes.length);
+      const centralView = new DataView(central.buffer);
+      central[0] = 0x50; central[1] = 0x4b; central[2] = 1; central[3] = 2;
+      centralView.setUint16(4, 20, true);
+      centralView.setUint16(6, 20, true);
+      centralView.setUint16(8, 0x0800, true);
+      centralView.setUint16(28, nameBytes.length, true);
+      centralView.setUint32(16, crc, true);
+      centralView.setUint32(20, data.length, true);
+      centralView.setUint32(24, data.length, true);
+      centralView.setUint32(42, offset, true);
+      central.set(nameBytes, 46);
+      locals.push(local, data);
+      centrals.push(central);
+      offset += local.length + data.length;
+    }
+    const centralDir = concatBytes(centrals);
+    const eocd = new Uint8Array(22);
+    const eocdView = new DataView(eocd.buffer);
+    eocd[0] = 0x50; eocd[1] = 0x4b; eocd[2] = 5; eocd[3] = 6;
+    eocdView.setUint16(8, entries.length, true);
+    eocdView.setUint16(10, entries.length, true);
+    eocdView.setUint32(12, centralDir.length, true);
+    eocdView.setUint32(16, offset, true);
+    return concatBytes(locals.concat([centralDir, eocd]));
+  }
+
+  async function packSelectedFiles(selected) {
+    const limit = H && H.MAX_FILE_BYTES || 67108864;
+    const total = selected.reduce((sum, item) => sum + item.size, 0);
+    if (!selected.length) throw new Error("请先选择文件");
+    if (total > limit) throw new Error("合计超过 64 MB");
+    if (selected.length === 1) {
+      const item = selected[0];
+      return {
+        name: item.name,
+        type: item.type || "application/octet-stream",
+        bytes: new Uint8Array(await item.arrayBuffer()),
+        label: item.name + " · " + formatBytes(item.size)
+      };
+    }
+    const used = new Set();
+    const entries = [];
+    for (const item of selected) {
+      entries.push({
+        name: zipEntryName(item, used),
+        bytes: new Uint8Array(await item.arrayBuffer())
+      });
+    }
+    const bytes = zipStore(entries);
+    return {
+      name: selected.length + "个文件.zip",
+      type: "application/zip",
+      bytes,
+      label: selected.length + " 个文件 · " + formatBytes(total)
+    };
+  }
+
+  function selectFiles(list) {
+    files = list && list.length ? Array.from(list).filter(item => item && item.size > 0) : [];
+    const total = files.reduce((sum, item) => sum + item.size, 0);
+    if (!files.length) {
+      fileLabel.textContent = "选择或拖入一个或多个文件";
+      prepareBtn.disabled = true;
+      resetBtn.disabled = true;
+      statusText.textContent = "等待文件";
+    } else if (files.length === 1) {
+      fileLabel.textContent = files[0].name + " · " + formatBytes(files[0].size);
+      prepareBtn.disabled = false;
+      resetBtn.disabled = false;
+      statusText.textContent = "文件已选择";
+    } else {
+      fileLabel.textContent = files.length + " 个文件 · " + formatBytes(total) + "\n" + files.map(item => item.name).join("\n");
+      prepareBtn.disabled = false;
+      resetBtn.disabled = false;
+      statusText.textContent = files.length + " 个文件已选择";
+    }
     if (compressText) compressText.textContent = "—";
   }
 
-  fileInput.addEventListener("change", () => selectFile(fileInput.files[0]));
+  fileInput.addEventListener("change", () => selectFiles(fileInput.files));
   ["dragenter", "dragover"].forEach(type => dropZone.addEventListener(type, event => {
     event.preventDefault();
     dropZone.classList.add("drag");
@@ -2530,18 +2662,18 @@ var qrcode = function() {
     dropZone.classList.remove("drag");
   }));
   dropZone.addEventListener("drop", event => {
-    if (event.dataTransfer.files[0]) selectFile(event.dataTransfer.files[0]);
+    if (event.dataTransfer.files.length) selectFiles(event.dataTransfer.files);
   });
 
   prepareBtn.addEventListener("click", async () => {
-    if (!file) return;
+    if (!files.length) return;
     stop();
     statusText.textContent = "正在读取文件";
     prepareBtn.disabled = true;
     try {
-      const sourceBytes = new Uint8Array(await file.arrayBuffer());
+      const payload = await packSelectedFiles(files);
       if (!H) throw new Error("高速协议未加载");
-      const packed = await H.packFile(file.name, file.type || "application/octet-stream", sourceBytes);
+      const packed = await H.packFile(payload.name, payload.type, payload.bytes);
       codesPerScreen = codesForMode(qrMode.value);
       const frameBytes = Number(chunkSize.value);
       const effectiveFrameBytes = capFrameBytes(codesPerScreen, frameBytes);
@@ -2565,7 +2697,7 @@ var qrcode = function() {
         compression: packed.compression,
         transmittedSize: packed.transmittedSize
       };
-      const prepared = { encoding: packed.compression, originalSize: sourceBytes.length, savedBytes: sourceBytes.length - packed.transmittedSize };
+      const prepared = { encoding: packed.compression, originalSize: payload.bytes.length, savedBytes: payload.bytes.length - packed.transmittedSize };
       resetEncodePipeline();
       highNextSeq = 0;
       highNextPair = 0;
@@ -2608,7 +2740,7 @@ var qrcode = function() {
           ? "gzip 已压缩 " + savedPct + "% · 传 " + formatBytes(packed.transmittedSize)
           : "未压缩 · 原文件发送";
       }
-      fileLabel.textContent = file.name + " · " + formatBytes(file.size) + (gzip ? " · 已压缩 " + savedPct + "%" : " · 未压缩");
+      fileLabel.textContent = payload.label + (gzip ? " · 已压缩 " + savedPct + "%" : " · 未压缩");
       statusText.textContent = "二维码流已生成，可开始播放";
       playBtn.disabled = false;
       if (hudPlayBtn) hudPlayBtn.disabled = false;
@@ -2640,10 +2772,10 @@ var qrcode = function() {
   });
   resetBtn.addEventListener("click", () => {
     stop();
-    file = null;
+    files = [];
     transfer = null;
     fileInput.value = "";
-    selectFile(null);
+    selectFiles([]);
     playBtn.disabled = true;
     if (hudPlayBtn) hudPlayBtn.disabled = true;
     resetBtn.disabled = true;
@@ -2866,8 +2998,20 @@ var qrcode = function() {
   function waitForQueueDepth(count) {
     if (highQueue.length >= count) return Promise.resolve();
     pumpEncode();
-    return new Promise((resolve) => {
-      queueWaiters.push({ count, resolve });
+    return new Promise((resolve, reject) => {
+      const waiter = {
+        count,
+        resolve: () => {
+          clearTimeout(timer);
+          resolve();
+        }
+      };
+      const timer = setTimeout(() => {
+        const at = queueWaiters.indexOf(waiter);
+        if (at >= 0) queueWaiters.splice(at, 1);
+        reject(new Error("生成超时。请用 Chrome 打开 sender/dist/airferry-lite-sender.html，不要用 Internet Explorer"));
+      }, 20000);
+      queueWaiters.push(waiter);
     });
   }
 
@@ -2945,8 +3089,8 @@ var qrcode = function() {
     } catch (error) {
       qrWorkers.length = 0;
       qrWorkerIdle.length = 0;
+      if (url) URL.revokeObjectURL(url);
     }
-    if (url) URL.revokeObjectURL(url);
   }
 
   function recycleQrWorker(worker) {
@@ -3016,7 +3160,15 @@ var qrcode = function() {
     return new Promise((resolve) => {
       const id = qrWorkerNextId;
       qrWorkerNextId += 1;
-      qrWorkerWait.push({ id, seq, version, bytes, key, resolve });
+      let settled = false;
+      const finish = (pattern) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(pattern);
+      };
+      const timer = setTimeout(() => finish(getHighSpeedQrPattern(bytes, seq)), 2500);
+      qrWorkerWait.push({ id, seq, version, bytes, key, resolve: finish });
       dispatchQrWorker();
     });
   }

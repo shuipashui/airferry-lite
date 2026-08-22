@@ -123,14 +123,23 @@
             android:orientation="vertical"
             android:padding="8dp"
             android:visibility="gone">
-            <ImageView
-                android:id="@+id/resultImage"
+            <ScrollView
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
                 android:layout_weight="1"
-                android:adjustViewBounds="true"
-                android:contentDescription="文件预览"
-                android:scaleType="fitCenter" />
+                android:fillViewport="true">
+                <TextView
+                    android:id="@+id/resultNames"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:lineSpacingExtra="6dp"
+                    android:padding="12dp"
+                    android:textColor="@color/af_text"
+                    android:textIsSelectable="true"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+            </ScrollView>
             <TextView
                 android:id="@+id/resultMeta"
                 android:layout_width="match_parent"
@@ -138,7 +147,7 @@
                 android:ellipsize="end"
                 android:maxLines="2"
                 android:paddingTop="8dp"
-                android:textColor="@color/af_text"
+                android:textColor="@color/af_muted"
                 android:textSize="13sp" />
             <LinearLayout
                 android:layout_width="match_parent"
@@ -165,6 +174,57 @@
                     android:text="继续接收"
                     android:textSize="13sp" />
             </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/restartingPanel"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@color/af_panel"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="28dp"
+            android:visibility="gone">
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="正在释放相机"
+                android:textColor="@color/af_text"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+            <TextView
+                android:id="@+id/restartCountdown"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:fontFamily="sans-serif-medium"
+                android:text="2"
+                android:textColor="@color/af_accent"
+                android:textSize="64sp"
+                android:textStyle="bold" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="秒后重新扫描"
+                android:textColor="@color/af_muted"
+                android:textSize="15sp" />
+            <ProgressBar
+                android:id="@+id/restartProgress"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="8dp"
+                android:layout_marginTop="28dp"
+                android:max="1000"
+                android:progress="0"
+                android:progressTint="@color/af_accent" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:gravity="center"
+                android:text="请继续对准电脑二维码"
+                android:textColor="@color/af_muted"
+                android:textSize="13sp" />
         </LinearLayout>
     </FrameLayout>
 

@@ -21,10 +21,8 @@ import android.util.Range
 import android.util.Size
 import android.view.Surface
 import android.view.WindowManager
-import android.graphics.BitmapFactory
 import android.view.View
 import android.widget.Button
-import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
 import com.google.android.material.button.MaterialButtonToggleGroup
@@ -57,8 +55,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var previewView: PreviewView
     private lateinit var idlePanel: View
     private lateinit var resultPanel: View
-    private lateinit var resultImage: ImageView
+    private lateinit var restartingPanel: View
+    private lateinit var resultNames: TextView
     private lateinit var resultMeta: TextView
+    private lateinit var restartCountdown: TextView
+    private lateinit var restartProgress: ProgressBar
     private lateinit var scanMetaRow: View
     private lateinit var statusText: TextView
     private lateinit var fileText: TextView
@@ -133,8 +134,20 @@ class MainActivity : AppCompatActivity() {
     private var recoverBurst = 0
     private var recoverBurstStartedAt = 0L
     private var processRestarting = false
+    private var restartStartedAt = 0L
     private var settlePreviewBeforeAnalyze = false
     private var aeNudgeOnAnyEmpty = false
+    private val restartProgressTick = object : Runnable {
+        override fun run() {
+            if (!processRestarting) return
+            val elapsed = (SystemClock.elapsedRealtime() - restartStartedAt).coerceAtLeast(0L)
+            val remaining = (PROCESS_RESTART_DELAY_MS - elapsed).coerceAtLeast(0L)
+            restartCountdown.text = ((remaining + 999) / 1000).toInt().coerceAtLeast(0).toString()
+            restartProgress.progress = ((elapsed * restartProgress.max) / PROCESS_RESTART_DELAY_MS).toInt()
+                .coerceIn(0, restartProgress.max)
+            if (remaining > 0) watchdog.postDelayed(this, 50)
+        }
+    }
 
     private data class PendingSave(val name: String, val mime: String, val bytes: ByteArray)
 
@@ -158,8 +171,11 @@ class MainActivity : AppCompatActivity() {
         previewView.implementationMode = PreviewView.ImplementationMode.PERFORMANCE
         idlePanel = findViewById(R.id.idlePanel)
         resultPanel = findViewById(R.id.resultPanel)
-        resultImage = findViewById(R.id.resultImage)
+        restartingPanel = findViewById(R.id.restartingPanel)
+        resultNames = findViewById(R.id.resultNames)
         resultMeta = findViewById(R.id.resultMeta)
+        restartCountdown = findViewById(R.id.restartCountdown)
+        restartProgress = findViewById(R.id.restartProgress)
         scanMetaRow = findViewById(R.id.scanMetaRow)
         statusText = findViewById(R.id.statusText)
         fileText = findViewById(R.id.fileText)
@@ -270,10 +286,8 @@ class MainActivity : AppCompatActivity() {
             .edit()
             .putBoolean(PREF_AUTOSTART_SCAN, true)
             .commit()
-        statusText.text = "正在释放相机，约 2 秒后重新扫描"
-        findViewById<View>(R.id.resultPanel).post {
-            watchdog.postDelayed({ restartProcessForScan() }, PROCESS_RESTART_DELAY_MS)
-        }
+        showRestarting()
+        watchdog.postDelayed({ restartProcessForScan() }, PROCESS_RESTART_DELAY_MS)
     }
 
     private fun restartProcessForScan() {
@@ -301,6 +315,7 @@ class MainActivity : AppCompatActivity() {
     private fun showIdle() {
         idlePanel.visibility = View.VISIBLE
         resultPanel.visibility = View.GONE
+        restartingPanel.visibility = View.GONE
         scanMetaRow.visibility = View.GONE
         resetButton.visibility = View.GONE
         startReceiveButton.isEnabled = true
@@ -310,6 +325,7 @@ class MainActivity : AppCompatActivity() {
     private fun showScanning() {
         idlePanel.visibility = View.GONE
         resultPanel.visibility = View.GONE
+        restartingPanel.visibility = View.GONE
         scanMetaRow.visibility = View.VISIBLE
         resetButton.visibility = View.VISIBLE
         statusText.text = "请对准电脑二维码"
@@ -317,27 +333,32 @@ class MainActivity : AppCompatActivity() {
 
     private fun showResult(pending: PendingSave) {
         idlePanel.visibility = View.GONE
+        restartingPanel.visibility = View.GONE
         resultPanel.visibility = View.VISIBLE
         scanMetaRow.visibility = View.GONE
         resetButton.visibility = View.GONE
-        resultMeta.text = "${pending.name} · ${formatBytes(pending.bytes.size.toLong())} · ${pending.mime.ifBlank { "未知类型" }}"
-        val preview = previewBitmap(pending)
-        if (preview != null) {
-            resultImage.visibility = View.VISIBLE
-            resultImage.setImageBitmap(preview)
+        val names = ZipListing.names(pending.bytes)
+        resultNames.text = if (!names.isNullOrEmpty()) names.joinToString("\n") else pending.name
+        resultMeta.text = if (!names.isNullOrEmpty() && names.size > 1) {
+            "${names.size} 个文件 · ${formatBytes(pending.bytes.size.toLong())} · ${pending.name}"
         } else {
-            resultImage.setImageDrawable(null)
-            resultImage.visibility = View.GONE
+            "${pending.name} · ${formatBytes(pending.bytes.size.toLong())}"
         }
         statusText.text = "接收完成，可保存或继续接收"
     }
 
-    private fun previewBitmap(pending: PendingSave) = try {
-        val mime = pending.mime.lowercase()
-        if (!mime.startsWith("image/")) null
-        else BitmapFactory.decodeByteArray(pending.bytes, 0, pending.bytes.size)
-    } catch (_: Throwable) {
-        null
+    private fun showRestarting() {
+        idlePanel.visibility = View.GONE
+        resultPanel.visibility = View.GONE
+        scanMetaRow.visibility = View.GONE
+        resetButton.visibility = View.GONE
+        restartingPanel.visibility = View.VISIBLE
+        restartStartedAt = SystemClock.elapsedRealtime()
+        restartCountdown.text = ((PROCESS_RESTART_DELAY_MS + 999) / 1000).toString()
+        restartProgress.progress = 0
+        statusText.text = "正在释放相机"
+        watchdog.removeCallbacks(restartProgressTick)
+        watchdog.post(restartProgressTick)
     }
 
     private fun pauseScanner() {
@@ -727,7 +748,7 @@ class MainActivity : AppCompatActivity() {
         speedText.text = "实时 — · 平均 —"
         missingText.text = "缺失片段：—"
         statusText.text = "正在高速扫描"
-        if (::resultImage.isInitialized) resultImage.setImageDrawable(null)
+        if (::resultNames.isInitialized) resultNames.text = ""
         showScanning()
         renderDiagnostics()
     }
@@ -889,6 +910,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         watchdog.removeCallbacks(watchdogTick)
+        watchdog.removeCallbacks(restartProgressTick)
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         imageAnalysis?.clearAnalyzer()
         cameraProvider?.unbindAll()

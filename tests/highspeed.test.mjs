@@ -187,7 +187,8 @@ assert.ok(sender.includes("2068 B · 60 FPS"));
 assert.ok(sender.includes("QUAD_PAIRS"));
 assert.ok(sender.includes("function updateIntervalVsyncs"));
 assert.ok(!sender.includes("drawScreen(next.patterns)"));
-assert.ok(!sender.includes("setTimeout"), "sender playback must stay synchronized with display refresh");
+assert.ok(!sender.includes("setTimeout(playLoop"), "sender playback must stay synchronized with display refresh");
+assert.ok(!sender.includes("setInterval("), "sender playback must not use setInterval");
 assert.ok(template.includes('id="rateHint"'), "sender must show theoretical rate for the selected parameters");
 assert.ok(sender.includes("function currentLayout"));
 assert.ok(sender.includes("function renderRateHint"));
@@ -214,6 +215,12 @@ assert.ok(sender.includes("layoutCodes: codesPerScreen === 1 ? 1 : codesPerScree
 assert.ok(!sender.includes("function drawDualBallast"));
 assert.ok(template.includes('id="hudPlayBtn"') && template.includes('id="hudFsBtn"'));
 assert.ok(sender.includes('if (layout === "dual") cap = Math.min(hz, 60)'));
+assert.ok(template.includes('id="fileInput"') && template.includes("multiple"), "sender must allow selecting several files");
+assert.ok(template.includes("选择或拖入一个或多个文件"));
+assert.ok(sender.includes("function zipStore"));
+assert.ok(sender.includes("function packSelectedFiles"));
+assert.ok(sender.includes("个文件.zip"));
+assert.ok(sender.includes("function selectFiles"));
 assert.ok(template.includes('id="openReceiver"'), "sender must link to the receiver");
 assert.ok(sender.includes("openReceiver.href = RECEIVER_URL"));
 

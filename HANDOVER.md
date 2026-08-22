@@ -4,7 +4,7 @@
 
 对外说明只写 [README.md](README.md)。不要在 README 里放版本号、实测 KB/s、Worker / VideoFrame 细节或本文链接。
 
-**交接时点：** 2026-08-22。网页接收端 **v86**。Android APK **0.8.57**。给蓝只发 Artifacts 直链。**0.8.43 冻结：** 首次 234.6、继续 238.4、强杀 236.2。**0.8.44–0.8.46 已否。** 发送端双码仍是 2×2 上排，帧头 **`layoutCodes=2`**，下排白底。**0.8.52–0.8.53 已否。** **0.8.54：** 未锁只便宜 max4 + 半幅。**0.8.55：** 多次首次 240。**0.8.56：** 首次会话 97.2、格 2、每帧 0.11（点测加到每一次 bind，首次也不稳）。**0.8.57：** 首次不再点测/轻推（回到 0.8.54 曝光）；继续接收仍空帧轻推。收完诊断保留曝光计数。不要 onStop unbind。不要看门狗 unbind。
+**交接时点：** 2026-08-22。网页接收端 **v86**。Android APK **0.8.58**。给蓝只发 Artifacts 直链。**0.8.43 冻结：** 首次 234.6、继续 238.4、强杀 236.2。**0.8.44–0.8.46 已否。** 发送端双码仍是 2×2 上排，帧头 **`layoutCodes=2`**，下排白底。**0.8.52–0.8.53 已否。** **0.8.54：** 未锁只便宜 max4 + 半幅。**0.8.55：** 多次首次 240。**0.8.56：** 首次会话 97.2、格 2、每帧 0.11。**0.8.57：** 首次 148.1 / 每帧 0.62；继续 144.6 / 点测 11。**0.8.58：** 继续接收 2 秒等待页；多文件打成 zip，预览只列文件名。不要 onStop unbind。不要看门狗 unbind。
 
 ## 1. 项目一句话
 
@@ -31,10 +31,10 @@
 | 部件 | 版本 | 对照 |
 |---|---|---|
 | 网页接收端 | **v86** | 预览可选手动 30/60 FPS（默认 60）。四码 33 ms · inflight 1；锁格后 Worker 切格。识别 `layoutCodes=2` |
-| Android APK | **0.8.57**（versionCode 72） | 首次不点测。继续接收才空帧轻推。0.8.56 首次 97.2 / 每帧 0.11 |
+| Android APK | **0.8.58**（versionCode 73） | 继续接收倒计时等待。多文件 zip 预览只列名。0.8.57 首次 148.1 / 继续 144.6 |
 | 发送端 | AFL2 单文件 HTML | 打开单码预填 **2953 B · 30 FPS**；打开四码预填 **1465 B · 30 FPS**（整屏同换）；打开双码预填 **2068 B · 60 FPS**（V33）。QR 在 4 个 Worker 里生成。60 FPS 四码仍交错。无 45 FPS |
 
-诊断第一行必须是 `网页：v86` 或 `App 0.8.57`。
+诊断第一行必须是 `网页：v86` 或 `App 0.8.58`。
 
 ## 4. 实测对照（只认这些）
 
@@ -59,6 +59,8 @@
 
 | 发送 | 距离 | 采集 / 分析 | 每帧 | ROI | 唯一 / 重复 | 实时 / 平均 / 会话 |
 |---|---|---|---|---|---|---|
+| 2068 B · 60 FPS · 双码同刷 | 窗口 · 0.8.57 首次 | 59.3 / 59.3 · 11.2 ms | **0.62** · 格 2 | 多码 | 1319 / 4 | 120.2 / 145.0 / **148.1 KB/s** |
+| 2068 B · 60 FPS · 双码同刷 | 窗口 · 0.8.57 继续接收 | 55.9 / 55.9 · 14.3 ms | **0.99** · 点测 11 · 轻推 0 | 格 2 | 1291 / 9 | 215.4 / 214.0 / **144.6 KB/s** |
 | 2068 B · 60 FPS · 双码同刷 | 窗口 · 0.8.56 首次（收完） | 58.8 / 58.8 · 11.5 ms | **0.11** · 格 2 | 多码 | 1211 / 5 | 117.3 / 114.0 / **97.2 KB/s** |
 | 2068 B · 60 FPS · 双码同刷 | 窗口 · 0.8.55 继续接收 | 60.7 / 60.7 · 10.9 ms | **0.00** · 轻推 0 | 全图 · 单码 | 0 / 0 | 会话 **0 B/s** |
 | 2068 B · 60 FPS · 双码同刷 | 窗口 · 0.8.54 半速（多码命中 0） | 59.9 / 59.9 · 11.6 ms | **0.00** | 全图 · 单码 | 776 / 0 | 85.5 / 108.7 / **89.5 KB/s** |
@@ -174,9 +176,9 @@
 - 停止：冻最后一帧到 `#cameraFreeze` 再清 `srcObject`。`finishing` 时不要清布局字段。
 - SW：`claim` 即可。不要 `client.navigate`，不要 `controllerchange` 时 `reload`。WASM 第一次用再缓存。
 
-## 7. Android APK 实现（0.8.57）
+## 7. Android APK 实现（0.8.58）
 
-源码：`android-receiver/app/src/main/java/com/airferrylite/receiver/`。构建：`android-receiver/build-local.ps1` 或 GitHub Actions `Build Android receiver`。Java 17，SDK 35。`versionName 0.8.57` / `versionCode 72`。不要改解码选项（`tryHarder` / rotate / invert / downscale / `isPure`），除非明确要求动分析管线。
+源码：`android-receiver/app/src/main/java/com/airferrylite/receiver/`。构建：`android-receiver/build-local.ps1` 或 GitHub Actions `Build Android receiver`。Java 17，SDK 35。`versionName 0.8.58` / `versionCode 73`。不要改解码选项（`tryHarder` / rotate / invert / downscale / `isPure`），除非明确要求动分析管线。
 
 APK 比网页快，是因为同一帧 Y 平面上原生 zxing-cpp 能扫多个码，CameraX 丢旧帧，没有 `createImageBitmap` 整帧读回。网页不要搬 APK 的 midX/midY 重排。
 
@@ -186,8 +188,8 @@ APK 比网页快，是因为同一帧 Y 平面上原生 zxing-cpp 能扫多个�
 - 一帧 ≥2 个传输码锁四码路径。未锁双码时只做全图 max4，1 命中最多再并行左右半幅；**不要**因 1 枚 `0x1c` 跑串行八路兄妹补扫（0.8.53：16.4 ms / 38 KB/s）。空帧不要串行四格（0.8.52：20.6 ms）。同一帧两枚同时命中才锁双码。空扫清格后解锁回到未确认 max4。单枚四码帧头不锁补扫、不确认单码。确认单码后才 `maxSymbols = 1`。已锁双码且格子还不到 2 才允许 `acquireDualSibling`。
 - 四码：已有格子则 4 路并行；锁满且本帧 ≥3 命中则返回，不再串行补扫。≥3 命中才 `tilesFromHits`。已锁 ≥3 格时 1–2 命中只 `followContainedHits`。格 2 **尚未**连续 6 帧 2 命中且不是双码帧头时仍四格补扫（0.8.36 一锁 格 2 就 return → 四码约 84）。一旦本会话出现过 3 命中，格 2 补扫一直开、收束作废。已锁 2 格且两枚都打中时不要整幅 max4（0.8.19）。
 - **双码：** ≥2 真命中才 `tilesFromHits`，**已锁 格 2 后只要本帧仍有 2 命中就重排**。1 命中 `followContainedHits`。双码路径下格子 <2 才整幅 max4，再左右两裁。漏一枚只 inflate 漏格 + 左右两裁。已锁 ≥2 格即使本帧只中 1 枚也不要整幅 max4（0.8.35：28 FPS / 67.7）。空扫：无锁 2 次清格和 ROI；已锁 ≥2 格要 6 次。清格时解锁 `dualHint` / `dualLayout` / `multiLayout`，回到未确认 max4。
-- 长时间开着会卡：解码超过 400 ms 只换 zxing 对象，不要停分析。看门狗心跳死了或解码超时**只 `replaceDecoders`，不要 `unbindAll`**。**进应用不开相机**。这台小米**每个进程只能成功 bind 一次**。收完 `unbindAll`。「继续接收」按下后再等 2 秒冷启动；新进程先预览 1.2 秒再挂分析。不要 `onStop` unbind。不要 `shutdownAsync`。扫描中清空 `resetSession`。不要空扫自动冷启动。不要首帧预热。不要独立 Lifecycle。诊断始终完整文本，高度 48dp。
-- 收完点「保存文件」，不要自动写盘。诊断 ROI 显示 `格 N`。进度只在内存。
+- 长时间开着会卡：解码超过 400 ms 只换 zxing 对象，不要停分析。看门狗心跳死了或解码超时**只 `replaceDecoders`，不要 `unbindAll`**。**进应用不开相机**。这台小米**每个进程只能成功 bind 一次**。收完 `unbindAll`。「继续接收」按下后再等 **2 秒**冷启动（倒计时等待页，不要立刻 `killProcess`）。新进程先预览 1.2 秒再挂分析。不要 `onStop` unbind。不要 `shutdownAsync`。扫描中清空 `resetSession`。不要空扫自动冷启动。不要首帧预热。不要独立 Lifecycle。诊断始终完整文本，高度 48dp。
+- 收完预览只列文件名（多文件 zip 列出内部名）。点「保存文件」，不要自动写盘。诊断 ROI 显示 `格 N`。进度只在内存。
 - **交给蓝：** 只发 GitHub Actions 链接，并写「拉到最底下 Artifacts，点 airferry-lite-android-debug」。需要登录。不要本地 apk 路径。
 
 ## 8. 架构
@@ -197,7 +199,7 @@ sender/                         浏览器发送：测刷新率、lookahead、画
   dist/airferry-lite-sender.html  提交用的单文件产物
 index.html + app.js + sw.js     GitHub Pages 网页接收端
 web-receiver/                   根目录镜像，必须 byte-identical
-android-receiver/               Kotlin + CameraX + zxing-cpp（0.8.57）
+android-receiver/               Kotlin + CameraX + zxing-cpp（0.8.58）
 shared/ + highspeed-protocol.js AFL1 / AFL2
 vendor/decimen/                 WASM Worker 与 zxing wasm
 third_party/decimen-v0.3/       MIT 源，不要混入后续 AGPL Decimen
