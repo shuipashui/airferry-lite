@@ -123,23 +123,36 @@
             android:orientation="vertical"
             android:padding="8dp"
             android:visibility="gone">
-            <ScrollView
+            <FrameLayout
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
-                android:layout_weight="1"
-                android:fillViewport="true">
-                <TextView
-                    android:id="@+id/resultNames"
+                android:layout_weight="1">
+                <ImageView
+                    android:id="@+id/resultImage"
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:gravity="center_vertical"
-                    android:lineSpacingExtra="6dp"
-                    android:padding="12dp"
-                    android:textColor="@color/af_text"
-                    android:textIsSelectable="true"
-                    android:textSize="18sp"
-                    android:textStyle="bold" />
-            </ScrollView>
+                    android:layout_height="match_parent"
+                    android:adjustViewBounds="true"
+                    android:contentDescription="文件预览"
+                    android:scaleType="fitCenter"
+                    android:visibility="gone" />
+                <ScrollView
+                    android:id="@+id/resultNamesScroll"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:fillViewport="true">
+                    <TextView
+                        android:id="@+id/resultNames"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:lineSpacingExtra="6dp"
+                        android:padding="12dp"
+                        android:textColor="@color/af_text"
+                        android:textIsSelectable="true"
+                        android:textSize="18sp"
+                        android:textStyle="bold" />
+                </ScrollView>
+            </FrameLayout>
             <TextView
                 android:id="@+id/resultMeta"
                 android:layout_width="match_parent"

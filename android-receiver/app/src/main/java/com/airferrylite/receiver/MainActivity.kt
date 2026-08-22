@@ -21,15 +21,16 @@ import android.util.Range
 import android.util.Size
 import android.view.Surface
 import android.view.WindowManager
+import android.graphics.BitmapFactory
 import android.view.View
 import android.widget.Button
+import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
 import com.google.android.material.button.MaterialButtonToggleGroup
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
-import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.core.resolutionselector.ResolutionSelector
@@ -46,7 +47,6 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
@@ -56,6 +56,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var idlePanel: View
     private lateinit var resultPanel: View
     private lateinit var restartingPanel: View
+    private lateinit var resultImage: ImageView
+    private lateinit var resultNamesScroll: View
     private lateinit var resultNames: TextView
     private lateinit var resultMeta: TextView
     private lateinit var restartCountdown: TextView
@@ -136,7 +138,7 @@ class MainActivity : AppCompatActivity() {
     private var processRestarting = false
     private var restartStartedAt = 0L
     private var settlePreviewBeforeAnalyze = false
-    private var aeNudgeOnAnyEmpty = false
+    private var halSettleAlreadyWaited = false
     private val restartProgressTick = object : Runnable {
         override fun run() {
             if (!processRestarting) return
@@ -172,6 +174,8 @@ class MainActivity : AppCompatActivity() {
         idlePanel = findViewById(R.id.idlePanel)
         resultPanel = findViewById(R.id.resultPanel)
         restartingPanel = findViewById(R.id.restartingPanel)
+        resultImage = findViewById(R.id.resultImage)
+        resultNamesScroll = findViewById(R.id.resultNamesScroll)
         resultNames = findViewById(R.id.resultNames)
         resultMeta = findViewById(R.id.resultMeta)
         restartCountdown = findViewById(R.id.restartCountdown)
@@ -218,7 +222,6 @@ class MainActivity : AppCompatActivity() {
                 val bytes = decoded.bytes
                 if (bytes != null && HighSpeedAssembler.looksLikeFrame(bytes)) {
                     highSpeedSessionActive = true
-                    ContextCompat.getMainExecutor(this).execute { restoreExposureAfterHit() }
                     val epoch = protocolEpoch.get()
                     pendingProtocolFrames.incrementAndGet()
                     protocolExecutor.execute {
@@ -242,22 +245,24 @@ class MainActivity : AppCompatActivity() {
                     recoverBurst = 0
                     renderDiagnostics()
                 }
-            },
-            onHighContrastMiss = {
-                ContextCompat.getMainExecutor(this).execute { nudgeExposureForStuckQr() }
             }
         )
         findViewById<Button>(R.id.copyDiagnosticsButton).setOnClickListener { copyDiagnostics() }
         saveButton.setOnClickListener { savePendingFile() }
         watchdog.postDelayed(watchdogTick, WATCHDOG_INTERVAL_MS)
-        showIdle()
-        renderDiagnostics()
         if (consumeAutostartScan()) {
             settlePreviewBeforeAnalyze = true
-            aeNudgeOnAnyEmpty = true
-            frameAnalyzer.setNudgeOnAnyEmpty(true)
-            previewView.post { watchdog.postDelayed({ requestStartReceive() }, AUTOSTART_BIND_DELAY_MS) }
+            showOpeningCamera()
+            previewView.post {
+                watchdog.postDelayed({
+                    halSettleAlreadyWaited = true
+                    requestStartReceive()
+                }, AUTOSTART_BIND_DELAY_MS)
+            }
+        } else {
+            showIdle()
         }
+        renderDiagnostics()
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
@@ -287,7 +292,10 @@ class MainActivity : AppCompatActivity() {
             .putBoolean(PREF_AUTOSTART_SCAN, true)
             .commit()
         showRestarting()
-        watchdog.postDelayed({ restartProcessForScan() }, PROCESS_RESTART_DELAY_MS)
+        watchdog.postDelayed({
+            markCameraReleased()
+            restartProcessForScan()
+        }, PROCESS_RESTART_DELAY_MS)
     }
 
     private fun restartProcessForScan() {
@@ -308,6 +316,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun beginReceive() {
+        if (needsHalSettle()) {
+            showOpeningCamera()
+            watchdog.postDelayed({
+                if (isDestroyed) return@postDelayed
+                markCameraReleased()
+                showScanning()
+                startScanner()
+            }, PROCESS_RESTART_DELAY_MS)
+            return
+        }
         showScanning()
         previewView.post { startScanner() }
     }
@@ -338,13 +356,41 @@ class MainActivity : AppCompatActivity() {
         scanMetaRow.visibility = View.GONE
         resetButton.visibility = View.GONE
         val names = ZipListing.names(pending.bytes)
-        resultNames.text = if (!names.isNullOrEmpty()) names.joinToString("\n") else pending.name
+        val preview = previewBitmap(pending)
+        if (preview != null && (names == null || names.size <= 1)) {
+            resultImage.setImageBitmap(preview)
+            resultImage.visibility = View.VISIBLE
+            resultNamesScroll.visibility = View.GONE
+            resultNames.text = pending.name
+        } else {
+            resultImage.setImageDrawable(null)
+            resultImage.visibility = View.GONE
+            resultNamesScroll.visibility = View.VISIBLE
+            resultNames.text = if (!names.isNullOrEmpty()) names.joinToString("\n") else pending.name
+        }
         resultMeta.text = if (!names.isNullOrEmpty() && names.size > 1) {
             "${names.size} 个文件 · ${formatBytes(pending.bytes.size.toLong())} · ${pending.name}"
         } else {
             "${pending.name} · ${formatBytes(pending.bytes.size.toLong())}"
         }
         statusText.text = "接收完成，可保存或继续接收"
+    }
+
+    private fun previewBitmap(pending: PendingSave) = try {
+        val mime = pending.mime.lowercase()
+        if (!mime.startsWith("image/")) null
+        else BitmapFactory.decodeByteArray(pending.bytes, 0, pending.bytes.size)
+    } catch (_: Throwable) {
+        null
+    }
+
+    private fun showOpeningCamera() {
+        idlePanel.visibility = View.GONE
+        resultPanel.visibility = View.GONE
+        restartingPanel.visibility = View.GONE
+        scanMetaRow.visibility = View.VISIBLE
+        resetButton.visibility = View.GONE
+        statusText.text = "正在打开相机"
     }
 
     private fun showRestarting() {
@@ -373,6 +419,7 @@ class MainActivity : AppCompatActivity() {
         cameraProvider?.unbindAll()
         imageAnalysis = null
         boundCamera = null
+        watchdog.postDelayed({ markCameraReleased() }, PROCESS_RESTART_DELAY_MS)
     }
 
     private fun startScanner() {
@@ -452,7 +499,7 @@ class MainActivity : AppCompatActivity() {
             activeCameraFps = activeFps
             lastStatsAt = SystemClock.elapsedRealtime()
             resetExposureSession()
-            previewView.post { watchdog.postDelayed({ startSceneMetering() }, SCENE_METER_DELAY_MS) }
+            markCameraHeld()
             val boundFps = activeFps
             statusText.text = if (boundFps != null && (fellBack || requestedFps !in boundFps.lower..boundFps.upper)) {
                 "相机达不到 ${requestedFps} FPS，已落到 ${boundFps.lower}-${boundFps.upper}"
@@ -467,55 +514,6 @@ class MainActivity : AppCompatActivity() {
         } finally {
             bindingCamera = false
         }
-    }
-
-    private fun startSceneMetering() {
-        val camera = boundCamera ?: return
-        if (isDestroyed || !cameraStarted) return
-        if (aeMeterCount >= 1) return
-        val view = previewView
-        if (view.width < 8 || view.height < 8) {
-            view.post { startSceneMetering() }
-            return
-        }
-        val point = view.meteringPointFactory.createPoint(view.width / 2f, view.height * 0.32f)
-        val action = FocusMeteringAction.Builder(
-            point,
-            FocusMeteringAction.FLAG_AE or FocusMeteringAction.FLAG_AF
-        ).setAutoCancelDuration(2, TimeUnit.SECONDS).build()
-        camera.cameraControl.startFocusAndMetering(action)
-        aeMeterCount += 1
-        renderDiagnostics()
-    }
-
-    private fun nudgeExposureForStuckQr() {
-        val camera = boundCamera ?: return
-        if (isDestroyed || !cameraStarted) return
-        val now = SystemClock.elapsedRealtime()
-        if (now - lastAeNudgeAt < 450) return
-        if (aeNudgeCount >= 4) return
-        lastAeNudgeAt = now
-        val state = camera.cameraInfo.exposureState
-        if (!state.isExposureCompensationSupported) return
-        val range = state.exposureCompensationRange
-        val sequence = intArrayOf(0, -2, -4, 1, -6, 0)
-        aeNudgeStep = (aeNudgeStep + 1) % sequence.size
-        val index = sequence[aeNudgeStep].coerceIn(range.lower, range.upper)
-        camera.cameraControl.setExposureCompensationIndex(index)
-        lastEvIndex = index
-        aeNudgeCount += 1
-        aeNudged = true
-        renderDiagnostics()
-    }
-
-    private fun restoreExposureAfterHit() {
-        if (!aeNudged) return
-        aeNudged = false
-        aeNudgeStep = 0
-        lastEvIndex = 0
-        aeNudgeCount = 0
-        boundCamera?.cameraControl?.setExposureCompensationIndex(0)
-        renderDiagnostics()
     }
 
     private fun resetExposureSession() {
@@ -735,13 +733,26 @@ class MainActivity : AppCompatActivity() {
         lastHighTotal = 0
         frameAnalyzer.consumeRecoverRequest()
         recoverBurst = 0
+        frameAnalyzer.replaceDecoders()
         frameAnalyzer.resetSession()
+        frameAnalyzer.setAnalysisIdle(false)
+        val bound = imageAnalysis
+        if (bound != null) {
+            cameraStarted = true
+            bound.clearAnalyzer()
+            bound.setAnalyzer(cameraExecutor, frameAnalyzer)
+        }
         updateUi(TransferUpdate(null, 0, 0))
         fileText.text = "等待文件"
         progress.progress = 0
         speedText.text = "实时 — · 平均 —"
         missingText.text = "缺失片段：—"
         statusText.text = "正在高速扫描"
+        if (::resultImage.isInitialized) {
+            resultImage.setImageDrawable(null)
+            resultImage.visibility = View.GONE
+        }
+        if (::resultNamesScroll.isInitialized) resultNamesScroll.visibility = View.VISIBLE
         if (::resultNames.isInitialized) resultNames.text = ""
         showScanning()
         renderDiagnostics()
@@ -902,6 +913,19 @@ class MainActivity : AppCompatActivity() {
         else -> "%.1f MB".format(size / 1048576.0)
     }
 
+    private fun needsHalSettle(): Boolean {
+        if (halSettleAlreadyWaited) return false
+        return getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_CAMERA_HELD, false)
+    }
+
+    private fun markCameraHeld() {
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_CAMERA_HELD, true).commit()
+    }
+
+    private fun markCameraReleased() {
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_CAMERA_HELD, false).commit()
+    }
+
     override fun onDestroy() {
         watchdog.removeCallbacks(watchdogTick)
         watchdog.removeCallbacks(restartProgressTick)
@@ -922,11 +946,11 @@ class MainActivity : AppCompatActivity() {
         private const val PREFS_NAME = "airferry-lite"
         private const val PREF_FPS = "preview_fps"
         private const val PREF_AUTOSTART_SCAN = "autostart_scan"
+        private const val PREF_CAMERA_HELD = "camera_held"
         private const val EXTRA_AUTOSTART_SCAN = "autostart_scan"
         private const val PROCESS_RESTART_DELAY_MS = 2000L
         private const val AUTOSTART_BIND_DELAY_MS = 2000L
         private const val ANALYZER_SETTLE_MS = 1200L
-        private const val SCENE_METER_DELAY_MS = 280L
         private const val WATCHDOG_INTERVAL_MS = 1000L
         private const val SCAN_STALL_MS = 2000L
         private const val RECOVER_COOLDOWN_MS = 5000L

@@ -125,9 +125,6 @@ class QrFrameAnalyzer(
         decodeSamples.incrementAndGet()
         decodedInWindow.incrementAndGet()
         publish(snapshot.width, snapshot.height, region, hits)
-        val transfers = transferCount(hits)
-        if (transfers == 0) noteHighContrastMiss(snapshot)
-        else highContrastMissStreak.set(0)
     }
 
     fun close() {
