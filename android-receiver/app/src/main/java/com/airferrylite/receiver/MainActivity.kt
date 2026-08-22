@@ -390,20 +390,19 @@ class MainActivity : AppCompatActivity() {
 
     private fun maybeSoftDecoderRecover(stats: ScanStats) {
         if (!cameraStarted || processRestarting) return
-        if (stats.submittedFrames < 120) return
+        if (stats.submittedFrames < 240) return
         if (highUniqueFrameCount >= 20) return
         val emptyRatio = stats.emptyDecodes.toDouble() / stats.submittedFrames.toDouble()
-        if (emptyRatio < 0.80) {
+        if (emptyRatio < 0.92) {
             if (stats.emptyDecodes == 0L) softDecoderRecoverAttempted = false
             return
         }
         val now = SystemClock.elapsedRealtime()
-        if (softDecoderRecoverAttempted && now - lastSoftRecoverAt < 4000L) return
+        if (softDecoderRecoverAttempted && now - lastSoftRecoverAt < 8000L) return
         softDecoderRecoverAttempted = true
         lastSoftRecoverAt = now
         imageAnalysis?.clearAnalyzer()
         frameAnalyzer.setAnalysisIdle(true)
-        frameAnalyzer.resetSession()
         frameAnalyzer.replaceDecoders()
         resetExposureSession()
         watchdog.postDelayed({

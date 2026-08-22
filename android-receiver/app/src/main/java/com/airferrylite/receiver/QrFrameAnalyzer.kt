@@ -271,6 +271,17 @@ class QrFrameAnalyzer(
             }
             return merged
         }
+        if (!quadStream.get() && !sawThreeOrMore.get() && previousTiles.size < 2) {
+            if (transferCount(merged) < 2) {
+                add(readCropsParallel(luma, ScanLayout.dualHalves(region), retryBinarizer = false))
+            }
+            if (transferCount(merged) < 2) {
+                add(decoder.read(luma, ScanLayout.centerSquare(luma.width, luma.height), 4))
+            }
+            if (dualFastPath(previousTiles.size, transferCount(merged))) return merged
+            // Unconfirmed dual: never serial 8-way overlay (0.8.50 / HANDOVER).
+            return merged
+        }
         if (!quadStream.get() && !sawThreeOrMore.get() && previousTiles.size == 2) {
             if (transferCount(merged) < 2) {
                 val retries = previousTiles.map { ScanLayout.inflate(it, 1.28f, luma.width, luma.height) }
@@ -429,9 +440,15 @@ class QrFrameAnalyzer(
             val missLimit = when {
                 lockedTiles >= 4 -> 6
                 quadStream.get() -> 6
+                lockedTiles >= 2 -> 6
                 else -> 2
             }
             if (miss >= missLimit) {
+                if (lockedTiles < 2 && multiLayout.get() && !quadStream.get()) {
+                    multiLayout.set(false)
+                    trackedRoi.set(null)
+                    singleLayoutConfirmed.set(false)
+                }
                 trackedTiles.set(null)
                 tileUndercount.set(0)
             }
@@ -440,8 +457,7 @@ class QrFrameAnalyzer(
         roiMisses.set(0)
         validQrInWindow.addAndGet(transferHits.size.toLong())
         noteLayoutFromHits(transferHits)
-        val lockedMulti = transferHits.any { QrPayload.isMultiLayout(QrPayload.bytesFrom(it.bytes, it.text)) } ||
-            transferHits.size >= 2
+        val lockedMulti = transferHits.size >= 2
         if (lockedMulti) {
             lockMultiLayout()
             multiHits.addAndGet(transferHits.size.toLong())
