@@ -763,6 +763,26 @@ class MainActivity : AppCompatActivity() {
         else -> "%.1f MB".format(size / 1048576.0)
     }
 
+    override fun onStart() {
+        super.onStart()
+        resumeScannerIfScanning()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (!isChangingConfigurations) stopScanner()
+    }
+
+    private fun resumeScannerIfScanning() {
+        if (isDestroyed || !::idlePanel.isInitialized) return
+        if (idlePanel.visibility == View.VISIBLE || resultPanel.visibility == View.VISIBLE) return
+        previewView.post {
+            if (isDestroyed) return@post
+            if (idlePanel.visibility == View.VISIBLE || resultPanel.visibility == View.VISIBLE) return@post
+            startScanner()
+        }
+    }
+
     override fun onDestroy() {
         watchdog.removeCallbacks(watchdogTick)
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
