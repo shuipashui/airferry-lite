@@ -267,8 +267,8 @@ class MainActivity : AppCompatActivity() {
             }
             val halRemain = msUntilCameraBindAllowed()
             val bindDelay = when {
-                override >= 0L -> max(override, halRemain)
-                else -> max(AUTOSTART_BIND_DELAY_MS, halRemain)
+                override >= 0L -> maxOf(override, halRemain)
+                else -> maxOf(AUTOSTART_BIND_DELAY_MS, halRemain)
             }
             skipHalWaitOnBeginReceive = bindDelay > 0L
             settlePreviewBeforeAnalyze = true
