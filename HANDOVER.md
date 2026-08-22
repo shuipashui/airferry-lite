@@ -4,7 +4,7 @@
 
 对外说明只写 [README.md](README.md)。不要在 README 里放版本号、实测 KB/s、Worker / VideoFrame 细节或本文链接。
 
-**交接时点：** 2026-08-22。网页接收端 **v86**。Android APK **0.8.55**。给蓝只发 Artifacts 直链。**0.8.43 冻结：** 首次 234.6、继续 238.4、强杀 236.2。**0.8.44–0.8.46 已否。** 发送端双码仍是 2×2 上排，帧头 **`layoutCodes=2`**，下排白底。**0.8.52 已否：** 空帧串行。**0.8.53 已否：** 未锁串行八路。**0.8.54：** 未锁只便宜 max4 + 半幅；过一会重开可到 240，同一进程对着码开经常 0 命中或约 90 KB/s 半速。**0.8.55：** 不重绑；bind 后点测画面上中 AE/AF，高对比空扫或 1-of-2 时轻推曝光补偿。不要 onStop unbind。不要看门狗 unbind。
+**交接时点：** 2026-08-22。网页接收端 **v86**。Android APK **0.8.56**。给蓝只发 Artifacts 直链。**0.8.43 冻结：** 首次 234.6、继续 238.4、强杀 236.2。**0.8.44–0.8.46 已否。** 发送端双码仍是 2×2 上排，帧头 **`layoutCodes=2`**，下排白底。**0.8.52–0.8.53 已否。** **0.8.54：** 未锁只便宜 max4 + 半幅。**0.8.55：** 多次首次满速 240；继续接收有一次 0 命中且 `轻推 0`（画面糊掉后高对比检测不触发）。**0.8.56：** 继续接收冷启动后空帧也轻推 EV，不要求直方图像密码。不要 onStop unbind。不要看门狗 unbind。
 
 ## 1. 项目一句话
 
@@ -31,10 +31,10 @@
 | 部件 | 版本 | 对照 |
 |---|---|---|
 | 网页接收端 | **v86** | 预览可选手动 30/60 FPS（默认 60）。四码 33 ms · inflight 1；锁格后 Worker 切格。识别 `layoutCodes=2` |
-| Android APK | **0.8.55**（versionCode 70） | 不重绑。点测上中 + 高对比轻推 EV。0.8.54 解码路径在 HAL 干净时能 240 |
+| Android APK | **0.8.56**（versionCode 71） | 继续接收空帧也轻推 EV。0.8.55 首次多次 240，继续有一次 0 命中 / 轻推 0 |
 | 发送端 | AFL2 单文件 HTML | 打开单码预填 **2953 B · 30 FPS**；打开四码预填 **1465 B · 30 FPS**（整屏同换）；打开双码预填 **2068 B · 60 FPS**（V33）。QR 在 4 个 Worker 里生成。60 FPS 四码仍交错。无 45 FPS |
 
-诊断第一行必须是 `网页：v86` 或 `App 0.8.55`。
+诊断第一行必须是 `网页：v86` 或 `App 0.8.56`。
 
 ## 4. 实测对照（只认这些）
 
@@ -59,6 +59,7 @@
 
 | 发送 | 距离 | 采集 / 分析 | 每帧 | ROI | 唯一 / 重复 | 实时 / 平均 / 会话 |
 |---|---|---|---|---|---|---|
+| 2068 B · 60 FPS · 双码同刷 | 窗口 · 0.8.55 继续接收 | 60.7 / 60.7 · 10.9 ms | **0.00** · 轻推 0 | 全图 · 单码 | 0 / 0 | 会话 **0 B/s** |
 | 2068 B · 60 FPS · 双码同刷 | 窗口 · 0.8.54 半速（多码命中 0） | 59.9 / 59.9 · 11.6 ms | **0.00** | 全图 · 单码 | 776 / 0 | 85.5 / 108.7 / **89.5 KB/s** |
 | 2068 B · 60 FPS · 双码同刷 | 窗口 · 0.8.53 空白后首次 | 35.0 / 35.0 · 16.4 ms | **0.00**（多码命中 0；约 1 码/命中帧） | 跟踪中 · 单码 | 590 / 0 | 48.5 / 46.9 / **38.0 KB/s** |
 | 2068 B · 60 FPS · 双码同刷 | 窗口 · 0.8.47 第 1 次（偏远） | 43.9 / 43.9 · 19.9 ms | **1.40** | 格 2 | 1288 / 6 | 141.0 / 134.3 / **135.4 KB/s** |
@@ -172,14 +173,14 @@
 - 停止：冻最后一帧到 `#cameraFreeze` 再清 `srcObject`。`finishing` 时不要清布局字段。
 - SW：`claim` 即可。不要 `client.navigate`，不要 `controllerchange` 时 `reload`。WASM 第一次用再缓存。
 
-## 7. Android APK 实现（0.8.55）
+## 7. Android APK 实现（0.8.56）
 
-源码：`android-receiver/app/src/main/java/com/airferrylite/receiver/`。构建：`android-receiver/build-local.ps1` 或 GitHub Actions `Build Android receiver`。Java 17，SDK 35。`versionName 0.8.55` / `versionCode 70`。不要改解码选项（`tryHarder` / rotate / invert / downscale / `isPure`），除非明确要求动分析管线。
+源码：`android-receiver/app/src/main/java/com/airferrylite/receiver/`。构建：`android-receiver/build-local.ps1` 或 GitHub Actions `Build Android receiver`。Java 17，SDK 35。`versionName 0.8.56` / `versionCode 71`。不要改解码选项（`tryHarder` / rotate / invert / downscale / `isPure`），除非明确要求动分析管线。
 
 APK 比网页快，是因为同一帧 Y 平面上原生 zxing-cpp 能扫多个码，CameraX 丢旧帧，没有 `createImageBitmap` 整帧读回。网页不要搬 APK 的 midX/midY 重排。
 
 - 分析流：**1920×1440** · `YUV_420_888` · `KEEP_ONLY_LATEST`。标题行 30/60/120 只改 AE 档。高速录像管道不能扫码。
-- bind 后点测预览上中 AE+AF（2 秒自动取消）。高对比空扫或双码 1-of-2 时轻推曝光补偿，有命中回到 0。不要为此 `unbindAll`，不要默认锁死 AE/AWB。
+- bind 后点测预览上中 AE+AF（2 秒自动取消）。高对比空扫或双码 1-of-2 时轻推曝光补偿，有命中回到 0。**继续接收**冷启动后空帧也轻推（不要求直方图像密码；0.8.55 继续 0 命中时轻推 0）。不要为此 `unbindAll`，不要默认锁死 AE/AWB。不要空扫 `killProcess`。
 - `NativeQrDecoder`：先拷 Y 平面再 `readYBuffer`，**rotation 0**。不要 `ImageProxy.read()`（会旋转）。`tryHarder` / rotate / invert / downscale 全关。先 `LOCAL_AVERAGE`，空再 `GLOBAL_HISTOGRAM`。`LumaScaler` 热路径不用。
 - 一帧 ≥2 个传输码锁四码路径。未锁双码时只做全图 max4，1 命中最多再并行左右半幅；**不要**因 1 枚 `0x1c` 跑串行八路兄妹补扫（0.8.53：16.4 ms / 38 KB/s）。空帧不要串行四格（0.8.52：20.6 ms）。同一帧两枚同时命中才锁双码。空扫清格后解锁回到未确认 max4。单枚四码帧头不锁补扫、不确认单码。确认单码后才 `maxSymbols = 1`。已锁双码且格子还不到 2 才允许 `acquireDualSibling`。
 - 四码：已有格子则 4 路并行；锁满且本帧 ≥3 命中则返回，不再串行补扫。≥3 命中才 `tilesFromHits`。已锁 ≥3 格时 1–2 命中只 `followContainedHits`。格 2 **尚未**连续 6 帧 2 命中且不是双码帧头时仍四格补扫（0.8.36 一锁 格 2 就 return → 四码约 84）。一旦本会话出现过 3 命中，格 2 补扫一直开、收束作废。已锁 2 格且两枚都打中时不要整幅 max4（0.8.19）。
@@ -195,7 +196,7 @@ sender/                         浏览器发送：测刷新率、lookahead、画
   dist/airferry-lite-sender.html  提交用的单文件产物
 index.html + app.js + sw.js     GitHub Pages 网页接收端
 web-receiver/                   根目录镜像，必须 byte-identical
-android-receiver/               Kotlin + CameraX + zxing-cpp（0.8.55）
+android-receiver/               Kotlin + CameraX + zxing-cpp（0.8.56）
 shared/ + highspeed-protocol.js AFL1 / AFL2
 vendor/decimen/                 WASM Worker 与 zxing wasm
 third_party/decimen-v0.3/       MIT 源，不要混入后续 AGPL Decimen

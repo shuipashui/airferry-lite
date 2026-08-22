@@ -69,6 +69,7 @@ class QrFrameAnalyzer(
     private val dualLayout = AtomicBoolean(false)
     private val dualHint = AtomicBoolean(false)
     private val highContrastMissStreak = AtomicInteger(0)
+    private val nudgeOnAnyEmpty = AtomicBoolean(false)
     private val roiMisses = AtomicInteger(0)
     private val capturedInWindow = AtomicLong(0)
     private val decodedInWindow = AtomicLong(0)
@@ -148,6 +149,10 @@ class QrFrameAnalyzer(
 
     fun setAnalysisIdle(idle: Boolean) {
         analysisIdle.set(idle)
+    }
+
+    fun setNudgeOnAnyEmpty(enabled: Boolean) {
+        nudgeOnAnyEmpty.set(enabled)
     }
 
     fun replaceDecoders() {
@@ -544,7 +549,8 @@ class QrFrameAnalyzer(
     }
 
     private fun noteHighContrastMiss(luma: LumaSnapshot) {
-        if (!LumaContrast.looksLikeDenseQr(luma)) {
+        val looksQr = LumaContrast.looksLikeDenseQr(luma)
+        if (!looksQr && !nudgeOnAnyEmpty.get()) {
             highContrastMissStreak.set(0)
             return
         }

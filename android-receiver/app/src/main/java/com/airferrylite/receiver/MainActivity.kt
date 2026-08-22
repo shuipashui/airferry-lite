@@ -134,6 +134,7 @@ class MainActivity : AppCompatActivity() {
     private var recoverBurstStartedAt = 0L
     private var processRestarting = false
     private var settlePreviewBeforeAnalyze = false
+    private var aeNudgeOnAnyEmpty = false
 
     private data class PendingSave(val name: String, val mime: String, val bytes: ByteArray)
 
@@ -237,6 +238,8 @@ class MainActivity : AppCompatActivity() {
         renderDiagnostics()
         if (consumeAutostartScan()) {
             settlePreviewBeforeAnalyze = true
+            aeNudgeOnAnyEmpty = true
+            frameAnalyzer.setNudgeOnAnyEmpty(true)
             previewView.post { watchdog.postDelayed({ requestStartReceive() }, AUTOSTART_BIND_DELAY_MS) }
         }
     }
@@ -469,7 +472,7 @@ class MainActivity : AppCompatActivity() {
         if (isDestroyed || !cameraStarted) return
         val now = SystemClock.elapsedRealtime()
         if (now - lastAeNudgeAt < 450) return
-        if (aeNudgeCount >= 8) return
+        if (aeNudgeCount >= if (aeNudgeOnAnyEmpty) 12 else 8) return
         lastAeNudgeAt = now
         startSceneMetering()
         val state = camera.cameraInfo.exposureState
@@ -513,6 +516,10 @@ class MainActivity : AppCompatActivity() {
             if (isDestroyed || imageAnalysis !== analysis) return@postDelayed
             analysis.setAnalyzer(cameraExecutor, frameAnalyzer)
             if (::frameAnalyzer.isInitialized) frameAnalyzer.setAnalysisIdle(false)
+            if (aeNudgeOnAnyEmpty) {
+                startSceneMetering()
+                nudgeExposureForStuckQr()
+            }
         }, ANALYZER_SETTLE_MS)
     }
 
