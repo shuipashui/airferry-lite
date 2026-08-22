@@ -73,6 +73,7 @@ class QrFrameAnalyzer(
     private val sawThreeOrMore = AtomicBoolean(false)
     private val quadStream = AtomicBoolean(false)
     private val dualStream = AtomicBoolean(false)
+    private val afl2TransferSeen = AtomicBoolean(false)
     private val roiMisses = AtomicInteger(0)
     private val capturedInWindow = AtomicLong(0)
     private val decodedInWindow = AtomicLong(0)
@@ -219,6 +220,7 @@ class QrFrameAnalyzer(
         sawThreeOrMore.set(false)
         quadStream.set(false)
         dualStream.set(false)
+        afl2TransferSeen.set(false)
         resetProtocol()
     }
 
@@ -504,10 +506,11 @@ class QrFrameAnalyzer(
                 lockedTiles >= 4 -> 6
                 quadStream.get() -> 6
                 lockedTiles >= 2 -> 6
+                dualStream.get() -> 12
                 else -> 2
             }
             if (miss >= missLimit) {
-                if (lockedTiles < 2 && multiLayout.get() && !quadStream.get()) {
+                if (lockedTiles < 2 && multiLayout.get() && !quadStream.get() && !dualStream.get()) {
                     multiLayout.set(false)
                     trackedRoi.set(null)
                     singleLayoutConfirmed.set(false)
@@ -530,12 +533,12 @@ class QrFrameAnalyzer(
             }
         } else {
             val bytes = QrPayload.bytesFrom(transferHits.first().bytes, transferHits.first().text)
-            when {
+            if (bytes != null && HighSpeedAssembler.looksLikeFrame(bytes)) {
+                afl2TransferSeen.set(true)
+                singleLayoutConfirmed.set(false)
+            } else when {
                 QrPayload.isMultiLayout(bytes) -> singleLayoutConfirmed.set(false)
-                bytes != null && HighSpeedAssembler.looksLikeFrame(bytes) -> {
-                    // AFL2 file header (magic 0x0c) is not multi-layout but must not lock single-code scan.
-                    singleLayoutConfirmed.set(false)
-                }
+                afl2TransferSeen.get() -> singleLayoutConfirmed.set(false)
                 else -> singleLayoutConfirmed.set(true)
             }
             singleHits.addAndGet(transferHits.size.toLong())

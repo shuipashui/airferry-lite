@@ -375,11 +375,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun beginReceive() {
-        val waitMs = if (skipHalWaitOnBeginReceive) {
-            skipHalWaitOnBeginReceive = false
-            0L
-        } else {
-            msUntilCameraBindAllowed()
+        val warmCamera = imageAnalysis != null && boundCamera != null
+        val waitMs = when {
+            warmCamera || skipHalWaitOnBeginReceive -> {
+                skipHalWaitOnBeginReceive = false
+                0L
+            }
+            else -> msUntilCameraBindAllowed()
         }
         if (waitMs > 0) {
             showOpeningCamera()
@@ -416,6 +418,13 @@ class MainActivity : AppCompatActivity() {
         resetSpeed()
         scanSessionStartedAt = SystemClock.elapsedRealtime()
         showScanning()
+        val warmBound = imageAnalysis
+        if (warmBound != null && boundCamera != null) {
+            cameraStarted = true
+            cameraBoundAt = SystemClock.elapsedRealtime()
+            attachAnalyzer(warmBound, settle = false)
+            return
+        }
         settlePreviewBeforeAnalyze = true
         previewView.post { startScanner() }
     }
@@ -1012,7 +1021,7 @@ class MainActivity : AppCompatActivity() {
             saveButton.isEnabled = true
             fileText.text = "$name · ${formatBytes(bytes.size.toLong())}"
             progress.progress = 100
-            stopScanner()
+            pauseScanner()
             showResult(pending)
         }
     }
