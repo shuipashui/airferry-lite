@@ -1,9 +1,11 @@
 package com.airferrylite.receiver
 
 import android.Manifest
+import android.content.ComponentName
 import android.content.ContentValues
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Build
@@ -216,6 +218,7 @@ class MainActivity : AppCompatActivity() {
         watchdog.postDelayed(watchdogTick, WATCHDOG_INTERVAL_MS)
         showIdle()
         renderDiagnostics()
+        if (consumeAutostartScan()) previewView.post { requestStartReceive() }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
@@ -237,9 +240,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun continueReceive() {
-        resetTransfer()
-        showScanning()
-        startScanner()
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .putBoolean(PREF_AUTOSTART_SCAN, true)
+            .commit()
+        val intent = Intent.makeRestartActivityTask(ComponentName(this, MainActivity::class.java))
+        intent.putExtra(EXTRA_AUTOSTART_SCAN, true)
+        startActivity(intent)
+        Runtime.getRuntime().exit(0)
+    }
+
+    private fun consumeAutostartScan(): Boolean {
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val fromPrefs = prefs.getBoolean(PREF_AUTOSTART_SCAN, false)
+        val fromIntent = intent.getBooleanExtra(EXTRA_AUTOSTART_SCAN, false)
+        if (fromPrefs) prefs.edit().putBoolean(PREF_AUTOSTART_SCAN, false).commit()
+        return fromPrefs || fromIntent
     }
 
     private fun beginReceive() {
@@ -671,7 +687,7 @@ class MainActivity : AppCompatActivity() {
             saveButton.isEnabled = true
             fileText.text = "$name · ${formatBytes(bytes.size.toLong())}"
             progress.progress = 100
-            pauseScanner()
+            stopScanner()
             showResult(pending)
         }
     }
@@ -763,26 +779,6 @@ class MainActivity : AppCompatActivity() {
         else -> "%.1f MB".format(size / 1048576.0)
     }
 
-    override fun onStart() {
-        super.onStart()
-        resumeScannerIfScanning()
-    }
-
-    override fun onStop() {
-        super.onStop()
-        if (!isChangingConfigurations) stopScanner()
-    }
-
-    private fun resumeScannerIfScanning() {
-        if (isDestroyed || !::idlePanel.isInitialized) return
-        if (idlePanel.visibility == View.VISIBLE || resultPanel.visibility == View.VISIBLE) return
-        previewView.post {
-            if (isDestroyed) return@post
-            if (idlePanel.visibility == View.VISIBLE || resultPanel.visibility == View.VISIBLE) return@post
-            startScanner()
-        }
-    }
-
     override fun onDestroy() {
         watchdog.removeCallbacks(watchdogTick)
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -801,6 +797,8 @@ class MainActivity : AppCompatActivity() {
         private const val SPEED_REFRESH_INTERVAL_MS = 1000L
         private const val PREFS_NAME = "airferry-lite"
         private const val PREF_FPS = "preview_fps"
+        private const val PREF_AUTOSTART_SCAN = "autostart_scan"
+        private const val EXTRA_AUTOSTART_SCAN = "autostart_scan"
         private const val WATCHDOG_INTERVAL_MS = 1000L
         private const val SCAN_STALL_MS = 2000L
         private const val RECOVER_COOLDOWN_MS = 5000L
