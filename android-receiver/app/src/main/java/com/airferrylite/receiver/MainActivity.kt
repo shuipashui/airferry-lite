@@ -279,6 +279,7 @@ class MainActivity : AppCompatActivity() {
             }
         } else {
             clearStaleCameraHeld()
+            resetScanStateForNewSession()
             showIdle()
         }
         renderDiagnostics()
@@ -299,7 +300,31 @@ class MainActivity : AppCompatActivity() {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), CAMERA_PERMISSION_REQUEST)
             return
         }
+        resetScanStateForNewSession()
         beginReceive()
+    }
+
+    private fun resetScanStateForNewSession() {
+        protocolEpoch.incrementAndGet()
+        highSpeedAssembler.reset()
+        highSpeedSessionActive = false
+        resetSpeed()
+        decodedQrCount.set(0)
+        highFrameCount = 0
+        highUniqueFrameCount = 0
+        highDuplicateCount = 0
+        highProtocolErrors = 0
+        highBytesReceived = 0
+        highLastFrameAt = 0
+        invalidFrameCount.set(0)
+        invalidFrameSample = "—"
+        lastHighUnique = 0
+        lastHighSolved = 0
+        lastHighTotal = 0
+        softDecoderRecoverAttempted = false
+        if (::frameAnalyzer.isInitialized) {
+            frameAnalyzer.resetSession()
+        }
     }
 
     private fun continueReceive() {
